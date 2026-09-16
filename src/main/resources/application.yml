@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: lexia-api
+
+lexia:
+  cors:
+    allowed-origins:
+      - http://localhost:4200
+      - http://127.0.0.1:4200
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: LEXIA API
+    description: Ambiente backend de LEXIA. Sin reglas jurídicas ni persistencia productiva.
+    stage: environment
+    demo: true
