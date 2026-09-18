@@ -44,7 +44,8 @@ Escribe `backend/.env` (gitignored).
 
 ## Ejecutar
 
-Requiere `.env` (gitignored) o variables `LEXIA_DB_*` y `LEXIA_FLYWAY_*`.
+Requiere `backend/.env` (gitignored) o variables `LEXIA_DB_*` y `LEXIA_FLYWAY_*`.
+La app carga `backend/.env` automáticamente al arrancar (IntelliJ incluido).
 
 ```bash
 cd backend

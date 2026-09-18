@@ -5,7 +5,7 @@ spring:
   application:
     name: lexia-api
   datasource:
-    url: jdbc:postgresql://${LEXIA_DB_HOST:127.0.0.1}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
+    url: jdbc:postgresql://${LEXIA_DB_HOST:51.79.11.21}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
     username: ${LEXIA_DB_USER:lexia_app}
     password: ${LEXIA_DB_PASSWORD:}
   flyway:
@@ -16,7 +16,7 @@ spring:
     schemas: public,control,app
     locations: classpath:db/migration
     baseline-on-migrate: true
-    baseline-version: 7
+    baseline-version: 8
   jpa:
     open-in-view: false
     hibernate:
