@@ -3,7 +3,11 @@ package com.lexia.api.modules.tenancy;
 import jakarta.persistence.EntityManager;
 import java.util.UUID;
 import org.hibernate.Session;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
 
+@Component
+@Profile("!test")
 public class TenantBinder {
 
   private final EntityManager entityManager;
@@ -14,7 +18,7 @@ public class TenantBinder {
 
   public void bind(UUID tenantId) {
     TenantContext.setTenantId(tenantId);
-    if (tenantId == null || entityManager == null) {
+    if (tenantId == null) {
       return;
     }
     entityManager
