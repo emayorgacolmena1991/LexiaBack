@@ -19,9 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
   private final AuthService authService;
+  private final PasswordService passwordService;
 
-  public AuthController(AuthService authService) {
+  public AuthController(AuthService authService, PasswordService passwordService) {
     this.authService = authService;
+    this.passwordService = passwordService;
   }
 
   @GetMapping("/csrf")
@@ -79,5 +81,35 @@ public class AuthController {
   @PostMapping("/mfa/disable")
   public AuthDtos.MfaStatusResponse disable(@Valid @RequestBody AuthDtos.MfaConfirmRequest request) {
     return authService.disableMfa(request);
+  }
+
+  @PostMapping("/invite/accept")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void acceptInvite(@Valid @RequestBody AuthDtos.AcceptInviteRequest request) {
+    passwordService.acceptInvitation(request.token(), request.password());
+  }
+
+  @PostMapping("/password/change")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void changePassword(@Valid @RequestBody AuthDtos.ChangePasswordRequest request) {
+    passwordService.changePassword(request.currentPassword(), request.newPassword());
+  }
+
+  @PostMapping("/password/forgot")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void forgotPassword(@Valid @RequestBody AuthDtos.ForgotPasswordRequest request) {
+    passwordService.requestReset(request.email());
+  }
+
+  @PostMapping("/password/reset")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void resetPassword(@Valid @RequestBody AuthDtos.ResetPasswordRequest request) {
+    passwordService.resetPassword(request.token(), request.password());
+  }
+
+  @PostMapping("/notifications")
+  public AuthDtos.NotificationPreferencesRequest updateNotifications(
+      @Valid @RequestBody AuthDtos.NotificationPreferencesRequest request) {
+    return authService.updateNotificationPreferences(request);
   }
 }

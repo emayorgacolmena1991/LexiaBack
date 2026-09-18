@@ -6,4 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface RoleRepository extends JpaRepository<Role, UUID> {
   List<Role> findByTenantId(UUID tenantId);
+
+  java.util.Optional<Role> findByTenantIdAndCode(UUID tenantId, String code);
 }

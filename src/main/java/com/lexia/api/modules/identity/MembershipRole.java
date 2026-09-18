@@ -33,6 +33,14 @@ public class MembershipRole {
     return roleId;
   }
 
+  public static MembershipRole assign(UUID membershipId, UUID roleId, UUID tenantId) {
+    MembershipRole link = new MembershipRole();
+    link.membershipId = membershipId;
+    link.roleId = roleId;
+    link.tenantId = tenantId;
+    return link;
+  }
+
   public static class Pk implements Serializable {
     private UUID membershipId;
     private UUID roleId;

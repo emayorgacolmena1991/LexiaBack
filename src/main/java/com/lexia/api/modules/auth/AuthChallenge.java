@@ -29,13 +29,25 @@ public class AuthChallenge {
   private Instant createdAt;
 
   public static AuthChallenge loginMfa(UUID userId, Instant expiresAt) {
+    return create(userId, "LOGIN_MFA", expiresAt);
+  }
+
+  public static AuthChallenge passwordReset(UUID userId, Instant expiresAt) {
+    return create(userId, "PASSWORD_RESET", expiresAt);
+  }
+
+  private static AuthChallenge create(UUID userId, String purpose, Instant expiresAt) {
     AuthChallenge challenge = new AuthChallenge();
     challenge.id = UUID.randomUUID();
     challenge.userId = userId;
-    challenge.purpose = "LOGIN_MFA";
+    challenge.purpose = purpose;
     challenge.expiresAt = expiresAt;
     challenge.createdAt = Instant.now();
     return challenge;
+  }
+
+  public String getPurpose() {
+    return purpose;
   }
 
   public UUID getId() {

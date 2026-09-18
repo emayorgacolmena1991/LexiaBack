@@ -28,6 +28,7 @@ public final class AuthDtos {
       UUID tenantId,
       String tenantName,
       List<String> roles,
+      List<String> permissions,
       boolean mfaEnabled) {}
 
   public record MfaEnrollResponse(String secret, String otpauthUrl, String issuer) {}
@@ -41,5 +42,21 @@ public final class AuthDtos {
       UUID tenantId,
       String tenantName,
       List<String> roles,
-      boolean mfaEnabled) {}
+      List<String> permissions,
+      boolean mfaEnabled,
+      boolean notifyOnLogin) {}
+
+  public record AcceptInviteRequest(
+      @NotBlank String token, @NotBlank @Size(min = 8, max = 200) String password) {}
+
+  public record ChangePasswordRequest(
+      @NotBlank @Size(min = 8, max = 200) String currentPassword,
+      @NotBlank @Size(min = 8, max = 200) String newPassword) {}
+
+  public record ForgotPasswordRequest(@NotBlank @Email @Size(max = 320) String email) {}
+
+  public record ResetPasswordRequest(
+      @NotBlank String token, @NotBlank @Size(min = 8, max = 200) String password) {}
+
+  public record NotificationPreferencesRequest(boolean notifyOnLogin) {}
 }

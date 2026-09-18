@@ -55,4 +55,19 @@ public class UserCredential {
   public void setMustChange(boolean mustChange) {
     this.mustChange = mustChange;
   }
+
+  public boolean isMustChange() {
+    return mustChange;
+  }
+
+  public static UserCredential create(UUID userId, String passwordHash, boolean mustChange) {
+    UserCredential credential = new UserCredential();
+    credential.id = UUID.randomUUID();
+    credential.userId = userId;
+    credential.passwordHash = passwordHash;
+    credential.algorithm = "argon2id";
+    credential.lastChangedAt = Instant.now();
+    credential.mustChange = mustChange;
+    return credential;
+  }
 }

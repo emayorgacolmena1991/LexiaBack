@@ -54,4 +54,20 @@ public class Membership {
   public String getStatus() {
     return status;
   }
+
+  public void setStatus(String status) {
+    this.status = status;
+  }
+
+  public static Membership invited(UUID userId, UUID tenantId) {
+    Membership membership = new Membership();
+    membership.id = UUID.randomUUID();
+    membership.userId = userId;
+    membership.tenantId = tenantId;
+    membership.status = "INVITED";
+    Instant now = Instant.now();
+    membership.createdAt = now;
+    membership.updatedAt = now;
+    return membership;
+  }
 }

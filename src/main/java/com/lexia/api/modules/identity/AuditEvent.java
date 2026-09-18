@@ -70,14 +70,21 @@ public class AuditEvent {
     row.id = UUID.randomUUID();
     row.tenantId = tenantId;
     row.actorUserId = actorUserId;
-    row.actorType = actorUserId == null ? "ANONYMOUS" : "USER";
+    row.actorType = actorUserId == null ? "SYSTEM" : "USER";
     row.event = event;
     row.objectType = objectType;
     row.objectId = objectId;
-    row.result = result;
+    row.result = normalizeResult(result);
     row.ipAddress = ipAddress;
     row.userAgent = userAgent;
     row.createdAt = Instant.now();
     return row;
+  }
+
+  private static String normalizeResult(String result) {
+    if ("OK".equals(result) || "DENIED".equals(result) || "ERROR".equals(result)) {
+      return result;
+    }
+    return "DENIED";
   }
 }

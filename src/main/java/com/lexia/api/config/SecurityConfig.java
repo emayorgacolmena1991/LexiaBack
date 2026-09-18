@@ -92,7 +92,10 @@ public class SecurityConfig {
                     .ignoringRequestMatchers(
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/login"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/mfa/verify"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh")))
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/password/forgot"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
@@ -103,7 +106,10 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/login"),
                         paths.matcher("/api/v1/auth/mfa/verify"),
                         paths.matcher("/api/v1/auth/refresh"),
-                        paths.matcher("/api/v1/auth/csrf"))
+                        paths.matcher("/api/v1/auth/csrf"),
+                        paths.matcher("/api/v1/auth/invite/accept"),
+                        paths.matcher("/api/v1/auth/password/forgot"),
+                        paths.matcher("/api/v1/auth/password/reset"))
                     .permitAll()
                     .anyRequest()
                     .authenticated())

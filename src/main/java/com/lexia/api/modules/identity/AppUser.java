@@ -26,6 +26,9 @@ public class AppUser {
   @Column(name = "locked_until")
   private Instant lockedUntil;
 
+  @Column(name = "notify_on_login", nullable = false)
+  private boolean notifyOnLogin = true;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -65,5 +68,26 @@ public class AppUser {
 
   public void setLockedUntil(Instant lockedUntil) {
     this.lockedUntil = lockedUntil;
+  }
+
+  public boolean isNotifyOnLogin() {
+    return notifyOnLogin;
+  }
+
+  public void setNotifyOnLogin(boolean notifyOnLogin) {
+    this.notifyOnLogin = notifyOnLogin;
+  }
+
+  public static AppUser create(String email, String displayName) {
+    AppUser user = new AppUser();
+    user.id = UUID.randomUUID();
+    user.email = email.toLowerCase().trim();
+    user.displayName = displayName.trim();
+    user.status = "ACTIVE";
+    user.notifyOnLogin = true;
+    Instant now = Instant.now();
+    user.createdAt = now;
+    user.updatedAt = now;
+    return user;
   }
 }

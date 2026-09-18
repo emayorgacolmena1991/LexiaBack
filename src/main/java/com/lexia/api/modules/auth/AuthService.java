@@ -2,6 +2,7 @@ package com.lexia.api.modules.auth;
 
 import com.lexia.api.modules.identity.AppUser;
 import com.lexia.api.modules.identity.AppUserRepository;
+import com.lexia.api.modules.identity.AuthorizationService;
 import com.lexia.api.modules.identity.AuditEvent;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.Membership;
@@ -10,6 +11,7 @@ import com.lexia.api.modules.identity.MembershipRole;
 import com.lexia.api.modules.identity.MembershipRoleRepository;
 import com.lexia.api.modules.identity.Role;
 import com.lexia.api.modules.identity.RoleRepository;
+import com.lexia.api.modules.notifications.EmailNotificationService;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantBinder;
 import com.lexia.api.modules.tenancy.TenantRepository;
@@ -17,6 +19,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -30,6 +34,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthService {
 
   private static final String GENERIC_LOGIN = "Correo o contraseña no válidos.";
+  private static final ZoneId BOGOTA = ZoneId.of("America/Bogota");
+  private static final DateTimeFormatter LOGIN_WHEN =
+      DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.forLanguageTag("es-CO"));
 
   private final AuthProperties properties;
   private final AppUserRepository users;
@@ -50,6 +57,8 @@ public class AuthService {
   private final SecretCipher cipher;
   private final AuthCookies cookies;
   private final TenantBinder tenantBinder;
+  private final EmailNotificationService emails;
+  private final AuthorizationService authorization;
 
   public AuthService(
       AuthProperties properties,
@@ -70,7 +79,9 @@ public class AuthService {
       TotpService totp,
       SecretCipher cipher,
       AuthCookies cookies,
-      TenantBinder tenantBinder) {
+      TenantBinder tenantBinder,
+      EmailNotificationService emails,
+      AuthorizationService authorization) {
     this.properties = properties;
     this.users = users;
     this.credentials = credentials;
@@ -90,6 +101,8 @@ public class AuthService {
     this.cipher = cipher;
     this.cookies = cookies;
     this.tenantBinder = tenantBinder;
+    this.emails = emails;
+    this.authorization = authorization;
   }
 
   @Transactional(noRollbackFor = AuthException.class)
@@ -137,6 +150,7 @@ public class AuthService {
           user.getDisplayName(),
           null,
           null,
+          List.of(),
           List.of(),
           true);
     }
@@ -241,13 +255,24 @@ public class AuthService {
         principal.tenantId(),
         tenant == null ? null : tenant.getName(),
         roleCodes(principal.membershipId()),
-        mfaEnabled(user.getId()));
+        permissionCodes(principal.membershipId()),
+        mfaEnabled(user.getId()),
+        user.isNotifyOnLogin());
   }
 
   @Transactional(readOnly = true)
   public AuthDtos.MfaStatusResponse mfaStatus() {
     AuthPrincipal principal = AuthContext.require();
     return new AuthDtos.MfaStatusResponse(mfaEnabled(principal.userId()), "TOTP", List.of());
+  }
+
+  @Transactional
+  public AuthDtos.NotificationPreferencesRequest updateNotificationPreferences(
+      AuthDtos.NotificationPreferencesRequest request) {
+    AuthPrincipal principal = AuthContext.require();
+    AppUser user = users.findById(principal.userId()).orElseThrow();
+    user.setNotifyOnLogin(request.notifyOnLogin());
+    return request;
   }
 
   @Transactional
@@ -266,6 +291,7 @@ public class AuthService {
       factor.setSecretEncrypted(encrypted);
       factor.setEnabled(false);
       factor.setConfirmedAt(null);
+      factors.save(factor);
     }
     AppUser user = users.findById(principal.userId()).orElseThrow();
     return new AuthDtos.MfaEnrollResponse(secret, totp.otpauthUrl(user.getEmail(), secret), "LEXIA");
@@ -351,6 +377,14 @@ public class AuthService {
     cookies.write(response, session.getId().toString(), refreshRaw);
     attempts.save(LoginAttempt.record(user.getEmail(), ip, true, method));
     audit(membership.getTenantId(), user.getId(), "LOGIN", "session", session.getId(), "OK", ip, userAgent);
+    if (user.isNotifyOnLogin()) {
+      emails.sendLoginAlert(
+          user.getEmail(),
+          user.getDisplayName(),
+          LOGIN_WHEN.format(Instant.now().atZone(BOGOTA)),
+          ip == null ? "Desconocida" : ip,
+          userAgent == null || userAgent.isBlank() ? "Desconocido" : userAgent);
+    }
     return toAuthResponse(user, session, "AUTHENTICATED");
   }
 
@@ -365,7 +399,12 @@ public class AuthService {
         session.getTenantId(),
         tenant == null ? null : tenant.getName(),
         roleCodes(session.getMembershipId()),
+        permissionCodes(session.getMembershipId()),
         mfaEnabled(user.getId()));
+  }
+
+  private List<String> permissionCodes(UUID membershipId) {
+    return authorization.permissionsForMembership(membershipId);
   }
 
   private List<String> roleCodes(UUID membershipId) {
@@ -427,9 +466,9 @@ public class AuthService {
     attempts.save(LoginAttempt.record(email, ip, false, reason));
     if (user != null) {
       lockIfNeeded(user);
-      audit(null, user.getId(), "LOGIN_FAILED", "user", user.getId(), reason, ip, userAgent);
+      audit(null, user.getId(), "LOGIN_FAILED:" + reason, "user", user.getId(), "DENIED", ip, userAgent);
     } else {
-      audit(null, null, "LOGIN_FAILED", "user", null, reason, ip, userAgent);
+      audit(null, null, "LOGIN_FAILED:" + reason, "user", null, "DENIED", ip, userAgent);
     }
     throw AuthException.unauthorized(GENERIC_LOGIN);
   }
