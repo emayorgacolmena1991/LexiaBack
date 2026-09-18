@@ -1,0 +1,15 @@
+# Opcional: PostgreSQL local si no hay acceso a 51.79.11.21
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local_lexia
+      TZ: America/Bogota
+    ports:
+      - "5432:5432"
+    volumes:
+      - lexia-pg:/var/lib/postgresql/data
+
+volumes:
+  lexia-pg:

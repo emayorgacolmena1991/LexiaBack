@@ -1,5 +1,5 @@
 /**
- * Módulos de negocio futuros (expedientes, escrituración, coactivas).
- * Esta fase solo reserva el paquete. No implementa reglas jurídicas ni persistencia.
+ * Cimiento de persistencia: tenancy e identidad. Expedientes, escrituración y coactivas
+ * quedan modelados en SQL; no hay APIs ni reglas jurídicas en esta fase.
  */
 package com.lexia.api.modules;

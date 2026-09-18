@@ -4,6 +4,26 @@ server:
 spring:
   application:
     name: lexia-api
+  datasource:
+    url: jdbc:postgresql://${LEXIA_DB_HOST:127.0.0.1}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
+    username: ${LEXIA_DB_USER:lexia_app}
+    password: ${LEXIA_DB_PASSWORD:}
+  flyway:
+    enabled: true
+    user: ${LEXIA_FLYWAY_USER:lexia_migrator}
+    password: ${LEXIA_FLYWAY_PASSWORD:}
+    default-schema: public
+    schemas: public,control,app
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 7
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: app
+      hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
   cors:
@@ -23,6 +43,6 @@ management:
 info:
   app:
     name: LEXIA API
-    description: Ambiente backend de LEXIA. Sin reglas jurídicas ni persistencia productiva.
-    stage: environment
+    description: Ambiente backend de LEXIA con persistencia multi-tenant. Sin reglas jurídicas productivas.
+    stage: persistence-foundation
     demo: true
