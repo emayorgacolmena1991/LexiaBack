@@ -50,4 +50,8 @@ public class Membership {
   public UUID getTenantId() {
     return tenantId;
   }
+
+  public String getStatus() {
+    return status;
+  }
 }

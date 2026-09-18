@@ -56,4 +56,28 @@ public class AuditEvent {
   public String getEvent() {
     return event;
   }
+
+  public static AuditEvent of(
+      UUID tenantId,
+      UUID actorUserId,
+      String event,
+      String objectType,
+      UUID objectId,
+      String result,
+      String ipAddress,
+      String userAgent) {
+    AuditEvent row = new AuditEvent();
+    row.id = UUID.randomUUID();
+    row.tenantId = tenantId;
+    row.actorUserId = actorUserId;
+    row.actorType = actorUserId == null ? "ANONYMOUS" : "USER";
+    row.event = event;
+    row.objectType = objectType;
+    row.objectId = objectId;
+    row.result = result;
+    row.ipAddress = ipAddress;
+    row.userAgent = userAgent;
+    row.createdAt = Instant.now();
+    return row;
+  }
 }

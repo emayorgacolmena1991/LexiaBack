@@ -23,6 +23,9 @@ public class AppUser {
   @Column(nullable = false, length = 24)
   private String status;
 
+  @Column(name = "locked_until")
+  private Instant lockedUntil;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -46,5 +49,21 @@ public class AppUser {
 
   public String getDisplayName() {
     return displayName;
+  }
+
+  public String getStatus() {
+    return status;
+  }
+
+  public Instant getLockedUntil() {
+    return lockedUntil;
+  }
+
+  public void setStatus(String status) {
+    this.status = status;
+  }
+
+  public void setLockedUntil(Instant lockedUntil) {
+    this.lockedUntil = lockedUntil;
   }
 }

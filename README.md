@@ -2,7 +2,7 @@
 
 Ambiente backend de **LEXIA — Plataforma Legal Inteligente**.
 
-Cimiento de persistencia multi-tenant. No implementa autenticación productiva, reglas jurídicas ni conectores.
+Cimiento de persistencia multi-tenant con login de sesión, bloqueo y TOTP opcional. No implementa reglas jurídicas ni conectores.
 
 ## Stack
 
@@ -19,10 +19,11 @@ Cimiento de persistencia multi-tenant. No implementa autenticación productiva, 
 backend/
 ├── src/main/java/com/lexia/api/
 │   ├── common/api/          health
-│   ├── config/              CORS
+│   ├── config/              CORS + Security
 │   └── modules/
 │       ├── tenancy/         TenantContext + RLS
-│       └── identity/        usuarios, roles, auditoría
+│       ├── identity/        usuarios, roles, auditoría
+│       └── auth/            login, sesión, TOTP
 ├── src/main/resources/
 │   ├── application.yml      datasource por LEXIA_DB_*
 │   └── db/
@@ -57,6 +58,22 @@ GET http://127.0.0.1:8080/api/v1/health
 GET http://127.0.0.1:8080/actuator/health
 ```
 
+## Login y 2FA
+
+Cookies `HttpOnly` + `SameSite=Lax` (`LEXIA_SID`, `LEXIA_RT`). CSRF en cookie `XSRF-TOKEN` (el login inicial está exento). Contraseñas Argon2id. Bloqueo a los 5 fallos / 30 min. TOTP opcional cifrado AES-GCM.
+
+| Ruta | Uso |
+|---|---|
+| `POST /api/v1/auth/login` | Correo + contraseña. Puede devolver `MFA_REQUIRED` |
+| `POST /api/v1/auth/mfa/verify` | Código TOTP o de recuperación |
+| `GET /api/v1/auth/me` | Sesión actual |
+| `POST /api/v1/auth/logout` | Cierra sesión |
+| `POST /api/v1/auth/mfa/enroll` | Genera secreto TOTP |
+| `POST /api/v1/auth/mfa/confirm` | Activa 2FA y entrega códigos de recuperación |
+| `POST /api/v1/auth/mfa/disable` | Apaga 2FA (pide un código) |
+
+Usuario demo: `laura.gomez@lexia.demo`. Contraseña: `LEXIA_DEMO_PASSWORD` (por defecto `Lexia-Demo-2026!`). En producción define `LEXIA_CRYPTO_KEY` y `LEXIA_COOKIE_SECURE=true`.
+
 ## Pruebas
 
 ```bash
@@ -67,7 +84,7 @@ GET http://127.0.0.1:8080/actuator/health
 
 ## Fuera de alcance
 
-- OAuth / login real
+- OAuth / SSO corporativo
 - OCR, Document AI, LLM
 - Motor de reglas
 - Conectores QUIPUX, notaría, municipio, registro, firma, pagos

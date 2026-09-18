@@ -47,6 +47,10 @@ public class Role {
     return code;
   }
 
+  public String getName() {
+    return name;
+  }
+
   public boolean isSystem() {
     return system;
   }

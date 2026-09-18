@@ -1,4 +1,4 @@
-"""Aplica V1–Vn como lexia_migrator y deja baseline Flyway. No imprime secretos."""
+"""Aplica V1–Vn como lexia_migrator y registra cada versión en Flyway. No imprime secretos."""
 
 from __future__ import annotations
 
@@ -21,6 +21,10 @@ def load_env(path: Path) -> None:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value)
+
+
+def version_of(name: str) -> str:
+    return name.split("__", 1)[0].lstrip("V")
 
 
 def main() -> int:
@@ -48,11 +52,6 @@ def main() -> int:
     )
     try:
         with conn.cursor() as cur:
-            for path in files:
-                print(f"aplicando {path.name}")
-                cur.execute(path.read_text(encoding="utf-8"))
-
-            last = files[-1].name.split("__", 1)[0].lstrip("V")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS public.flyway_schema_history (
@@ -70,19 +69,34 @@ def main() -> int:
                 )
                 """
             )
-            cur.execute("SELECT 1 FROM public.flyway_schema_history WHERE version = %s", (last,))
-            if cur.fetchone() is None:
+            cur.execute("SELECT version FROM public.flyway_schema_history WHERE version IS NOT NULL")
+            installed = {str(row[0]) for row in cur.fetchall()}
+            numeric = [int(v) for v in installed if str(v).isdigit()]
+            max_installed = max(numeric) if numeric else 0
+
+            cur.execute("SELECT COALESCE(MAX(installed_rank), 0) FROM public.flyway_schema_history")
+            rank = int(cur.fetchone()[0])
+
+            for path in files:
+                version = version_of(path.name)
+                if version in installed:
+                    continue
+                if version.isdigit() and int(version) <= max_installed:
+                    continue
+                print(f"aplicando {path.name}")
+                cur.execute(path.read_text(encoding="utf-8"))
+                rank += 1
+                description = path.name.split("__", 1)[-1].removesuffix(".sql").replace("_", " ")[:200]
                 cur.execute(
                     """
                     INSERT INTO public.flyway_schema_history (
                         installed_rank, version, description, type, script,
                         checksum, installed_by, execution_time, success
-                    ) VALUES (1, %s, '<< Flyway Baseline >>', 'BASELINE',
-                              '<< Flyway Baseline >>', NULL, 'lexia_migrator', 0, TRUE)
+                    ) VALUES (%s, %s, %s, 'SQL', %s, NULL, 'lexia_migrator', 0, TRUE)
                     """,
-                    (last,),
+                    (rank, version, description, path.name),
                 )
-            print(f"baseline Flyway en version {last}")
+                print(f"registrada version {version}")
     finally:
         conn.close()
     return 0

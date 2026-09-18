@@ -14,3 +14,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
+
+lexia:
+  auth:
+    enabled: false

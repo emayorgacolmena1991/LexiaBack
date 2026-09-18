@@ -11,7 +11,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Cimiento: lee X-Tenant-Id. El JWT productivo sustituirá este header. */
+/** Lee X-Tenant-Id. Tras el login, SessionAuthFilter pisa el valor con el tenant de la sesión. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)
 public class TenantHeaderFilter extends OncePerRequestFilter {

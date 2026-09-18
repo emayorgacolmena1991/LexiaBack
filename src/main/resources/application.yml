@@ -30,6 +30,16 @@ lexia:
     allowed-origins:
       - http://localhost:4200
       - http://127.0.0.1:4200
+  auth:
+    enabled: true
+    session-hours: 8
+    refresh-days: 7
+    challenge-minutes: 5
+    max-failed-attempts: 5
+    lockout-minutes: 30
+    cookie-secure: ${LEXIA_COOKIE_SECURE:false}
+    demo-password: ${LEXIA_DEMO_PASSWORD:Lexia-Demo-2026!}
+    crypto-key: ${LEXIA_CRYPTO_KEY:}
 
 management:
   endpoints:
