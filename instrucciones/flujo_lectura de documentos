@@ -1,25 +1,59 @@
-PROBLEMA:
-Spring Boot no arranca. ObjectMapper falta en contenedor de dependencias. GeminiOcrServiceImpl pide ObjectMapper, pero Spring no encuentra el Bean.
+UG. TU TENER ERROR `401 UNAUTHENTICATED` EN GEMINI.
 
-CAUSA:
-Spring Boot no auto-configuró ObjectMapper o no está registrado en el contexto.
+NOMBRES DE MODELO YA ESTAR BIEN, PERO AHORA API RECHAZAR TU CLAVE (LLAVE DE AUTENTICACIÓN).
 
-SOLUCIÓN:
+---
 
-Crear clase de configuración en tu proyecto:
+### CAUSA
 
-Java
-package com.lexia.api.config;
+1. **API KEY INVÁLIDA O INEXISTENTE:** Tu variable `GEMINI_API_KEY` está vacía, no se cargó, o la eliminaste/rotaste cuando quitaste el secreto de Git.
+2. **FORMATO DE AUTENTICACIÓN INCORRECTO (`ACCESS_TOKEN_TYPE_UNSUPPORTED`):** Tu código está enviando la API Key en el encabezado (Header) de la petición como si fuera un token Bearer/OAuth (`Authorization: Bearer AIzaSy...`), en lugar de enviarla como parámetro de consulta `?key=TU_API_KEY` o en la cabecera `x-goog-api-key`.
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+---
 
-@Configuration
-public class AppConfig {
+### SOLUCIÓN
 
-    @Bean
-    public ObjectMapper objectMapper() {
-        return new ObjectMapper();
-    }
-}
+1. **Revisar archivo .env local:**
+ABRIR `.env` (O `application.properties`) EN TU MÁQUINA LOCAL Y PONER CLAVE VÁLIDA:
+
+```env
+GEMINI_API_KEY=AIzaSy...tu_clave_real_de_google
+
+```
+
+
+2. **Corregir forma de enviar API Key en HTTP Client:**
+SI HACES LA PETICIÓN VÍA `RestTemplate` O `WebClient` EN JAVA:
+
+**NO USAR:**
+
+```java
+// MAL: Google rechaza la API Key si la pones como Bearer
+headers.set("Authorization", "Bearer " + apiKey); 
+
+```
+
+**USAR OPCIÓN A (Header correcto):**
+
+```java
+// BIEN: Usar la cabecera oficial de Google
+headers.set("x-goog-api-key", apiKey); 
+
+```
+
+**O USAR OPCIÓN B (Query Parameter):**
+
+```java
+// BIEN: Agregar como parámetro al final de la URL
+String url = "https://generativelanguage.googleapis.com/v1beta/" + model + ":generateContent?key=" + apiKey;
+
+```
+
+
+3. **Reiniciar aplicación:**
+REINICIAR SERVIDOR SPRING BOOT PARA CARGAR NUEVA CONFIGURACIÓN.
+
+```bash
+mvn spring-boot:run
+
+```

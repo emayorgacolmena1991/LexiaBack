@@ -95,7 +95,9 @@ public class SecurityConfig {
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/forgot"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset")))
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset"),
+                        // Multipart: CsrfFilter no lee bien FormData; sesión va en cookie SameSite=Lax.
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
@@ -111,24 +113,35 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/password/forgot"),
                         paths.matcher("/api/v1/auth/password/reset"))
                     .permitAll()
+                    .requestMatchers(paths.matcher("/api/v1/expedientes/**"))
+                    .authenticated()
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(
             exceptions ->
                 exceptions.authenticationEntryPoint(SecurityConfig::unauthorized)
-                    .accessDeniedHandler(SecurityConfig::unauthorized))
+                    .accessDeniedHandler(SecurityConfig::forbidden))
         .build();
   }
 
   private static void unauthorized(
       HttpServletRequest request, HttpServletResponse response, Exception exception)
       throws java.io.IOException {
-    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+    writeJson(response, HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sesión no válida o vencida.");
+  }
+
+  private static void forbidden(
+      HttpServletRequest request, HttpServletResponse response, Exception exception)
+      throws java.io.IOException {
+    writeJson(response, HttpServletResponse.SC_FORBIDDEN, "FORBIDDEN", "No autorizado para esta acción.");
+  }
+
+  private static void writeJson(HttpServletResponse response, int status, String code, String message)
+      throws java.io.IOException {
+    response.setStatus(status);
     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
     response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-    response
-        .getWriter()
-        .write("{\"code\":\"UNAUTHORIZED\",\"message\":\"Sesión no válida o vencida.\"}");
+    response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");
   }
 
   static final class CsrfCookieFilter extends OncePerRequestFilter {
