@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: lexia-api
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 100MB
   datasource:
     url: jdbc:postgresql://${LEXIA_DB_HOST:51.79.11.21}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
     username: ${LEXIA_DB_USER:lexia_app}
@@ -46,6 +50,10 @@ lexia:
     sender-email: ${LEXIA_BREVO_SENDER_EMAIL:noreply@lexia.app}
     sender-name: ${LEXIA_BREVO_SENDER_NAME:LEXIA}
     frontend-url: ${LEXIA_FRONTEND_URL:http://localhost:4200}
+
+gemini:
+  api:
+    key: ${GEMINI_API_KEY:}
 
 management:
   endpoints:

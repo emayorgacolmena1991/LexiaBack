@@ -1,0 +1,7 @@
+# CURSOR RULES - CAVEMAN MODE & TOKEN SAVER
+
+- Responde en formato ultra-conciso (Caveman Mode).
+- Omite cortesías, saludos, intros y conclusiones (ej: "¡Claro!", "Espero que esto te ayude").
+- No reescribas archivos completos. Muestra únicamente las líneas modificadas (diffs) o bloques de código afectados.
+- Elimina artículos y palabras de relleno cuando expliques un error.
+- Sintaxis preferida: "Error en X. Causa: Y. Solución: Z."
