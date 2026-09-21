@@ -33,6 +33,14 @@ public class RolePermission {
     return permissionId;
   }
 
+  public static RolePermission assign(UUID roleId, UUID permissionId, UUID tenantId) {
+    RolePermission row = new RolePermission();
+    row.roleId = roleId;
+    row.permissionId = permissionId;
+    row.tenantId = tenantId;
+    return row;
+  }
+
   public static class Pk implements Serializable {
     private UUID roleId;
     private UUID permissionId;

@@ -87,6 +87,7 @@ public class PasswordService {
       throw new AuthException(HttpStatus.CONFLICT, "ALREADY_ACTIVE", "Esta invitación ya fue aceptada.");
     }
 
+    PasswordPolicy.validate(password);
     credentials.save(UserCredential.create(user.getId(), hasher.hash(password), false));
     membership.setStatus("ACTIVE");
     invitation.accept();
@@ -108,7 +109,7 @@ public class PasswordService {
       throw new AuthException(HttpStatus.BAD_REQUEST, "BAD_PASSWORD", "La contraseña actual no es correcta.");
     }
     applyPasswordChange(credential, newPassword);
-    emails.sendPasswordChanged(user.getEmail(), user.getDisplayName());
+    emails.sendPasswordChanged(principal.tenantId(), user.getEmail(), user.getDisplayName());
   }
 
   @Transactional
@@ -126,7 +127,8 @@ public class PasswordService {
     AuthChallenge challenge =
         AuthChallenge.passwordReset(user.getId(), Instant.now().plus(RESET_TTL));
     challenges.save(challenge);
-    emails.sendPasswordReset(user.getEmail(), user.getDisplayName(), challenge.getId().toString());
+    emails.sendPasswordReset(
+        tenantIdForUser(user), user.getEmail(), user.getDisplayName(), challenge.getId().toString());
   }
 
   @Transactional
@@ -162,10 +164,16 @@ public class PasswordService {
     applyPasswordChange(credential, newPassword);
     challenge.consume();
     invalidateSessions(user.getId());
-    emails.sendPasswordChanged(user.getEmail(), user.getDisplayName());
+    emails.sendPasswordChanged(tenantIdForUser(user), user.getEmail(), user.getDisplayName());
+  }
+
+  private UUID tenantIdForUser(AppUser user) {
+    List<Membership> active = memberships.findActiveForLogin(user.getId());
+    return active.isEmpty() ? null : active.get(0).getTenantId();
   }
 
   private void applyPasswordChange(UserCredential credential, String newPassword) {
+    PasswordPolicy.validate(newPassword);
     credential.setPasswordHash(hasher.hash(newPassword));
     credential.setAlgorithm("argon2id");
     credential.setLastChangedAt(Instant.now());

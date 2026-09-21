@@ -11,7 +11,7 @@ Cimiento de persistencia multi-tenant con login de sesión, bloqueo y TOTP opcio
 - PostgreSQL (`lexia` en el servidor acordado)
 - Flyway + JPA (cimiento)
 - Maven Wrapper (`mvnw` / `mvnw.cmd`)
-- Puerto `8080`
+- Puerto `8081` (variable `LEXIA_SERVER_PORT`)
 
 ## Estructura
 
@@ -55,8 +55,8 @@ cd backend
 Health:
 
 ```text
-GET http://127.0.0.1:8080/api/v1/health
-GET http://127.0.0.1:8080/actuator/health
+GET http://127.0.0.1:8081/api/v1/health
+GET http://127.0.0.1:8081/actuator/health
 ```
 
 ## Login y 2FA
@@ -82,6 +82,13 @@ Usuario demo: `laura.gomez@lexia.demo`. Contraseña: `LEXIA_DEMO_PASSWORD` (por 
 ```
 
 `RlsIsolationIT` se omite si no hay `LEXIA_DB_HOST` / `LEXIA_DB_PASSWORD`.
+
+### CI / E2E local
+
+- Perfil Spring **`ci`**: `application-ci.yml` (PostgreSQL local, Flyway desde V1, `LEXIA_E2E_ENABLED=true`).
+- Scripts: `scripts/ci-init-db.sh`, `scripts/ci-post-migrate.sql`, `scripts/run-ci-e2e-local.sh`.
+- Docker: `docker-compose.ci.yml` (Postgres 16 efímero).
+- Workflow GitHub: `.github/workflows/ci.yml` (backend test + frontend build + Playwright).
 
 ## Fuera de alcance
 

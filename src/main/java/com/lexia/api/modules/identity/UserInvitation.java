@@ -92,8 +92,16 @@ public class UserInvitation {
     return expiresAt;
   }
 
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+
   public Instant getAcceptedAt() {
     return acceptedAt;
+  }
+
+  public Instant getRevokedAt() {
+    return revokedAt;
   }
 
   public boolean isPending() {

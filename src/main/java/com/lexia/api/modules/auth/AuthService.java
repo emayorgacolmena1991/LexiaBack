@@ -12,9 +12,14 @@ import com.lexia.api.modules.identity.MembershipRoleRepository;
 import com.lexia.api.modules.identity.Role;
 import com.lexia.api.modules.identity.RoleRepository;
 import com.lexia.api.modules.notifications.EmailNotificationService;
+import com.lexia.api.modules.notifications.InAppNotificationService;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantBinder;
+import com.lexia.api.modules.tenancy.TenantParameterService;
+import com.lexia.api.modules.tenancy.TenantModule;
+import com.lexia.api.modules.tenancy.TenantModuleRepository;
 import com.lexia.api.modules.tenancy.TenantRepository;
+import org.springframework.http.HttpStatus;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Duration;
@@ -45,6 +50,7 @@ public class AuthService {
   private final MembershipRoleRepository membershipRoles;
   private final RoleRepository roles;
   private final TenantRepository tenants;
+  private final TenantModuleRepository tenantModules;
   private final MfaFactorRepository factors;
   private final RecoveryCodeRepository recoveryCodes;
   private final AuthChallengeRepository challenges;
@@ -58,7 +64,9 @@ public class AuthService {
   private final AuthCookies cookies;
   private final TenantBinder tenantBinder;
   private final EmailNotificationService emails;
+  private final InAppNotificationService inAppNotifications;
   private final AuthorizationService authorization;
+  private final TenantParameterService tenantParameters;
 
   public AuthService(
       AuthProperties properties,
@@ -68,6 +76,7 @@ public class AuthService {
       MembershipRoleRepository membershipRoles,
       RoleRepository roles,
       TenantRepository tenants,
+      TenantModuleRepository tenantModules,
       MfaFactorRepository factors,
       RecoveryCodeRepository recoveryCodes,
       AuthChallengeRepository challenges,
@@ -81,7 +90,9 @@ public class AuthService {
       AuthCookies cookies,
       TenantBinder tenantBinder,
       EmailNotificationService emails,
-      AuthorizationService authorization) {
+      InAppNotificationService inAppNotifications,
+      AuthorizationService authorization,
+      TenantParameterService tenantParameters) {
     this.properties = properties;
     this.users = users;
     this.credentials = credentials;
@@ -89,6 +100,7 @@ public class AuthService {
     this.membershipRoles = membershipRoles;
     this.roles = roles;
     this.tenants = tenants;
+    this.tenantModules = tenantModules;
     this.factors = factors;
     this.recoveryCodes = recoveryCodes;
     this.challenges = challenges;
@@ -102,7 +114,9 @@ public class AuthService {
     this.cookies = cookies;
     this.tenantBinder = tenantBinder;
     this.emails = emails;
+    this.inAppNotifications = inAppNotifications;
     this.authorization = authorization;
+    this.tenantParameters = tenantParameters;
   }
 
   @Transactional(noRollbackFor = AuthException.class)
@@ -135,6 +149,8 @@ public class AuthService {
       user.setLockedUntil(null);
     }
 
+    enforceTenantMfaPolicy(user);
+
     if (mfaEnabled(user.getId())) {
       AuthChallenge challenge =
           AuthChallenge.loginMfa(
@@ -156,6 +172,37 @@ public class AuthService {
     }
 
     return completeLogin(user, ip, userAgent, response, "PASSWORD");
+  }
+
+  /** Solo disponible con {@code lexia.e2e.enabled=true}; omite MFA para automatización. */
+  @Transactional(noRollbackFor = AuthException.class)
+  public AuthDtos.AuthResponse e2eLogin(
+      AuthDtos.LoginRequest request, HttpServletRequest http, HttpServletResponse response) {
+    String email = normalize(request.email());
+    String ip = clientIp(http);
+    String userAgent = userAgent(http);
+
+    AppUser user =
+        users
+            .findByEmail(email)
+            .orElseThrow(() -> AuthException.unauthorized("Credenciales no válidas."));
+
+    UserCredential credential = credentials.findByUserId(user.getId()).orElse(null);
+    if (credential == null || !passwords.matches(request.password(), credential.getPasswordHash())) {
+      throw AuthException.unauthorized("Credenciales no válidas.");
+    }
+
+    if (user.getLockedUntil() != null) {
+      user.setLockedUntil(null);
+    }
+    if ("LOCKED".equals(user.getStatus())) {
+      user.setStatus("ACTIVE");
+    }
+    if (!"ACTIVE".equals(user.getStatus())) {
+      throw AuthException.unauthorized("Credenciales no válidas.");
+    }
+
+    return completeLogin(user, ip, userAgent, response, "E2E");
   }
 
   @Transactional(noRollbackFor = AuthException.class)
@@ -248,16 +295,79 @@ public class AuthService {
     AuthPrincipal principal = AuthContext.require();
     AppUser user = users.findById(principal.userId()).orElseThrow();
     Tenant tenant = tenants.findById(principal.tenantId()).orElse(null);
+    return toSessionResponse(user, principal.tenantId(), tenant, principal.membershipId());
+  }
+
+  @Transactional
+  public AuthDtos.SessionResponse updateProfile(AuthDtos.ProfileUpdateRequest request) {
+    AuthPrincipal principal = AuthContext.require();
+    AppUser user = users.findById(principal.userId()).orElseThrow();
+    user.updateDisplayName(request.displayName());
+    users.save(user);
+    audit(
+        principal.tenantId(),
+        user.getId(),
+        "PROFILE_UPDATE",
+        "user",
+        user.getId(),
+        "OK",
+        null,
+        null);
+    Tenant tenant = principal.tenantId() == null ? null : tenants.findById(principal.tenantId()).orElse(null);
+    return toSessionResponse(user, principal.tenantId(), tenant, principal.membershipId());
+  }
+
+  @Transactional
+  public AuthDtos.UserPreferencesRequest updatePreferences(AuthDtos.UserPreferencesRequest request) {
+    AuthPrincipal principal = AuthContext.require();
+    AppUser user = users.findById(principal.userId()).orElseThrow();
+    String locale = request.locale().trim().toLowerCase();
+    String theme = request.theme().trim().toLowerCase();
+    if (!locale.equals("es") && !locale.equals("en")) {
+      throw AuthException.badRequest("Idioma no soportado.");
+    }
+    if (!theme.equals("light") && !theme.equals("dark") && !theme.equals("system")) {
+      throw AuthException.badRequest("Tema no soportado.");
+    }
+    user.updatePreferences(locale, request.timezone(), theme);
+    users.save(user);
+    audit(
+        principal.tenantId(),
+        user.getId(),
+        "PREFERENCES_UPDATE",
+        "user",
+        user.getId(),
+        "OK",
+        null,
+        null);
+    return new AuthDtos.UserPreferencesRequest(user.getLocale(), user.getTimezone(), user.getTheme());
+  }
+
+  private AuthDtos.SessionResponse toSessionResponse(
+      AppUser user, UUID tenantId, Tenant tenant, UUID membershipId) {
     return new AuthDtos.SessionResponse(
         user.getId(),
         user.getEmail(),
         user.getDisplayName(),
-        principal.tenantId(),
+        tenantId,
         tenant == null ? null : tenant.getName(),
-        roleCodes(principal.membershipId()),
-        permissionCodes(principal.membershipId()),
+        roleCodes(membershipId),
+        permissionCodes(membershipId),
+        tenantModuleItems(tenantId),
         mfaEnabled(user.getId()),
-        user.isNotifyOnLogin());
+        user.isNotifyOnLogin(),
+        user.getLocale(),
+        user.getTimezone(),
+        user.getTheme());
+  }
+
+  private List<AuthDtos.TenantModuleItem> tenantModuleItems(UUID tenantId) {
+    if (tenantId == null) {
+      return List.of();
+    }
+    return tenantModules.findByTenantIdAndEnabledTrueOrderByModuleCodeAsc(tenantId).stream()
+        .map(module -> new AuthDtos.TenantModuleItem(module.getModuleCode(), module.isEnabled()))
+        .toList();
   }
 
   @Transactional(readOnly = true)
@@ -379,6 +489,7 @@ public class AuthService {
     audit(membership.getTenantId(), user.getId(), "LOGIN", "session", session.getId(), "OK", ip, userAgent);
     if (user.isNotifyOnLogin()) {
       emails.sendLoginAlert(
+          membership.getTenantId(),
           user.getEmail(),
           user.getDisplayName(),
           LOGIN_WHEN.format(Instant.now().atZone(BOGOTA)),
@@ -417,6 +528,23 @@ public class AuthService {
         .flatMap(Optional::stream)
         .map(Role::getCode)
         .toList();
+  }
+
+  private void enforceTenantMfaPolicy(AppUser user) {
+    if (mfaEnabled(user.getId())) {
+      return;
+    }
+    List<Membership> active = memberships.findActiveForLogin(user.getId());
+    if (active.isEmpty()) {
+      return;
+    }
+    UUID tenantId = active.get(0).getTenantId();
+    if (tenantParameters.isMfaRequired(tenantId)) {
+      throw new AuthException(
+          HttpStatus.FORBIDDEN,
+          "MFA_SETUP_REQUIRED",
+          "Tu organización exige doble factor. Configúralo en Seguridad antes de continuar.");
+    }
   }
 
   private boolean mfaEnabled(UUID userId) {
@@ -465,15 +593,22 @@ public class AuthService {
   private void fail(String email, String ip, String userAgent, AppUser user, String reason) {
     attempts.save(LoginAttempt.record(email, ip, false, reason));
     if (user != null) {
-      lockIfNeeded(user);
-      audit(null, user.getId(), "LOGIN_FAILED:" + reason, "user", user.getId(), "DENIED", ip, userAgent);
+      boolean locked = lockIfNeeded(user);
+      UUID tenantId = tenantIdForUser(user);
+      if (tenantId != null) {
+        tenantBinder.bind(tenantId);
+      }
+      audit(tenantId, user.getId(), "LOGIN_FAILED:" + reason, "user", user.getId(), "DENIED", ip, userAgent);
+      if (locked && tenantId != null) {
+        inAppNotifications.onAccountLocked(tenantId, user.getDisplayName(), user.getEmail());
+      }
     } else {
       audit(null, null, "LOGIN_FAILED:" + reason, "user", null, "DENIED", ip, userAgent);
     }
     throw AuthException.unauthorized(GENERIC_LOGIN);
   }
 
-  private void lockIfNeeded(AppUser user) {
+  private boolean lockIfNeeded(AppUser user) {
     List<LoginAttempt> recent = attempts.findTop20ByEmailOrderByCreatedAtDesc(user.getEmail());
     int consecutive = 0;
     for (LoginAttempt attempt : recent) {
@@ -485,7 +620,14 @@ public class AuthService {
     if (consecutive >= properties.getMaxFailedAttempts()) {
       user.setStatus("LOCKED");
       user.setLockedUntil(Instant.now().plus(Duration.ofMinutes(properties.getLockoutMinutes())));
+      return true;
     }
+    return false;
+  }
+
+  private UUID tenantIdForUser(AppUser user) {
+    List<Membership> active = memberships.findActiveForLogin(user.getId());
+    return active.isEmpty() ? null : active.get(0).getTenantId();
   }
 
   private void audit(

@@ -1,0 +1,6 @@
+# Perfil staging: activar Brevo cuando las variables de entorno estén configuradas.
+lexia:
+  brevo:
+    enabled: ${LEXIA_BREVO_ENABLED:true}
+  auth:
+    cookie-secure: ${LEXIA_COOKIE_SECURE:true}

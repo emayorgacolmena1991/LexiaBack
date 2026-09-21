@@ -7,10 +7,12 @@ import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -27,8 +29,14 @@ public class AuthController {
   }
 
   @GetMapping("/csrf")
-  public Map<String, String> csrf() {
-    return Map.of("status", "OK");
+  public Map<String, String> csrf(CsrfToken csrfToken) {
+    if (csrfToken == null) {
+      return Map.of("status", "OK");
+    }
+    return Map.of(
+        "status", "OK",
+        "token", csrfToken.getToken(),
+        "headerName", csrfToken.getHeaderName());
   }
 
   @PostMapping("/login")
@@ -111,5 +119,16 @@ public class AuthController {
   public AuthDtos.NotificationPreferencesRequest updateNotifications(
       @Valid @RequestBody AuthDtos.NotificationPreferencesRequest request) {
     return authService.updateNotificationPreferences(request);
+  }
+
+  @PatchMapping("/profile")
+  public AuthDtos.SessionResponse updateProfile(@Valid @RequestBody AuthDtos.ProfileUpdateRequest request) {
+    return authService.updateProfile(request);
+  }
+
+  @PatchMapping("/preferences")
+  public AuthDtos.UserPreferencesRequest updatePreferences(
+      @Valid @RequestBody AuthDtos.UserPreferencesRequest request) {
+    return authService.updatePreferences(request);
   }
 }

@@ -70,4 +70,41 @@ public class Tenant {
   public String getIsolationMode() {
     return isolationMode;
   }
+
+  public String getTimezone() {
+    return timezone;
+  }
+
+  public String getPlanCode() {
+    return planCode;
+  }
+
+  public Integer getMaxUsers() {
+    return maxUsers;
+  }
+
+  public Integer getMaxCases() {
+    return maxCases;
+  }
+
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+
+  public Instant getUpdatedAt() {
+    return updatedAt;
+  }
+
+  public void updateSettings(String name, String timezone, Integer maxUsers) {
+    if (name != null && !name.isBlank()) {
+      this.name = name.trim();
+    }
+    if (timezone != null && !timezone.isBlank()) {
+      this.timezone = timezone.trim();
+    }
+    if (maxUsers != null) {
+      this.maxUsers = maxUsers <= 0 ? null : maxUsers;
+    }
+    this.updatedAt = Instant.now();
+  }
 }

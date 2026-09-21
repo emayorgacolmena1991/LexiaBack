@@ -91,6 +91,7 @@ public class SecurityConfig {
                     .csrfTokenRequestHandler(requestHandler)
                     .ignoringRequestMatchers(
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/login"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/e2e/session"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/mfa/verify"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
@@ -106,6 +107,7 @@ public class SecurityConfig {
                         paths.matcher("/actuator/health"),
                         paths.matcher("/actuator/info"),
                         paths.matcher("/api/v1/auth/login"),
+                        paths.matcher("/api/v1/auth/e2e/session"),
                         paths.matcher("/api/v1/auth/mfa/verify"),
                         paths.matcher("/api/v1/auth/refresh"),
                         paths.matcher("/api/v1/auth/csrf"),
