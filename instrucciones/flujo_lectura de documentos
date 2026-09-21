@@ -1,59 +1,29 @@
-UG. TU TENER ERROR `401 UNAUTHENTICATED` EN GEMINI.
+LISTA DE ERRORES DETECTADOS
+ERROR HTTP 401 (Unauthorized) en /api/v1/expedientes/borrador
 
-NOMBRES DE MODELO YA ESTAR BIEN, PERO AHORA API RECHAZAR TU CLAVE (LLAVE DE AUTENTICACIÓN).
+Aparece 2 veces en la pestaña Network y 4 veces en la Console.
 
----
+ERROR HTTP 403 (Forbidden) en /api/v1/expedientes/borrador
 
-### CAUSA
+Aparece 1 vez arriba en la Console.
 
-1. **API KEY INVÁLIDA O INEXISTENTE:** Tu variable `GEMINI_API_KEY` está vacía, no se cargó, o la eliminaste/rotaste cuando quitaste el secreto de Git.
-2. **FORMATO DE AUTENTICACIÓN INCORRECTO (`ACCESS_TOKEN_TYPE_UNSUPPORTED`):** Tu código está enviando la API Key en el encabezado (Header) de la petición como si fuera un token Bearer/OAuth (`Authorization: Bearer AIzaSy...`), en lugar de enviarla como parámetro de consulta `?key=TU_API_KEY` o en la cabecera `x-goog-api-key`.
+2. POSIBLES CAUSAS CAVERNÍCOLAS
+CAUSA A: TOKEN NO VIAJA EN LA PETICIÓN (HTTP 401)
+Explicación: Frontend Angular hace POST a /borrador, pero no pega el Authorization: Bearer <TOKEN> en las cabeceras.
 
----
+Por qué pasa: Falta configurar el HTTP Interceptor en Angular o no estás pasando el token en el método http.post().
 
-### SOLUCIÓN
+CAUSA B: TOKEN VIEJO O EXPIRADO (HTTP 401)
+Explicación: Frontend manda token, pero la sesión ya murió en el Backend.
 
-1. **Revisar archivo .env local:**
-ABRIR `.env` (O `application.properties`) EN TU MÁQUINA LOCAL Y PONER CLAVE VÁLIDA:
+Por qué pasa: El token JWT ya caducó y el endpoint /refresh no se ejecutó antes de pedir el borrador.
 
-```env
-GEMINI_API_KEY=AIzaSy...tu_clave_real_de_google
+CAUSA C: BLOQUEO DE SPRING SECURITY (HTTP 403)
+Explicación: Backend recibe petición pero dice: "Este usuario no tiene el ROL/Permiso para crear borradores" o "Falta token CSRF válido para POST".
 
-```
+Por qué pasa: Tu clase SecurityConfig.java no tiene autorizado el método POST para la ruta /api/v1/expedientes/borrador, o Spring Security requiere token CSRF activo para métodos mutables (POST/PUT/DELETE).
 
+CAUSA D: PETICIÓN DOBLE / REPETIDA DESDE FRONTEND
+Explicación: Se ven múltiples peticiones fallidas al mismo endpoint.
 
-2. **Corregir forma de enviar API Key en HTTP Client:**
-SI HACES LA PETICIÓN VÍA `RestTemplate` O `WebClient` EN JAVA:
-
-**NO USAR:**
-
-```java
-// MAL: Google rechaza la API Key si la pones como Bearer
-headers.set("Authorization", "Bearer " + apiKey); 
-
-```
-
-**USAR OPCIÓN A (Header correcto):**
-
-```java
-// BIEN: Usar la cabecera oficial de Google
-headers.set("x-goog-api-key", apiKey); 
-
-```
-
-**O USAR OPCIÓN B (Query Parameter):**
-
-```java
-// BIEN: Agregar como parámetro al final de la URL
-String url = "https://generativelanguage.googleapis.com/v1beta/" + model + ":generateContent?key=" + apiKey;
-
-```
-
-
-3. **Reiniciar aplicación:**
-REINICIAR SERVIDOR SPRING BOOT PARA CARGAR NUEVA CONFIGURACIÓN.
-
-```bash
-mvn spring-boot:run
-
-```
+Por me pasa: El usuario hace clic varias veces al botón "Siguiente", o el código Angular dispara el evento dos veces sin esperar respuesta del servidor.

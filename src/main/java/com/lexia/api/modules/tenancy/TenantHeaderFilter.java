@@ -25,7 +25,11 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
     try {
       String raw = request.getHeader(HEADER);
       if (raw != null && !raw.isBlank()) {
-        TenantContext.setTenantId(UUID.fromString(raw.trim()));
+        try {
+          TenantContext.setTenantId(UUID.fromString(raw.trim()));
+        } catch (IllegalArgumentException ignored) {
+          // Header malformado: SessionAuthFilter puede fijar tenant desde la sesión.
+        }
       }
       filterChain.doFilter(request, response);
     } finally {

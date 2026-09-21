@@ -18,6 +18,12 @@ public class ApiExceptionHandler {
         .body(Map.of("code", exception.getCode(), "message", exception.getMessage()));
   }
 
+  @ExceptionHandler(ApiException.class)
+  public ResponseEntity<Map<String, String>> api(ApiException exception) {
+    return ResponseEntity.status(exception.getStatus())
+        .body(Map.of("code", exception.getCode(), "message", exception.getMessage()));
+  }
+
   @ExceptionHandler(MethodArgumentNotValidException.class)
   public ResponseEntity<Map<String, String>> validation(MethodArgumentNotValidException exception) {
     return ResponseEntity.badRequest()

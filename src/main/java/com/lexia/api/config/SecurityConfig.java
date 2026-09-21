@@ -91,13 +91,18 @@ public class SecurityConfig {
                     .csrfTokenRequestHandler(requestHandler)
                     .ignoringRequestMatchers(
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/login"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/logout"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/e2e/session"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/mfa/verify"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/forgot"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset"),
-                        // Multipart: CsrfFilter no lee bien FormData; sesión va en cookie SameSite=Lax.
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos")))
+                        // Mismo patrón que procesar-documentos: SPA manda Bearer/cookie; CSRF bloqueaba POST/PATCH/DELETE.
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/**"),
+                        paths.matcher(HttpMethod.PUT, "/api/v1/expedientes/**"),
+                        paths.matcher(HttpMethod.PATCH, "/api/v1/expedientes/**"),
+                        paths.matcher(HttpMethod.DELETE, "/api/v1/expedientes/**")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
@@ -106,6 +111,8 @@ public class SecurityConfig {
                         paths.matcher("/actuator/health"),
                         paths.matcher("/actuator/info"),
                         paths.matcher("/api/v1/auth/login"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/logout"),
+                        paths.matcher("/api/v1/auth/e2e/session"),
                         paths.matcher("/api/v1/auth/mfa/verify"),
                         paths.matcher("/api/v1/auth/refresh"),
                         paths.matcher("/api/v1/auth/csrf"),
@@ -113,8 +120,12 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/password/forgot"),
                         paths.matcher("/api/v1/auth/password/reset"))
                     .permitAll()
-                    .requestMatchers(paths.matcher("/api/v1/expedientes/**"))
-                    .authenticated()
+                    .requestMatchers(
+                        paths.matcher("/api/v1/actos-notariales"),
+                        paths.matcher("/api/v1/actos-notariales/**"),
+                        paths.matcher("/api/v1/expedientes"),
+                        paths.matcher("/api/v1/expedientes/**"))
+                    .hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "USER")
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(
