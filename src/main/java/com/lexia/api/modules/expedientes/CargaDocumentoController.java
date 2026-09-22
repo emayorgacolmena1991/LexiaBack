@@ -7,6 +7,7 @@ import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.IniciarProcesamientoResponse;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoPermitidoDTO;
+import com.lexia.api.modules.expedientes.PrevalidacionDtos.PrevalidacionDto;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -33,9 +34,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class CargaDocumentoController {
 
   private final CargaDocumentoService cargaDocumentoService;
+  private final PrevalidacionService prevalidacionService;
 
-  public CargaDocumentoController(CargaDocumentoService cargaDocumentoService) {
+  public CargaDocumentoController(
+      CargaDocumentoService cargaDocumentoService, PrevalidacionService prevalidacionService) {
     this.cargaDocumentoService = cargaDocumentoService;
+    this.prevalidacionService = prevalidacionService;
   }
 
   @PostMapping("/borrador")
@@ -80,5 +84,10 @@ public class CargaDocumentoController {
   @PostMapping("/{idExpediente}/iniciar-procesamiento")
   public IniciarProcesamientoResponse iniciarProcesamiento(@PathVariable String idExpediente) {
     return cargaDocumentoService.iniciarProcesamiento(idExpediente);
+  }
+
+  @GetMapping("/{idExpediente}/prevalidacion")
+  public PrevalidacionDto prevalidacion(@PathVariable String idExpediente) {
+    return prevalidacionService.obtener(idExpediente);
   }
 }

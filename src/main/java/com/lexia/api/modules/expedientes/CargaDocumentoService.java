@@ -25,9 +25,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Carga y tipificación (paso 2). Guarda archivos en memoria de sesión de borrador. El OCR/Gemini
- * ({@link DocumentExtractorService}) se dispara en pantallas posteriores o vía {@code
- * iniciar-procesamiento} (cola, sin extracción síncrona aquí).
+ * Carga y tipificación (paso 2). Guarda archivos en memoria de sesión de borrador.
+ * {@code iniciar-procesamiento} bloquea el borrador y dispara la prevalidación en segundo plano.
  */
 @Service
 public class CargaDocumentoService {
@@ -37,11 +36,14 @@ public class CargaDocumentoService {
       Set.of("pdf", "jpg", "jpeg", "png", "tiff", "tif");
 
   private final ActoNotarialService actoNotarialService;
+  private final PrevalidacionService prevalidacionService;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
   private final AtomicInteger seq = new AtomicInteger(480);
 
-  public CargaDocumentoService(ActoNotarialService actoNotarialService) {
+  public CargaDocumentoService(
+      ActoNotarialService actoNotarialService, PrevalidacionService prevalidacionService) {
     this.actoNotarialService = actoNotarialService;
+    this.prevalidacionService = prevalidacionService;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
@@ -157,7 +159,7 @@ public class CargaDocumentoService {
       throw ApiException.badRequest("Clasifica todos los archivos antes de continuar.");
     }
     draft.lock();
-    // OCR/Gemini se reutiliza en pantallas posteriores (procesar-documentos); aquí solo se bloquea.
+    prevalidacionService.iniciar(idExpediente, new ArrayList<>(draft.documentos().values()));
     return new IniciarProcesamientoResponse(
         idExpediente,
         "EN_PROCESAMIENTO_IA",
