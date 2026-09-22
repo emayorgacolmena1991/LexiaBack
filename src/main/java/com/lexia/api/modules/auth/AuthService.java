@@ -168,8 +168,7 @@ public class AuthService {
           null,
           List.of(),
           List.of(),
-          true,
-          null);
+          true);
     }
 
     return completeLogin(user, ip, userAgent, response, "PASSWORD");
@@ -296,8 +295,7 @@ public class AuthService {
     AuthPrincipal principal = AuthContext.require();
     AppUser user = users.findById(principal.userId()).orElseThrow();
     Tenant tenant = tenants.findById(principal.tenantId()).orElse(null);
-    return toSessionResponse(
-        user, principal.tenantId(), tenant, principal.membershipId(), principal.sessionId());
+    return toSessionResponse(user, principal.tenantId(), tenant, principal.membershipId());
   }
 
   @Transactional
@@ -316,8 +314,7 @@ public class AuthService {
         null,
         null);
     Tenant tenant = principal.tenantId() == null ? null : tenants.findById(principal.tenantId()).orElse(null);
-    return toSessionResponse(
-        user, principal.tenantId(), tenant, principal.membershipId(), principal.sessionId());
+    return toSessionResponse(user, principal.tenantId(), tenant, principal.membershipId());
   }
 
   @Transactional
@@ -347,7 +344,7 @@ public class AuthService {
   }
 
   private AuthDtos.SessionResponse toSessionResponse(
-      AppUser user, UUID tenantId, Tenant tenant, UUID membershipId, UUID sessionId) {
+      AppUser user, UUID tenantId, Tenant tenant, UUID membershipId) {
     return new AuthDtos.SessionResponse(
         user.getId(),
         user.getEmail(),
@@ -361,8 +358,7 @@ public class AuthService {
         user.isNotifyOnLogin(),
         user.getLocale(),
         user.getTimezone(),
-        user.getTheme(),
-        sessionId == null ? null : sessionId.toString());
+        user.getTheme());
   }
 
   private List<AuthDtos.TenantModuleItem> tenantModuleItems(UUID tenantId) {
@@ -515,8 +511,7 @@ public class AuthService {
         tenant == null ? null : tenant.getName(),
         roleCodes(session.getMembershipId()),
         permissionCodes(session.getMembershipId()),
-        mfaEnabled(user.getId()),
-        session.getId().toString());
+        mfaEnabled(user.getId()));
   }
 
   private List<String> permissionCodes(UUID membershipId) {

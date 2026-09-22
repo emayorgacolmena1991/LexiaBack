@@ -6,4 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface MembershipRoleRepository extends JpaRepository<MembershipRole, MembershipRole.Pk> {
   List<MembershipRole> findByMembershipId(UUID membershipId);
+
+  long countByRoleId(UUID roleId);
 }

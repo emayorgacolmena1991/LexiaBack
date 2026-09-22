@@ -53,8 +53,40 @@ public class AuditEvent {
     return id;
   }
 
+  public UUID getTenantId() {
+    return tenantId;
+  }
+
+  public UUID getActorUserId() {
+    return actorUserId;
+  }
+
+  public String getActorType() {
+    return actorType;
+  }
+
   public String getEvent() {
     return event;
+  }
+
+  public String getObjectType() {
+    return objectType;
+  }
+
+  public UUID getObjectId() {
+    return objectId;
+  }
+
+  public String getResult() {
+    return result;
+  }
+
+  public String getIpAddress() {
+    return ipAddress;
+  }
+
+  public Instant getCreatedAt() {
+    return createdAt;
   }
 
   public static AuditEvent of(

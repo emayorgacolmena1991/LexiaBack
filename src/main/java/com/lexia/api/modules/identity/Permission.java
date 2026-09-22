@@ -28,4 +28,12 @@ public class Permission {
   public String getCode() {
     return code;
   }
+
+  public String getName() {
+    return name;
+  }
+
+  public String getModuleCode() {
+    return moduleCode;
+  }
 }

@@ -1,6 +1,5 @@
 package com.lexia.api.modules.identity;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,9 +19,4 @@ public interface CatalogItemRepository extends JpaRepository<CatalogItem, UUID> 
 
   boolean existsByCatalogIdAndTenantIdAndCodeIgnoreCaseAndIdNot(
       UUID catalogId, UUID tenantId, String code, UUID id);
-
-  Optional<CatalogItem> findByCatalogIdAndTenantIdAndCodeIgnoreCaseAndActiveTrue(
-      UUID catalogId, UUID tenantId, String code);
-
-  List<CatalogItem> findByTenantIdAndIdIn(UUID tenantId, Collection<UUID> ids);
 }

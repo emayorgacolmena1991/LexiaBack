@@ -15,9 +15,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthorizationService {
 
   private final AuthorizationRepository authorization;
+  private final AuditEventRepository auditEvents;
 
-  public AuthorizationService(AuthorizationRepository authorization) {
+  public AuthorizationService(
+      AuthorizationRepository authorization, AuditEventRepository auditEvents) {
     this.authorization = authorization;
+    this.auditEvents = auditEvents;
   }
 
   @Transactional(readOnly = true)
@@ -35,8 +38,26 @@ public class AuthorizationService {
   }
 
   @Transactional(readOnly = true)
+  public boolean hasPermission(String permissionCode) {
+    return permissionsForCurrentMembership().contains(permissionCode);
+  }
+
+  @Transactional
   public void requirePermission(String permissionCode) {
-    if (!permissionsForCurrentMembership().contains(permissionCode)) {
+    if (!hasPermission(permissionCode)) {
+      AuthPrincipal principal = AuthContext.get();
+      if (principal != null && principal.tenantId() != null) {
+        auditEvents.save(
+            AuditEvent.of(
+                principal.tenantId(),
+                principal.userId(),
+                "ACCESS_DENIED:" + permissionCode,
+                "permission",
+                null,
+                "DENIED",
+                null,
+                null));
+      }
       throw new AuthException(
           HttpStatus.FORBIDDEN, "FORBIDDEN", "No tienes permiso para realizar esta acción.");
     }

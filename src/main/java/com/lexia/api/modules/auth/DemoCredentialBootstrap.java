@@ -17,7 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class DemoCredentialBootstrap implements ApplicationRunner {
 
   private static final Logger LOG = LoggerFactory.getLogger(DemoCredentialBootstrap.class);
-  private static final String DEMO_EMAIL = "laura.gomez@lexia.demo";
+  private static final java.util.List<String> DEMO_EMAILS =
+      java.util.List.of("laura.gomez@lexia.demo", "admin.demo@lexia.demo");
 
   private final AppUserRepository users;
   private final UserCredentialRepository credentials;
@@ -38,23 +39,25 @@ public class DemoCredentialBootstrap implements ApplicationRunner {
   @Override
   @Transactional
   public void run(ApplicationArguments args) {
-    Optional<AppUser> user = users.findByEmail(DEMO_EMAIL);
-    if (user.isEmpty()) {
-      return;
+    for (String email : DEMO_EMAILS) {
+      Optional<AppUser> user = users.findByEmail(email);
+      if (user.isEmpty()) {
+        continue;
+      }
+      credentials
+          .findByUserId(user.get().getId())
+          .ifPresent(
+              credential -> {
+                if (credential.getPasswordHash() != null
+                    && credential.getPasswordHash().startsWith("$argon2")) {
+                  return;
+                }
+                credential.setPasswordHash(hasher.hash(properties.getDemoPassword()));
+                credential.setAlgorithm("argon2id");
+                credential.setLastChangedAt(Instant.now());
+                credential.setMustChange(false);
+                LOG.info("Credencial demo lista para {}", email);
+              });
     }
-    credentials
-        .findByUserId(user.get().getId())
-        .ifPresent(
-            credential -> {
-              if (credential.getPasswordHash() != null
-                  && credential.getPasswordHash().startsWith("$argon2")) {
-                return;
-              }
-              credential.setPasswordHash(hasher.hash(properties.getDemoPassword()));
-              credential.setAlgorithm("argon2id");
-              credential.setLastChangedAt(Instant.now());
-              credential.setMustChange(false);
-              LOG.info("Credencial demo lista para {}", DEMO_EMAIL);
-            });
   }
 }

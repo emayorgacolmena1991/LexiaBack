@@ -55,8 +55,22 @@ public class Membership {
     return status;
   }
 
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+
+  public Instant getDeletedAt() {
+    return deletedAt;
+  }
+
   public void setStatus(String status) {
     this.status = status;
+    this.updatedAt = Instant.now();
+  }
+
+  public void suspend() {
+    this.status = "SUSPENDED";
+    this.updatedAt = Instant.now();
   }
 
   public static Membership invited(UUID userId, UUID tenantId) {

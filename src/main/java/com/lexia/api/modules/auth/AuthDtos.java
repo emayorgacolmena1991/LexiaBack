@@ -29,11 +29,7 @@ public final class AuthDtos {
       String tenantName,
       List<String> roles,
       List<String> permissions,
-      boolean mfaEnabled,
-      /** Opaco para `Authorization: Bearer` (mismo id que cookie LEXIA_SID). */
-      @com.fasterxml.jackson.annotation.JsonProperty("accessToken")
-          @com.fasterxml.jackson.annotation.JsonAlias("token")
-          String accessToken) {}
+      boolean mfaEnabled) {}
 
   public record MfaEnrollResponse(String secret, String otpauthUrl, String issuer) {}
 
@@ -54,8 +50,7 @@ public final class AuthDtos {
       boolean notifyOnLogin,
       String locale,
       String timezone,
-      String theme,
-      String accessToken) {}
+      String theme) {}
 
   public record ProfileUpdateRequest(@NotBlank @Size(max = 160) String displayName) {}
 

@@ -10,6 +10,8 @@ public interface UserInvitationRepository extends JpaRepository<UserInvitation, 
 
   List<UserInvitation> findByTenantIdAndRevokedAtIsNullOrderByCreatedAtDesc(UUID tenantId);
 
+  List<UserInvitation> findByTenantIdAndRevokedAtIsNotNullOrderByRevokedAtDesc(UUID tenantId);
+
   List<UserInvitation> findByTenantIdAndEmailIgnoreCaseAndAcceptedAtIsNullAndRevokedAtIsNull(
       UUID tenantId, String email);
 }

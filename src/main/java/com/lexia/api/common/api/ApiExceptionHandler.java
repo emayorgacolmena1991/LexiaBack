@@ -26,8 +26,21 @@ public class ApiExceptionHandler {
 
   @ExceptionHandler(MethodArgumentNotValidException.class)
   public ResponseEntity<Map<String, String>> validation(MethodArgumentNotValidException exception) {
-    return ResponseEntity.badRequest()
-        .body(Map.of("code", "VALIDATION", "message", "Revisa los datos ingresados."));
+    String message =
+        exception.getBindingResult().getFieldErrors().stream()
+            .findFirst()
+            .map(
+                error -> {
+                  if ("email".equals(error.getField())) {
+                    return "Ingresa un correo electrónico válido.";
+                  }
+                  if ("password".equals(error.getField())) {
+                    return "La contraseña debe tener al menos 8 caracteres.";
+                  }
+                  return "Revisa los datos ingresados.";
+                })
+            .orElse("Revisa los datos ingresados.");
+    return ResponseEntity.badRequest().body(Map.of("code", "VALIDATION", "message", message));
   }
 
   @ExceptionHandler(ObjectOptimisticLockingFailureException.class)

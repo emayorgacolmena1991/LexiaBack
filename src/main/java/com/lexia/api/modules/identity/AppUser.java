@@ -29,6 +29,15 @@ public class AppUser {
   @Column(name = "notify_on_login", nullable = false)
   private boolean notifyOnLogin = true;
 
+  @Column(nullable = false, length = 10)
+  private String locale = "es";
+
+  @Column(length = 64)
+  private String timezone;
+
+  @Column(nullable = false, length = 16)
+  private String theme = "light";
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -78,6 +87,30 @@ public class AppUser {
     this.notifyOnLogin = notifyOnLogin;
   }
 
+  public String getLocale() {
+    return locale;
+  }
+
+  public String getTimezone() {
+    return timezone;
+  }
+
+  public String getTheme() {
+    return theme;
+  }
+
+  public void updateDisplayName(String displayName) {
+    this.displayName = displayName.trim();
+    this.updatedAt = Instant.now();
+  }
+
+  public void updatePreferences(String locale, String timezone, String theme) {
+    this.locale = locale;
+    this.timezone = timezone == null || timezone.isBlank() ? null : timezone.trim();
+    this.theme = theme;
+    this.updatedAt = Instant.now();
+  }
+
   public static AppUser create(String email, String displayName) {
     AppUser user = new AppUser();
     user.id = UUID.randomUUID();
@@ -85,6 +118,8 @@ public class AppUser {
     user.displayName = displayName.trim();
     user.status = "ACTIVE";
     user.notifyOnLogin = true;
+    user.locale = "es";
+    user.theme = "light";
     Instant now = Instant.now();
     user.createdAt = now;
     user.updatedAt = now;

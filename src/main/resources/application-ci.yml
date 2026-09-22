@@ -1,0 +1,21 @@
+# Perfil CI: PostgreSQL local efímero, migraciones desde V1, E2E habilitado.
+spring:
+  config:
+    activate:
+      on-profile: ci
+  datasource:
+    url: jdbc:postgresql://${LEXIA_DB_HOST:localhost}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
+    username: ${LEXIA_DB_USER:lexia_app}
+    password: ${LEXIA_DB_PASSWORD:ci_lexia_app}
+  flyway:
+    user: ${LEXIA_FLYWAY_USER:lexia_migrator}
+    password: ${LEXIA_FLYWAY_PASSWORD:ci_lexia_migrator}
+    baseline-on-migrate: false
+
+lexia:
+  cors:
+    allowed-origins:
+      - http://localhost:4200
+      - http://127.0.0.1:4200
+  e2e:
+    enabled: true
