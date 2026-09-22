@@ -49,11 +49,25 @@ public class GeminiOcrServiceImpl implements OcrService {
     }
 
     String resolvedMime = StringUtils.hasText(mimeType) ? mimeType : "application/pdf";
-
-    // PDF/imagen directo a Gemini: sin conversión local a imagen.
     Content content =
         Content.fromParts(Part.fromBytes(fileBytes, resolvedMime), Part.fromText(PROMPT));
+    return interpretar(content, "Error en procesamiento de documento con Gemini.");
+  }
 
+  @Override
+  public ExpedienteDtos.DatosExtraidosDTO analizarTexto(String texto) {
+    if (!StringUtils.hasText(apiKey)) {
+      throw new IllegalStateException("GEMINI_API_KEY / gemini.api.key no configurada.");
+    }
+    if (!StringUtils.hasText(texto)) {
+      throw new IllegalArgumentException("Texto vacío.");
+    }
+
+    Content content = Content.fromParts(Part.fromText(texto), Part.fromText(PROMPT));
+    return interpretar(content, "Error en procesamiento de texto con Gemini.");
+  }
+
+  private ExpedienteDtos.DatosExtraidosDTO interpretar(Content content, String errorSiFalla) {
     GenerateContentConfig config =
         GenerateContentConfig.builder()
             .responseMimeType("application/json")
@@ -91,6 +105,6 @@ public class GeminiOcrServiceImpl implements OcrService {
       }
     }
 
-    throw new IllegalStateException("Error en procesamiento de documento con Gemini.");
+    throw new IllegalStateException(errorSiFalla);
   }
 }
