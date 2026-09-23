@@ -18,6 +18,8 @@ import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoPermitidoDTO;
 import java.io.IOException;
 import java.time.Year;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -120,6 +122,75 @@ public class CargaDocumentoService {
             null);
     draft.documentos().put(idDoc, stored);
     return stored.toDto();
+  }
+
+  /** Lookup bytes del borrador (sessionId = idExpediente). */
+  public StoredDoc requireStoredDoc(String sessionId, String fileId) {
+    DraftExpediente draft = requireDraft(sessionId);
+    StoredDoc doc = draft.documentos().get(fileId);
+    if (doc == null) {
+      throw ApiException.notFound("Documento no encontrado: " + fileId);
+    }
+    return doc;
+  }
+
+  /**
+   * Re-subida OCR (LoadDocuments): reemplaza bytes sin re-procesar el resto.
+   * Permitido aunque el borrador esté locked (pantalla OCR review).
+   */
+  public StoredDoc reemplazarArchivoOcr(
+      String sessionId, String fileId, MultipartFile file, String tipoDocumento) {
+    DraftExpediente draft = requireDraft(sessionId);
+    StoredDoc existing = draft.documentos().get(fileId);
+    if (existing == null) {
+      throw ApiException.notFound("Documento no encontrado: " + fileId);
+    }
+    if (file == null || file.isEmpty()) {
+      throw ApiException.badRequest("Archivo vacío.");
+    }
+    if (file.getSize() > MAX_BYTES) {
+      throw ApiException.badRequest("El archivo supera el máximo de 25 MB.");
+    }
+    String original =
+        StringUtils.hasText(file.getOriginalFilename())
+            ? file.getOriginalFilename()
+            : existing.nombreOriginal();
+    String ext = extensionOf(original);
+    if (!ALLOWED_EXT.contains(ext)) {
+      throw ApiException.badRequest("Formato no permitido. Usa PDF, JPG, PNG o TIFF.");
+    }
+    byte[] bytes;
+    try {
+      bytes = file.getBytes();
+    } catch (IOException e) {
+      throw ApiException.badRequest("No se pudo leer el archivo.");
+    }
+    String tipo =
+        StringUtils.hasText(tipoDocumento)
+            ? tipoDocumento.trim()
+            : existing.codigoTipoDocumento();
+    StoredDoc replaced =
+        new StoredDoc(
+            fileId,
+            original,
+            file.getSize(),
+            formatSize(file.getSize()),
+            file.getContentType(),
+            bytes,
+            tipo);
+    draft.documentos().put(fileId, replaced);
+    draft.ocrResultados().remove(fileId);
+    return replaced;
+  }
+
+  /** Actualiza tipo sin validar catálogo (payload batch OCR). */
+  public void actualizarTipoDocumentoLibre(String sessionId, String fileId, String tipo) {
+    DraftExpediente draft = requireDraft(sessionId);
+    StoredDoc doc = draft.documentos().get(fileId);
+    if (doc == null) {
+      throw ApiException.notFound("Documento no encontrado: " + fileId);
+    }
+    draft.documentos().put(fileId, doc.withTipo(tipo.trim()));
   }
 
   public TipoActualizadoDTO actualizarTipo(
@@ -304,9 +375,12 @@ public class CargaDocumentoService {
     draft.failPrevalidacion(motivo);
   }
 
-  /** Bytes guardados para OCR. */
+  /** Bytes guardados para OCR (orden de carga). */
   public List<StoredDoc> documentosParaProcesar(String idExpediente) {
-    return new ArrayList<>(requireDraft(idExpediente).documentos().values());
+    DraftExpediente draft = requireDraft(idExpediente);
+    synchronized (draft.documentos()) {
+      return new ArrayList<>(draft.documentos().values());
+    }
   }
 
   private DraftExpediente requireDraft(String idExpediente) {
@@ -342,8 +416,9 @@ public class CargaDocumentoService {
   static final class DraftExpediente {
     private final String id;
     private final String idActo;
-    private final Map<String, StoredDoc> documentos = new ConcurrentHashMap<>();
-    /** OCR+Gemini solo en RAM hasta crear expediente. */
+    private final Map<String, StoredDoc> documentos =
+        Collections.synchronizedMap(new LinkedHashMap<>());
+    /** OCR+LLM solo en RAM hasta crear expediente. */
     private final Map<String, DocumentoOcrResultadoDTO> ocrResultados = new ConcurrentHashMap<>();
     private volatile boolean locked;
     private volatile PrevalidacionState prevalidacion;

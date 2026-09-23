@@ -68,11 +68,20 @@ public class ProcesamientoDocumentalService {
     int legibles = 0;
     boolean huboErrorGrave = false;
 
+    int idx = 0;
     for (StoredDoc doc : documentos) {
+      idx++;
       String tipo = doc.codigoTipoDocumento();
       String nombre = doc.nombreOriginal();
+      String textoOcr = null;
       try {
-        String textoOcr;
+        LOG.info(
+            "IA doc {}/{} id={} nombre={}",
+            idx,
+            documentos.size(),
+            doc.idDocumento(),
+            nombre);
+
         if (azureOcrService.isConfigured()) {
           textoOcr = azureOcrService.extraerTexto(doc.bytes(), doc.mimeType());
         } else {
@@ -82,8 +91,7 @@ public class ProcesamientoDocumentalService {
           textoOcr = "";
         }
 
-        guardarMemoria(
-            idExpediente, doc, textoOcr, null, "EN_PROCESO", null, null);
+        guardarMemoria(idExpediente, doc, textoOcr, null, "EN_PROCESO", null, null);
 
         ExtraccionDocumento extraccion =
             analisisDocumentoService.extraerDatosClave(textoOcr, tipo);
@@ -120,13 +128,16 @@ public class ProcesamientoDocumentalService {
             extraccion.camposDetectados());
       } catch (Exception e) {
         LOG.warn(
-            "Error IA doc={} exp={}: {}",
+            "Error IA doc={} exp={} ({}/{}): {}",
             doc.idDocumento(),
             idExpediente,
+            idx,
+            documentos.size(),
             e.getMessage());
         huboErrorGrave = true;
         String motivo = "Fallo OCR/análisis: " + safeMsg(e);
-        guardarMemoria(idExpediente, doc, null, null, "ERROR", motivo, 0);
+        // Conserva OCR si ya existía; Claude no llegó o falló después.
+        guardarMemoria(idExpediente, doc, textoOcr, null, "ERROR", motivo, 0);
         resultados.add(
             new PrevalidacionDocumentoDTO(doc.idDocumento(), nombre, tipo, "ERROR", motivo));
         cargaDocumentoService.actualizarDocPrevalidacion(

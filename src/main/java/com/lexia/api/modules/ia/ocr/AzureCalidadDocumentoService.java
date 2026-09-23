@@ -6,8 +6,8 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 
 /**
- * Check calidad/legibilidad vía Azure Document Intelligence {@code prebuilt-layout}.
- * Promedio confidence de palabras &lt; 0.75 → rechazar.
+ * Check calidad + texto vía Azure {@code prebuilt-layout} (1 llamada F0-friendly).
+ * Promedio confidence &lt; 0.75 → no legible.
  */
 @Service
 public class AzureCalidadDocumentoService {
@@ -23,11 +23,29 @@ public class AzureCalidadDocumentoService {
   }
 
   public CalidadDocumentoResultado evaluar(byte[] bytesArchivo, String mimeType) {
-    JsonNode analyzeResult = client.analyze("prebuilt-layout", bytesArchivo, mimeType);
-    return calcularDesdeResultado(analyzeResult);
+    return evaluarYExtraer(bytesArchivo, mimeType).calidad();
   }
 
-  private static CalidadDocumentoResultado calcularDesdeResultado(JsonNode analyzeResult) {
+  /** Una sola llamada layout: confidence + content. */
+  public LayoutExtractResult evaluarYExtraer(byte[] bytesArchivo, String mimeType) {
+    JsonNode analyzeResult = client.analyze("prebuilt-layout", bytesArchivo, mimeType);
+    CalidadDocumentoResultado calidad = calcularCalidad(analyzeResult);
+    String texto = textoDe(analyzeResult);
+    if (!calidad.legible()) {
+      return new LayoutExtractResult(calidad, "");
+    }
+    return new LayoutExtractResult(calidad, texto);
+  }
+
+  private static String textoDe(JsonNode analyzeResult) {
+    JsonNode content = analyzeResult.path("content");
+    if (content.isMissingNode() || content.isNull()) {
+      return "";
+    }
+    return content.asText("");
+  }
+
+  private static CalidadDocumentoResultado calcularCalidad(JsonNode analyzeResult) {
     List<Double> confianzas = new ArrayList<>();
     JsonNode pages = analyzeResult.path("pages");
     if (pages.isArray()) {

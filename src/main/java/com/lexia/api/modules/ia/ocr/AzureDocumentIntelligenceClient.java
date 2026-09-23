@@ -17,8 +17,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * Cliente Azure DI: semáforo (F0 ~2 TPS) + retry 429 con exponential backoff + jitter /
- * {@code Retry-After}.
+ * Cliente Azure DI: semáforo + throttle RPM (F0=15/min) + retry 429 (backoff/jitter /
+ * {@code Retry-After}).
  */
 @Component
 public class AzureDocumentIntelligenceClient {
@@ -26,8 +26,7 @@ public class AzureDocumentIntelligenceClient {
   private static final Logger LOG = LoggerFactory.getLogger(AzureDocumentIntelligenceClient.class);
   private static final String API_VERSION = "2024-11-30";
   private static final Duration TIMEOUT = Duration.ofSeconds(120);
-  private static final int MAX_POLLS = 40;
-  private static final long POLL_MS = 1500;
+  private static final int MAX_POLLS = 60;
 
   private final String azureUrl;
   private final String azureKey;
@@ -38,15 +37,22 @@ public class AzureDocumentIntelligenceClient {
   private final long backoffBaseMs;
   private final long backoffMaxMs;
   private final long acquireTimeoutMs;
+  private final long minRequestIntervalMs;
+  private final long pollIntervalMs;
+
+  private final Object rateLock = new Object();
+  private long nextAllowedRequestAtMs;
 
   public AzureDocumentIntelligenceClient(
       @Value("${azure.ocr.endpoint:}") String azureUrl,
       @Value("${azure.ocr.key:}") String azureKey,
       @Value("${azure.ocr.max-concurrent:1}") int maxConcurrent,
-      @Value("${azure.ocr.max-retries:6}") int maxRetries,
-      @Value("${azure.ocr.backoff-base-ms:1000}") long backoffBaseMs,
+      @Value("${azure.ocr.max-retries:8}") int maxRetries,
+      @Value("${azure.ocr.backoff-base-ms:2000}") long backoffBaseMs,
       @Value("${azure.ocr.backoff-max-ms:60000}") long backoffMaxMs,
-      @Value("${azure.ocr.acquire-timeout-ms:180000}") long acquireTimeoutMs,
+      @Value("${azure.ocr.acquire-timeout-ms:600000}") long acquireTimeoutMs,
+      @Value("${azure.ocr.min-request-interval-ms:4500}") long minRequestIntervalMs,
+      @Value("${azure.ocr.poll-interval-ms:5000}") long pollIntervalMs,
       ObjectMapper objectMapper) {
     this.azureUrl = trimSlash(azureUrl);
     this.azureKey = azureKey == null ? "" : azureKey.trim();
@@ -58,6 +64,8 @@ public class AzureDocumentIntelligenceClient {
     this.backoffBaseMs = Math.max(100, backoffBaseMs);
     this.backoffMaxMs = Math.max(this.backoffBaseMs, backoffMaxMs);
     this.acquireTimeoutMs = Math.max(1000, acquireTimeoutMs);
+    this.minRequestIntervalMs = Math.max(0, minRequestIntervalMs);
+    this.pollIntervalMs = Math.max(1000, pollIntervalMs);
   }
 
   public boolean isConfigured() {
@@ -86,9 +94,7 @@ public class AzureDocumentIntelligenceClient {
       acquired = concurrency.tryAcquire(acquireTimeoutMs, TimeUnit.MILLISECONDS);
       if (!acquired) {
         throw new IllegalStateException(
-            "Timeout esperando cupo Azure DI (max-concurrent="
-                + concurrency.availablePermits()
-                + ").");
+            "Timeout esperando cupo Azure DI (cola saturada / F0). Reintenta luego.");
       }
 
       String ct = StringUtils.hasText(contentType) ? contentType : "application/octet-stream";
@@ -145,7 +151,7 @@ public class AzureDocumentIntelligenceClient {
         if ("failed".equals(status)) {
           throw new IllegalStateException("Azure DI falló: " + truncate(pollRes.body()));
         }
-        Thread.sleep(POLL_MS);
+        Thread.sleep(pollIntervalMs);
       }
       throw new IllegalStateException("Azure DI timeout esperando resultado.");
     } catch (InterruptedException ie) {
@@ -163,11 +169,12 @@ public class AzureDocumentIntelligenceClient {
     }
   }
 
-  HttpResponse<String> sendWithBackoff(HttpRequest request, String opLabel)
-      throws Exception {
+  HttpResponse<String> sendWithBackoff(HttpRequest request, String opLabel) throws Exception {
     HttpResponse<String> last = null;
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      awaitRateSlot();
       last = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      markRequestSent();
       if (last.statusCode() != 429) {
         return last;
       }
@@ -188,6 +195,30 @@ public class AzureDocumentIntelligenceClient {
             + maxRetries
             + " reintentos: "
             + truncate(last == null ? null : last.body()));
+  }
+
+  /** Espacia requests para no superar ~15 RPM del F0. */
+  private void awaitRateSlot() throws InterruptedException {
+    if (minRequestIntervalMs <= 0) {
+      return;
+    }
+    long wait;
+    synchronized (rateLock) {
+      wait = nextAllowedRequestAtMs - System.currentTimeMillis();
+    }
+    if (wait > 0) {
+      LOG.debug("Azure DI throttle {} ms", wait);
+      Thread.sleep(wait);
+    }
+  }
+
+  private void markRequestSent() {
+    if (minRequestIntervalMs <= 0) {
+      return;
+    }
+    synchronized (rateLock) {
+      nextAllowedRequestAtMs = System.currentTimeMillis() + minRequestIntervalMs;
+    }
   }
 
   /** Retry-After si existe; si no, exponential backoff + jitter. */
