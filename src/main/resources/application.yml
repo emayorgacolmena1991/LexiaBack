@@ -64,6 +64,12 @@ gemini:
   api:
     key: ${GEMINI_API_KEY:}
 
+azure:
+  ocr:
+    # Nombres oficiales (flujo). Fallback legado AZURE_OCR_*.
+    endpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:${AZURE_OCR_ENDPOINT:}}
+    key: ${AZURE_DOCUMENT_INTELLIGENCE_KEY:${AZURE_OCR_KEY:}}
+
 management:
   endpoints:
     web:

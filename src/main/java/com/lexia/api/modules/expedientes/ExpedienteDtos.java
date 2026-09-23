@@ -78,18 +78,19 @@ public final class ExpedienteDtos {
 
   public record ArchivoEstadoDTO(String nombre, String estado) {}
 
+  /**
+   * Extracción dinámica Gemini: tipo + resumen + mapa libre de campos clave.
+   * Jackson deserializa {@code datosClave} como objeto JSON → Map.
+   */
   public record DatosExtraidosDTO(
-      String tipoDocumento,
-      String numeroEscritura,
-      String fechaEscritura,
-      String notaria,
-      String municipio,
-      String comparecientes,
-      String nitIdentificacion,
-      String objetoAsunto) {
+      String tipoDocumento, String resumen, java.util.Map<String, Object> datosClave) {
 
-    static DatosExtraidosDTO empty() {
-      return new DatosExtraidosDTO(null, null, null, null, null, null, null, null);
+    public static DatosExtraidosDTO empty() {
+      return new DatosExtraidosDTO("", "", java.util.Map.of());
+    }
+
+    public java.util.Map<String, Object> datosClave() {
+      return datosClave == null ? java.util.Map.of() : datosClave;
     }
   }
 }
