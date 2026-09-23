@@ -227,9 +227,12 @@ public class CargaDocumentoService {
     draft.ocrResultados().remove(idDocumento);
   }
 
-  /** POST iniciar-procesamiento / procesar-ia: encola Azure→Gemini. */
+  /** POST iniciar-procesamiento / procesar-ia: encola Azure→Gemini una sola vez. */
   public IniciarProcesamientoResponse iniciarProcesamiento(String idExpediente) {
     DraftExpediente draft = requireDraft(idExpediente);
+    if (draft.locked()) {
+      return procesamientoEncolado(idExpediente);
+    }
     if (draft.documentos().isEmpty()) {
       throw ApiException.badRequest("Debes cargar al menos un documento.");
     }
@@ -239,6 +242,9 @@ public class CargaDocumentoService {
             .toList();
     if (!sinTipo.isEmpty()) {
       throw ApiException.badRequest("Clasifica todos los archivos antes de continuar.");
+    }
+    if (!draft.startProcessingIfIdle()) {
+      return procesamientoEncolado(idExpediente);
     }
 
     List<PrevalidacionDocumentoDTO> iniciales =
@@ -254,12 +260,15 @@ public class CargaDocumentoService {
             .toList();
     draft.initPrevalidacion(iniciales);
     draft.clearOcrResultados();
-    draft.lock();
 
     AuthPrincipal auth = AuthContext.get();
     UUID tenantId = auth != null ? auth.tenantId() : null;
-    procesamientoDocumentalService.procesarExpedienteCompletoAsync(idExpediente, tenantId);
+    procesamientoDocumentalService.procesarExpedienteCompletoAsync(idExpediente, tenantId, auth);
 
+    return procesamientoEncolado(idExpediente);
+  }
+
+  private static IniciarProcesamientoResponse procesamientoEncolado(String idExpediente) {
     return new IniciarProcesamientoResponse(
         idExpediente,
         "EN_PROCESAMIENTO_IA",
@@ -448,12 +457,17 @@ public class CargaDocumentoService {
       ocrResultados.clear();
     }
 
-    boolean locked() {
+    synchronized boolean locked() {
       return locked;
     }
 
-    void lock() {
-      this.locked = true;
+    /** Primer inicio gana. Un segundo iniciar-procesamiento no relanza el job. */
+    synchronized boolean startProcessingIfIdle() {
+      if (locked) {
+        return false;
+      }
+      locked = true;
+      return true;
     }
 
     PrevalidacionState prevalidacion() {
