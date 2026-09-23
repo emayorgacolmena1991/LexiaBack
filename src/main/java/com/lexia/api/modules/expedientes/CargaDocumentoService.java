@@ -4,10 +4,15 @@ import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.actos.ActoNotarialService;
 import com.lexia.api.modules.actos.ActosDtos.ActoNotarialRespuestaDTO;
 import com.lexia.api.modules.actos.ActosDtos.DocumentoRequeridoDTO;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.ActualizarTipoRequest;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.BorradorResponse;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoCargadoDTO;
+import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.IniciarProcesamientoResponse;
+import com.lexia.api.modules.expedientes.CargaDocumentoDtos.PrevalidacionDTO;
+import com.lexia.api.modules.expedientes.CargaDocumentoDtos.PrevalidacionDocumentoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoPermitidoDTO;
 import java.io.IOException;
@@ -20,13 +25,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Carga y tipificación (paso 2). Guarda archivos en memoria de sesión de borrador.
- * {@code iniciar-procesamiento} bloquea el borrador y dispara la prevalidación en segundo plano.
+ * Carga y tipificación (paso 2). Al iniciar procesamiento dispara Azure→Gemini vía {@link
+ * ProcesamientoDocumentalService}; el FE hace poll de {@link #obtenerPrevalidacion}.
  */
 @Service
 public class CargaDocumentoService {
@@ -36,18 +42,21 @@ public class CargaDocumentoService {
       Set.of("pdf", "jpg", "jpeg", "png", "tiff", "tif");
 
   private final ActoNotarialService actoNotarialService;
-  private final PrevalidacionService prevalidacionService;
+  private final ProcesamientoDocumentalService procesamientoDocumentalService;
+  private final DocumentoTextoOcrRepository ocrRepository;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
   private final AtomicInteger seq = new AtomicInteger(480);
 
   public CargaDocumentoService(
-      ActoNotarialService actoNotarialService, PrevalidacionService prevalidacionService) {
+      ActoNotarialService actoNotarialService,
+      @Lazy ProcesamientoDocumentalService procesamientoDocumentalService,
+      DocumentoTextoOcrRepository ocrRepository) {
     this.actoNotarialService = actoNotarialService;
-    this.prevalidacionService = prevalidacionService;
+    this.procesamientoDocumentalService = procesamientoDocumentalService;
+    this.ocrRepository = ocrRepository;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
-    // Valida acto y requisitos contra catálogo real.
     actoNotarialService.obtenerRequisitosPorActo(idActo);
     String id =
         "EXP-"
@@ -144,10 +153,15 @@ public class CargaDocumentoService {
     if (draft.documentos().remove(idDocumento) == null) {
       throw ApiException.notFound("Documento no encontrado: " + idDocumento);
     }
+    draft.ocrResultados().remove(idDocumento);
   }
 
+  /** POST iniciar-procesamiento / procesar-ia: encola Azure→Gemini una sola vez. */
   public IniciarProcesamientoResponse iniciarProcesamiento(String idExpediente) {
     DraftExpediente draft = requireDraft(idExpediente);
+    if (draft.locked()) {
+      return procesamientoEncolado(idExpediente);
+    }
     if (draft.documentos().isEmpty()) {
       throw ApiException.badRequest("Debes cargar al menos un documento.");
     }
@@ -158,16 +172,148 @@ public class CargaDocumentoService {
     if (!sinTipo.isEmpty()) {
       throw ApiException.badRequest("Clasifica todos los archivos antes de continuar.");
     }
-    draft.lock();
-    prevalidacionService.iniciar(idExpediente, new ArrayList<>(draft.documentos().values()));
+    if (!draft.startProcessingIfIdle()) {
+      return procesamientoEncolado(idExpediente);
+    }
+
+    List<PrevalidacionDocumentoDTO> iniciales =
+        draft.documentos().values().stream()
+            .map(
+                d ->
+                    new PrevalidacionDocumentoDTO(
+                        d.idDocumento(),
+                        d.nombreOriginal(),
+                        d.codigoTipoDocumento(),
+                        "EN_PROCESO",
+                        null))
+            .toList();
+    draft.initPrevalidacion(iniciales);
+    draft.clearOcrResultados();
+
+    AuthPrincipal auth = AuthContext.get();
+    UUID tenantId = auth != null ? auth.tenantId() : null;
+    procesamientoDocumentalService.procesarExpedienteCompletoAsync(idExpediente, tenantId, auth);
+
+    return procesamientoEncolado(idExpediente);
+  }
+
+  private static IniciarProcesamientoResponse procesamientoEncolado(String idExpediente) {
     return new IniciarProcesamientoResponse(
         idExpediente,
         "EN_PROCESAMIENTO_IA",
         3,
-        "Documentos enviados a extractor OCR y motor Gemini");
+        "Documentos enviados a extractor OCR Azure y motor Gemini");
   }
 
-  /** Bytes guardados para pantallas posteriores (OCR). */
+  public PrevalidacionDTO obtenerPrevalidacion(String idExpediente) {
+    DraftExpediente draft = requireDraft(idExpediente);
+    PrevalidacionState state = draft.prevalidacion();
+    if (state == null) {
+      List<PrevalidacionDocumentoDTO> docs =
+          draft.documentos().values().stream()
+              .map(
+                  d ->
+                      new PrevalidacionDocumentoDTO(
+                          d.idDocumento(),
+                          d.nombreOriginal(),
+                          d.codigoTipoDocumento(),
+                          "EN_PROCESO",
+                          null))
+              .toList();
+      return new PrevalidacionDTO(idExpediente, "EN_PROCESO", 0, 0, docs.size(), docs);
+    }
+    return new PrevalidacionDTO(
+        idExpediente,
+        state.estado(),
+        state.confianza(),
+        state.legibles(),
+        state.total(),
+        List.copyOf(state.documentos().values()));
+  }
+
+  /**
+   * OCR/Gemini en memoria del borrador (no DB). Solo docs del draft actual. Persistencia a DB al
+   * crear expediente vía {@link #persistirOcrAlCrearExpediente}.
+   */
+  public List<DocumentoOcrResultadoDTO> listarOcrResultados(String idExpediente) {
+    DraftExpediente draft = requireDraft(idExpediente);
+    return draft.documentos().keySet().stream()
+        .map(idDoc -> draft.ocrResultados().get(idDoc))
+        .filter(java.util.Objects::nonNull)
+        .toList();
+  }
+
+  /** Guarda resultado OCR+Gemini solo en RAM del borrador. */
+  public void guardarOcrEnMemoria(String idExpediente, DocumentoOcrResultadoDTO resultado) {
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null || resultado == null) {
+      return;
+    }
+    draft.ocrResultados().put(resultado.idDocumento(), resultado);
+  }
+
+  /**
+   * Vuelca OCR del borrador a {@code app.documento_texto_ocr}. Llamar al crear expediente definitivo.
+   */
+  public void persistirOcrAlCrearExpediente(String idExpediente, UUID tenantId) {
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null) {
+      return;
+    }
+    for (DocumentoOcrResultadoDTO r : draft.ocrResultados().values()) {
+      try {
+        DocumentoTextoOcr row =
+            ocrRepository
+                .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
+                .orElseGet(DocumentoTextoOcr::new);
+        row.setTenantId(tenantId);
+        row.setIdExpediente(idExpediente);
+        row.setIdDocumento(r.idDocumento());
+        row.setTipoDocumento(r.tipoDocumento());
+        row.setTextoOcr(r.textoOcr());
+        row.setAnalisisJson(r.analisisJson());
+        row.setEstadoDoc(r.estado());
+        row.setMotivo(r.motivo());
+        row.setConfianza(r.confianza());
+        ocrRepository.save(row);
+      } catch (Exception e) {
+        // no bloquear alta si falla el volcado OCR
+      }
+    }
+  }
+
+  void actualizarDocPrevalidacion(
+      String idExpediente, String idDocumento, String estado, String motivo, int confianza) {
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null) {
+      return;
+    }
+    draft.patchDocPrevalidacion(idDocumento, estado, motivo, confianza);
+  }
+
+  void completarPrevalidacion(
+      String idExpediente,
+      String estado,
+      int confianza,
+      int legibles,
+      int total,
+      List<PrevalidacionDocumentoDTO> documentos) {
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null) {
+      return;
+    }
+    draft.completePrevalidacion(estado, confianza, legibles, total, documentos);
+  }
+
+  void marcarPrevalidacionError(String idExpediente, String motivo) {
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null) {
+      return;
+    }
+    draft.failPrevalidacion(motivo);
+  }
+
+  /** Bytes guardados para OCR. */
   public List<StoredDoc> documentosParaProcesar(String idExpediente) {
     return new ArrayList<>(requireDraft(idExpediente).documentos().values());
   }
@@ -206,7 +352,10 @@ public class CargaDocumentoService {
     private final String id;
     private final String idActo;
     private final Map<String, StoredDoc> documentos = new ConcurrentHashMap<>();
+    /** OCR+Gemini solo en RAM hasta crear expediente. */
+    private final Map<String, DocumentoOcrResultadoDTO> ocrResultados = new ConcurrentHashMap<>();
     private volatile boolean locked;
+    private volatile PrevalidacionState prevalidacion;
 
     DraftExpediente(String id, String idActo) {
       this.id = id;
@@ -225,14 +374,113 @@ public class CargaDocumentoService {
       return documentos;
     }
 
-    boolean locked() {
+    Map<String, DocumentoOcrResultadoDTO> ocrResultados() {
+      return ocrResultados;
+    }
+
+    void clearOcrResultados() {
+      ocrResultados.clear();
+    }
+
+    synchronized boolean locked() {
       return locked;
     }
 
-    void lock() {
-      this.locked = true;
+    /** Primer inicio gana. Un segundo iniciar-procesamiento no relanza el job. */
+    synchronized boolean startProcessingIfIdle() {
+      if (locked) {
+        return false;
+      }
+      locked = true;
+      return true;
+    }
+
+    PrevalidacionState prevalidacion() {
+      return prevalidacion;
+    }
+
+    void initPrevalidacion(List<PrevalidacionDocumentoDTO> docs) {
+      Map<String, PrevalidacionDocumentoDTO> map = new ConcurrentHashMap<>();
+      for (PrevalidacionDocumentoDTO d : docs) {
+        map.put(d.idDocumento(), d);
+      }
+      this.prevalidacion = new PrevalidacionState("EN_PROCESO", 0, 0, docs.size(), map);
+    }
+
+    synchronized void patchDocPrevalidacion(
+        String idDocumento, String estado, String motivo, int confianza) {
+      PrevalidacionState current = this.prevalidacion;
+      if (current == null) {
+        return;
+      }
+      PrevalidacionDocumentoDTO prev = current.documentos().get(idDocumento);
+      if (prev == null) {
+        return;
+      }
+      current
+          .documentos()
+          .put(
+              idDocumento,
+              new PrevalidacionDocumentoDTO(
+                  prev.idDocumento(),
+                  prev.nombreOriginal(),
+                  prev.tipoDocumento(),
+                  estado,
+                  motivo));
+      int legibles =
+          (int)
+              current.documentos().values().stream()
+                  .filter(d -> "LEGIBLE".equals(d.estado()))
+                  .count();
+      this.prevalidacion =
+          new PrevalidacionState(
+              "EN_PROCESO",
+              confianza,
+              legibles,
+              current.total(),
+              current.documentos());
+    }
+
+    synchronized void completePrevalidacion(
+        String estado,
+        int confianza,
+        int legibles,
+        int total,
+        List<PrevalidacionDocumentoDTO> documentos) {
+      Map<String, PrevalidacionDocumentoDTO> map = new ConcurrentHashMap<>();
+      for (PrevalidacionDocumentoDTO d : documentos) {
+        map.put(d.idDocumento(), d);
+      }
+      this.prevalidacion = new PrevalidacionState(estado, confianza, legibles, total, map);
+    }
+
+    synchronized void failPrevalidacion(String motivo) {
+      PrevalidacionState current = this.prevalidacion;
+      Map<String, PrevalidacionDocumentoDTO> map = new ConcurrentHashMap<>();
+      if (current != null) {
+        for (PrevalidacionDocumentoDTO d : current.documentos().values()) {
+          map.put(
+              d.idDocumento(),
+              new PrevalidacionDocumentoDTO(
+                  d.idDocumento(),
+                  d.nombreOriginal(),
+                  d.tipoDocumento(),
+                  "ERROR",
+                  motivo));
+        }
+        this.prevalidacion = new PrevalidacionState("ERROR", 0, 0, current.total(), map);
+      } else {
+        this.prevalidacion = new PrevalidacionState("ERROR", 0, 0, 0, map);
+      }
     }
   }
+
+  record PrevalidacionState(
+      String estado,
+      int confianza,
+      int legibles,
+      int total,
+      Map<String, PrevalidacionDocumentoDTO> documentos) {}
 
   public record StoredDoc(
       String idDocumento,

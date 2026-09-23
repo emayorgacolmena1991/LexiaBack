@@ -4,21 +4,20 @@ public final class GeminiSchemas {
 
   private GeminiSchemas() {}
 
+  /** Schema dinámico: tipoDocumento + resumen + datosClave (objeto libre). */
   public static final String JSON_SCHEMA =
       """
       {
         "type": "OBJECT",
         "properties": {
           "tipoDocumento": {"type": "STRING"},
-          "numeroEscritura": {"type": "STRING"},
-          "fechaEscritura": {"type": "STRING"},
-          "notaria": {"type": "STRING"},
-          "municipio": {"type": "STRING"},
-          "comparecientes": {"type": "STRING"},
-          "nitIdentificacion": {"type": "STRING"},
-          "objetoAsunto": {"type": "STRING"}
+          "resumen": {"type": "STRING"},
+          "datosClave": {
+            "type": "OBJECT",
+            "additionalProperties": {}
+          }
         },
-        "required": ["tipoDocumento", "numeroEscritura"]
+        "required": ["tipoDocumento", "resumen", "datosClave"]
       }
       """;
 }
