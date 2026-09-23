@@ -7,6 +7,8 @@ import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchResultItem;
+import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeSingleRequest;
+import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeSingleResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidatedGetResponse;
@@ -119,6 +121,48 @@ public class OcrAzureBatchService {
             ? "COMPLETED_WITH_ERRORS"
             : (anyIllegible ? "COMPLETED_WITH_WARNINGS" : "COMPLETED");
     return new AnalyzeBatchResponse(sessionId, status, results);
+  }
+
+  public AnalyzeSingleResponse analyzeSingle(AnalyzeSingleRequest request) {
+    if (request == null || !StringUtils.hasText(request.sessionId())) {
+      throw ApiException.badRequest("sessionId requerido.");
+    }
+    if (!StringUtils.hasText(request.fileId())) {
+      throw ApiException.badRequest("fileId requerido.");
+    }
+    if (!layoutService.isConfigured()) {
+      throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "AZURE_NOT_CONFIGURED",
+          "Azure Document Intelligence no configurado.");
+    }
+
+    String sessionId = request.sessionId().trim();
+    String fileId = request.fileId().trim();
+    String tipo =
+        StringUtils.hasText(request.tipoDocumento()) ? request.tipoDocumento().trim() : null;
+
+    StoredDoc stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
+    if (StringUtils.hasText(tipo) && !tipo.equals(stored.codigoTipoDocumento())) {
+      cargaDocumentoService.actualizarTipoDocumentoLibre(sessionId, fileId, tipo);
+      stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
+    }
+    String tipoFinal =
+        StringUtils.hasText(stored.codigoTipoDocumento())
+            ? stored.codigoTipoDocumento()
+            : (tipo == null ? "DOCUMENTO" : tipo);
+
+    AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal);
+    String estado = item.legible() ? "LEGIBLE" : "REVISAR";
+    return new AnalyzeSingleResponse(
+        item.fileId(),
+        stored.nombreOriginal(),
+        item.tipoDocumento(),
+        item.legible(),
+        item.motivo(),
+        item.scoreConfianza(),
+        item.textoExtraido(),
+        estado);
   }
 
   public ReuploadResponse reupload(

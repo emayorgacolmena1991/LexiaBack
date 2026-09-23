@@ -23,6 +23,19 @@ public final class OcrFlujoDtos {
       double scoreConfianza,
       String textoExtraido) {}
 
+  /** Opción B — un archivo. */
+  public record AnalyzeSingleRequest(String sessionId, String fileId, String tipoDocumento) {}
+
+  public record AnalyzeSingleResponse(
+      String fileId,
+      String fileName,
+      String tipoDocumento,
+      boolean legible,
+      String mensaje,
+      Double confianza,
+      String textoExtraido,
+      String estado) {}
+
   public record ReuploadResponse(
       String fileId,
       String fileName,

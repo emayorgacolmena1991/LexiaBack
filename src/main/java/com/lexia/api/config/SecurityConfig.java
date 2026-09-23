@@ -117,6 +117,7 @@ public class SecurityConfig {
                             "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}"),
                         paths.matcher(HttpMethod.POST, "/api/v1/ia/calidad-documento"),
                         paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-batch"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-single"),
                         paths.matcher(HttpMethod.POST, "/api/v1/documents/reupload"),
                         paths.matcher(
                             HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text")))
