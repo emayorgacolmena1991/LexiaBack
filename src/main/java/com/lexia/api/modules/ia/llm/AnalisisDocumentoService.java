@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.llm;
+package com.lexia.api.modules.ia.llm;
 
 import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
 import org.springframework.util.StringUtils;

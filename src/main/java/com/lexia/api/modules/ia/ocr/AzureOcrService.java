@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.ocr;
+package com.lexia.api.modules.ia.ocr;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

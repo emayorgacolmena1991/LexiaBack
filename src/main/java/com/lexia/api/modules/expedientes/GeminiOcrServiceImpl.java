@@ -7,7 +7,7 @@ import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
 import com.google.genai.types.Schema;
-import com.lexia.api.modules.expedientes.gemini.GeminiJsonSanitizer;
+import com.lexia.api.modules.ia.gemini.GeminiJsonSanitizer;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

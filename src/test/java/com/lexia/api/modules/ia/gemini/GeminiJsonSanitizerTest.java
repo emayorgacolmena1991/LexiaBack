@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.gemini;
+package com.lexia.api.modules.ia.gemini;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;

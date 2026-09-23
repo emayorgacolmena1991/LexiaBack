@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.gemini;
+package com.lexia.api.modules.ia.gemini;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.genai.Client;
@@ -7,8 +7,8 @@ import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
 import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService.ExtraccionDocumento;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import java.util.List;
 import java.util.Locale;
 import org.slf4j.Logger;

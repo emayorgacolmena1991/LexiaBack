@@ -1,11 +1,11 @@
-package com.lexia.api.modules.expedientes.claude;
+package com.lexia.api.modules.ia.claude;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService.ExtraccionDocumento;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
