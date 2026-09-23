@@ -4,7 +4,9 @@ import com.lexia.api.modules.expedientes.CargaDocumentoDtos.ActualizarTipoReques
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.BorradorResponse;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.CrearBorradorRequest;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoCargadoDTO;
+import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.IniciarProcesamientoResponse;
+import com.lexia.api.modules.expedientes.CargaDocumentoDtos.PrevalidacionDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoPermitidoDTO;
 import jakarta.validation.Valid;
@@ -25,8 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Paso 2: carga y tipificación. Contrato en {@code flujo.md}. OCR/Gemini queda en {@code
- * /procesar-documentos} para pantallas posteriores.
+ * Paso 2–3: carga/tipificación + disparo IA (Azure→Gemini) + prevalidación.
  */
 @RestController
 @RequestMapping("/api/v1/expedientes")
@@ -80,5 +81,21 @@ public class CargaDocumentoController {
   @PostMapping("/{idExpediente}/iniciar-procesamiento")
   public IniciarProcesamientoResponse iniciarProcesamiento(@PathVariable String idExpediente) {
     return cargaDocumentoService.iniciarProcesamiento(idExpediente);
+  }
+
+  /** Alias del algoritmo (mismo efecto que iniciar-procesamiento). */
+  @PostMapping("/{idExpediente}/procesar-ia")
+  public IniciarProcesamientoResponse procesarIa(@PathVariable String idExpediente) {
+    return cargaDocumentoService.iniciarProcesamiento(idExpediente);
+  }
+
+  @GetMapping("/{idExpediente}/prevalidacion")
+  public PrevalidacionDTO prevalidacion(@PathVariable String idExpediente) {
+    return cargaDocumentoService.obtenerPrevalidacion(idExpediente);
+  }
+
+  @GetMapping("/{idExpediente}/ocr-resultados")
+  public List<DocumentoOcrResultadoDTO> ocrResultados(@PathVariable String idExpediente) {
+    return cargaDocumentoService.listarOcrResultados(idExpediente);
   }
 }

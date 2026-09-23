@@ -6,8 +6,10 @@ import com.lexia.api.modules.expedientes.ExpedienteDtos.ArchivoEstadoDTO;
 import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.expedientes.ExpedienteDtos.ExpedienteExtraidoDTO;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +47,8 @@ public class DocumentExtractorService {
             && "DEMO".equals(governance.documentRoutingMode(tenantId).toUpperCase(Locale.ROOT));
 
     for (MultipartFile archivo : archivos) {
-      String nombre = archivo.getOriginalFilename() != null ? archivo.getOriginalFilename() : "sin-nombre";
+      String nombre =
+          archivo.getOriginalFilename() != null ? archivo.getOriginalFilename() : "sin-nombre";
       try {
         byte[] bytes = archivo.getBytes();
         String contentType = archivo.getContentType();
@@ -54,7 +57,9 @@ public class DocumentExtractorService {
         }
 
         DatosExtraidosDTO parcial =
-            demoRouting ? DatosExtraidosDTO.empty() : ocrService.analizarDocumento(bytes, contentType);
+            demoRouting
+                ? DatosExtraidosDTO.empty()
+                : ocrService.analizarDocumento(bytes, contentType);
         datosConsolidados = fusionarDatos(datosConsolidados, parcial);
         estados.add(new ArchivoEstadoDTO(nombre, "PROCESADO"));
       } catch (Exception e) {
@@ -67,15 +72,20 @@ public class DocumentExtractorService {
   }
 
   private DatosExtraidosDTO fusionarDatos(DatosExtraidosDTO actual, DatosExtraidosDTO nuevo) {
+    Map<String, Object> merged = new LinkedHashMap<>();
+    if (actual != null && actual.datosClave() != null) {
+      merged.putAll(actual.datosClave());
+    }
+    if (nuevo != null && nuevo.datosClave() != null) {
+      merged.putAll(nuevo.datosClave());
+    }
     return new DatosExtraidosDTO(
-        preferir(nuevo.tipoDocumento(), actual.tipoDocumento()),
-        preferir(nuevo.numeroEscritura(), actual.numeroEscritura()),
-        preferir(nuevo.fechaEscritura(), actual.fechaEscritura()),
-        preferir(nuevo.notaria(), actual.notaria()),
-        preferir(nuevo.municipio(), actual.municipio()),
-        preferir(nuevo.comparecientes(), actual.comparecientes()),
-        preferir(nuevo.nitIdentificacion(), actual.nitIdentificacion()),
-        preferir(nuevo.objetoAsunto(), actual.objetoAsunto()));
+        preferir(
+            nuevo == null ? null : nuevo.tipoDocumento(),
+            actual == null ? null : actual.tipoDocumento()),
+        preferir(
+            nuevo == null ? null : nuevo.resumen(), actual == null ? null : actual.resumen()),
+        Map.copyOf(merged));
   }
 
   private static String preferir(String nuevo, String actual) {

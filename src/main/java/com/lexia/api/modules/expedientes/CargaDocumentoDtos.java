@@ -25,4 +25,31 @@ public final class CargaDocumentoDtos {
       String idExpediente, String estado, int siguientePaso, String mensaje) {}
 
   public record ListaDocumentosResponse(List<DocumentoCargadoDTO> documentos) {}
+
+  /** GET /{id}/prevalidacion */
+  public record PrevalidacionDocumentoDTO(
+      String idDocumento,
+      String nombreOriginal,
+      String tipoDocumento,
+      String estado,
+      String motivo) {}
+
+  public record PrevalidacionDTO(
+      String idExpediente,
+      String estado,
+      int confianza,
+      int legibles,
+      int total,
+      List<PrevalidacionDocumentoDTO> documentos) {}
+
+  /** GET /{id}/ocr-resultados — texto Azure + análisis Gemini por documento. */
+  public record DocumentoOcrResultadoDTO(
+      String idDocumento,
+      String nombreOriginal,
+      String tipoDocumento,
+      String textoOcr,
+      String analisisJson,
+      String estado,
+      String motivo,
+      Integer confianza) {}
 }
