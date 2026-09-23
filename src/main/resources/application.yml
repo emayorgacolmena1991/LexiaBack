@@ -64,6 +64,15 @@ gemini:
   api:
     key: ${GEMINI_API_KEY:}
 
+# gemini (default) | claude. Rollback: LLM_PROVIDER=gemini
+llm:
+  provider: ${LLM_PROVIDER:gemini}
+
+anthropic:
+  api:
+    key: ${ANTHROPIC_API_KEY:}
+  models: ${ANTHROPIC_MODELS:claude-sonnet-5,claude-haiku-4-5-20251001}
+
 azure:
   ocr:
     # Nombres oficiales (flujo). Fallback legado AZURE_OCR_*.

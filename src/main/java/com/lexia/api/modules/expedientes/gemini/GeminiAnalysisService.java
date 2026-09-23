@@ -7,11 +7,14 @@ import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
 import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import java.util.List;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -19,7 +22,8 @@ import org.springframework.util.StringUtils;
  * Extracción dinámica con Gemini. Reintenta modelos free-tier con backoff ante 429/503.
  */
 @Service
-public class GeminiAnalysisService {
+@ConditionalOnProperty(name = "llm.provider", havingValue = "gemini", matchIfMissing = true)
+public class GeminiAnalysisService implements AnalisisDocumentoService {
 
   private static final Logger LOG = LoggerFactory.getLogger(GeminiAnalysisService.class);
 
@@ -42,10 +46,12 @@ public class GeminiAnalysisService {
     this.objectMapper = objectMapper;
   }
 
+  @Override
   public boolean isConfigured() {
     return StringUtils.hasText(apiKey);
   }
 
+  @Override
   public ExtraccionDocumento extraerDatosClave(String textoOcr, String tipoDocumento) {
     String tipo = StringUtils.hasText(tipoDocumento) ? tipoDocumento : "DOCUMENTO";
     String texto = textoOcr == null ? "" : textoOcr;
@@ -171,33 +177,5 @@ public class GeminiAnalysisService {
       return "";
     }
     return s.length() <= max ? s : s.substring(0, max);
-  }
-
-  public record ExtraccionDocumento(
-      DatosExtraidosDTO datos, String estado, String motivo, int camposDetectados) {
-
-    static ExtraccionDocumento fromDatos(DatosExtraidosDTO datos) {
-      if (datos == null) {
-        return new ExtraccionDocumento(
-            DatosExtraidosDTO.empty(), "REVISAR", "No se detectaron campos clave.", 0);
-      }
-      int claveCount = datos.datosClave() == null ? 0 : datos.datosClave().size();
-      boolean tieneTipo = StringUtils.hasText(datos.tipoDocumento());
-      boolean tieneResumen = StringUtils.hasText(datos.resumen());
-      int score = claveCount + (tieneTipo ? 1 : 0) + (tieneResumen ? 1 : 0);
-      if (score == 0) {
-        return new ExtraccionDocumento(
-            datos, "REVISAR", "No se detectaron campos clave en el texto OCR.", 0);
-      }
-      if (claveCount == 0) {
-        return new ExtraccionDocumento(
-            datos, "REVISAR", "Extracción parcial: sin datosClave.", score);
-      }
-      return new ExtraccionDocumento(datos, "LEGIBLE", null, score);
-    }
-
-    static ExtraccionDocumento error(String motivo) {
-      return new ExtraccionDocumento(DatosExtraidosDTO.empty(), "ERROR", motivo, 0);
-    }
   }
 }

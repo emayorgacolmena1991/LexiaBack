@@ -6,8 +6,8 @@ import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.PrevalidacionDocumentoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoService.StoredDoc;
-import com.lexia.api.modules.expedientes.gemini.GeminiAnalysisService;
-import com.lexia.api.modules.expedientes.gemini.GeminiAnalysisService.ExtraccionDocumento;
+import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.expedientes.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.expedientes.ocr.AzureOcrService;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,24 +18,24 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-/** Orquestador: Azure OCR → memoria borrador → Gemini → prevalidación. */
+/** Orquestador: Azure OCR → memoria borrador → LLM (gemini|claude) → prevalidación. */
 @Service
 public class ProcesamientoDocumentalService {
 
   private static final Logger LOG = LoggerFactory.getLogger(ProcesamientoDocumentalService.class);
 
   private final AzureOcrService azureOcrService;
-  private final GeminiAnalysisService geminiAnalysisService;
+  private final AnalisisDocumentoService analisisDocumentoService;
   private final CargaDocumentoService cargaDocumentoService;
   private final ObjectMapper objectMapper;
 
   public ProcesamientoDocumentalService(
       AzureOcrService azureOcrService,
-      GeminiAnalysisService geminiAnalysisService,
+      AnalisisDocumentoService analisisDocumentoService,
       CargaDocumentoService cargaDocumentoService,
       ObjectMapper objectMapper) {
     this.azureOcrService = azureOcrService;
-    this.geminiAnalysisService = geminiAnalysisService;
+    this.analisisDocumentoService = analisisDocumentoService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.objectMapper = objectMapper;
   }
@@ -86,7 +86,7 @@ public class ProcesamientoDocumentalService {
             idExpediente, doc, textoOcr, null, "EN_PROCESO", null, null);
 
         ExtraccionDocumento extraccion =
-            geminiAnalysisService.extraerDatosClave(textoOcr, tipo);
+            analisisDocumentoService.extraerDatosClave(textoOcr, tipo);
         String analisisJson = objectMapper.writeValueAsString(extraccion.datos());
         guardarMemoria(
             idExpediente,
