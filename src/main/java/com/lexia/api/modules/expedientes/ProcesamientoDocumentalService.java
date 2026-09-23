@@ -41,15 +41,15 @@ public class ProcesamientoDocumentalService {
   }
 
   @Async
-  public void procesarExpedienteCompletoAsync(String idExpediente, UUID tenantId) {
-    AuthPrincipal prev = AuthContext.get();
+  public void procesarExpedienteCompletoAsync(
+      String idExpediente, UUID tenantId, AuthPrincipal auth) {
     try {
+      if (auth != null) {
+        AuthContext.set(auth);
+      }
       procesarExpedienteCompleto(idExpediente, tenantId);
     } finally {
       AuthContext.clear();
-      if (prev != null) {
-        AuthContext.set(prev);
-      }
     }
   }
 
