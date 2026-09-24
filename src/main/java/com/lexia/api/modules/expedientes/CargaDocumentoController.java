@@ -9,6 +9,7 @@ import com.lexia.api.modules.expedientes.CargaDocumentoDtos.IniciarProcesamiento
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.PrevalidacionDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.TipoPermitidoDTO;
+import com.lexia.api.modules.expedientes.ExpedienteDtos.ResultadoCotejoDTO;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -27,16 +28,19 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Paso 2–3: carga/tipificación + disparo IA (Azure→Gemini) + prevalidación.
+ * Paso 2–3: carga/tipificación + disparo IA (Azure→Gemini/Claude) + prevalidación + cotejo.
  */
 @RestController
 @RequestMapping("/api/v1/expedientes")
 public class CargaDocumentoController {
 
   private final CargaDocumentoService cargaDocumentoService;
+  private final ValidacionIaService validacionIaService;
 
-  public CargaDocumentoController(CargaDocumentoService cargaDocumentoService) {
+  public CargaDocumentoController(
+      CargaDocumentoService cargaDocumentoService, ValidacionIaService validacionIaService) {
     this.cargaDocumentoService = cargaDocumentoService;
+    this.validacionIaService = validacionIaService;
   }
 
   @PostMapping("/borrador")
@@ -92,6 +96,12 @@ public class CargaDocumentoController {
   @GetMapping("/{idExpediente}/prevalidacion")
   public PrevalidacionDTO prevalidacion(@PathVariable String idExpediente) {
     return cargaDocumentoService.obtenerPrevalidacion(idExpediente);
+  }
+
+  /** Cotejo notarial Claude sobre OCR consolidado (Cédula↔Papeleta, Avalúo↔Historia). */
+  @PostMapping("/{idExpediente}/validar-ia")
+  public ResultadoCotejoDTO validarIa(@PathVariable String idExpediente) {
+    return validacionIaService.validarExpediente(idExpediente);
   }
 
   @GetMapping("/{idExpediente}/ocr-resultados")

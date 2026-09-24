@@ -1,7 +1,9 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.expedientes.ExpedienteDtos.ResultadoCotejoDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoFuente;
@@ -24,18 +26,28 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * E04: lee caché consolidada (E03) y coteja campos clave entre documentos de la sesión.
- * Usa LLM por sección cuando está configurado; si no, compara textos vacíos → resumen vacío.
+ * E04: lee caché consolidada (E03) y coteja campos entre documentos.
+ * Preferencia: cotejo notarial Claude ({@code cotejarExpediente}); fallback: extracción por sección.
  */
 @Service
 public class OcrCotejoService {
 
   private static final Logger LOG = LoggerFactory.getLogger(OcrCotejoService.class);
 
-  /** FE: `[Tipo]\n:\n: texto` | BE: `Tipo:\n:\n: texto`. */
+  /**
+   * Formatos soportados:
+   * <ul>
+   *   <li>{@code === DOCUMENTO: TIPO ===\ntexto} (TICKET-DEV-802)
+   *   <li>FE: {@code [Tipo]\n:\n: texto}
+   *   <li>BE legado: {@code Tipo:\n:\n: texto}
+   * </ul>
+   */
   private static final Pattern SECTION =
       Pattern.compile(
-          "(?:\\[([^\\]]+)\\]\\s*|([^:\\n\\r\\[]+):)\\s*\\n:\\s*\\n:\\s*", Pattern.MULTILINE);
+          "(?:===\\s*DOCUMENTO:\\s*([^=\\n]+?)\\s*===\\s*"
+              + "|\\[([^\\]]+)\\]\\s*\\n:\\s*\\n:\\s*"
+              + "|([^:\\n\\r\\[=]+):\\s*\\n:\\s*\\n:\\s*)",
+          Pattern.MULTILINE);
 
   private final OcrSessionCacheService cache;
   private final AnalisisDocumentoService analisis;
@@ -63,6 +75,32 @@ public class OcrCotejoService {
       return empty(id);
     }
 
+    if (analisis != null && analisis.isConfigured()) {
+      try {
+        ExtraccionCotejo cotejo = analisis.cotejarExpediente(content);
+        if (cotejo != null
+            && "OK".equals(cotejo.estado())
+            && cotejo.resultado() != null) {
+          LOG.info(
+              "Cotejo notarial sessionId={} estado={}", id, cotejo.resultado().estado());
+          return fromResultadoCotejo(id, cotejo.resultado());
+        }
+        if (cotejo != null && "ERROR".equals(cotejo.estado())) {
+          LOG.info(
+              "Cotejo notarial no aplicado sessionId={} motivo={} → fallback campo a campo",
+              id,
+              cotejo.motivo());
+        }
+      } catch (Exception ex) {
+        LOG.warn("Cotejo notarial fail sessionId={} err={}", id, ex.getMessage());
+      }
+    }
+
+    return cotejarPorCampos(id, content, results);
+  }
+
+  private CotejoResponse cotejarPorCampos(
+      String id, String content, List<OcrFileResult> results) {
     List<DocSection> sections = parseSections(content, results);
     if (sections.isEmpty()) {
       return empty(id);
@@ -116,7 +154,11 @@ public class OcrCotejoService {
       String estado;
       String valorResumen = null;
       String relacion =
-          sections.stream().map(DocSection::documento).filter(StringUtils::hasText).reduce((a, b) -> a + " ↔ " + b).orElse("");
+          sections.stream()
+              .map(DocSection::documento)
+              .filter(StringUtils::hasText)
+              .reduce((a, b) -> a + " ↔ " + b)
+              .orElse("");
 
       if (docCount > 1 && presentCount < docCount) {
         estado = "NO_ENCONTRADO";
@@ -127,7 +169,8 @@ public class OcrCotejoService {
       } else if (presentNorm.size() == 1) {
         estado = "COINCIDE";
         coinciden++;
-        valorResumen = porDoc.values().stream().filter(StringUtils::hasText).findFirst().orElse(null);
+        valorResumen =
+            porDoc.values().stream().filter(StringUtils::hasText).findFirst().orElse(null);
       } else {
         estado = "NO_ENCONTRADO";
         noEncontrados++;
@@ -150,6 +193,70 @@ public class OcrCotejoService {
     return new CotejoResponse(id, resumen, comparaciones);
   }
 
+  static CotejoResponse fromResultadoCotejo(String sessionId, ResultadoCotejoDTO r) {
+    List<CotejoComparacion> comparaciones = new ArrayList<>();
+    int coinciden = 0;
+    int diferencias = 0;
+
+    String personaEstado = r.coincidePersona() ? "COINCIDE" : "DIFERENCIA";
+    if (r.coincidePersona()) {
+      coinciden++;
+    } else {
+      diferencias++;
+    }
+    comparaciones.add(
+        new CotejoComparacion(
+            "persona",
+            "Persona (Cédula ↔ Papeleta)",
+            personaEstado,
+            "Cédula ↔ Papeleta",
+            r.coincidePersona() ? "Coincide" : "Discrepancia",
+            List.of(
+                new CotejoFuente("Cédula", null),
+                new CotejoFuente("Papeleta", null))));
+
+    String inmuebleEstado = r.coincideInmueble() ? "COINCIDE" : "DIFERENCIA";
+    if (r.coincideInmueble()) {
+      coinciden++;
+    } else {
+      diferencias++;
+    }
+    comparaciones.add(
+        new CotejoComparacion(
+            "inmueble",
+            "Inmueble (Avalúo ↔ Historia de Dominio)",
+            inmuebleEstado,
+            "Avalúo ↔ Historia de Dominio",
+            r.coincideInmueble() ? "Coincide" : "Discrepancia",
+            List.of(
+                new CotejoFuente("Avalúo", null),
+                new CotejoFuente("Historia de Dominio", null))));
+
+    for (int i = 0; i < r.observaciones().size(); i++) {
+      String obs = r.observaciones().get(i);
+      if (!StringUtils.hasText(obs)) {
+        continue;
+      }
+      diferencias++;
+      comparaciones.add(
+          new CotejoComparacion(
+              "obs_" + (i + 1),
+              "Observación",
+              "DIFERENCIA",
+              r.resumenValidacion(),
+              obs.trim(),
+              List.of(new CotejoFuente("Cotejo notarial", obs.trim()))));
+    }
+
+    int total = comparaciones.size();
+    boolean observacion =
+        diferencias > 0
+            || !"APROBADO".equalsIgnoreCase(r.estado() == null ? "" : r.estado());
+    CotejoResumen resumen =
+        new CotejoResumen(total, coinciden, diferencias, 0, total, observacion);
+    return new CotejoResponse(sessionId, resumen, comparaciones);
+  }
+
   private Map<String, String> extractDatos(DocSection section) {
     Map<String, String> out = new LinkedHashMap<>();
     if (!StringUtils.hasText(section.texto())) {
@@ -170,8 +277,7 @@ public class OcrCotejoService {
           }
         }
       } catch (Exception ex) {
-        LOG.warn(
-            "Cotejo extract fail tipo={} err={}", section.tipo(), ex.getMessage());
+        LOG.warn("Cotejo extract fail tipo={} err={}", section.tipo(), ex.getMessage());
       }
     }
     return out;
@@ -186,7 +292,9 @@ public class OcrCotejoService {
       String tipo =
           StringUtils.hasText(m.group(1))
               ? m.group(1).trim()
-              : (m.group(2) == null ? "DOCUMENTO" : m.group(2).trim());
+              : StringUtils.hasText(m.group(2))
+                  ? m.group(2).trim()
+                  : (m.group(3) == null ? "DOCUMENTO" : m.group(3).trim());
       tipos.add(tipo);
       ranges.add(new int[] {m.start(), m.end()});
     }
@@ -241,7 +349,7 @@ public class OcrCotejoService {
         continue;
       }
       String tipo = StringUtils.hasText(r.tipoDocumento()) ? r.tipoDocumento() : "DOCUMENTO";
-      sb.append('[').append(tipo).append("]\n:\n: ");
+      sb.append("=== DOCUMENTO: ").append(tipo).append(" ===\n");
       sb.append(r.textoExtraido() == null ? "" : r.textoExtraido().trim());
       sb.append("\n\n");
     }
@@ -250,26 +358,22 @@ public class OcrCotejoService {
 
   private static CotejoResponse empty(String sessionId) {
     return new CotejoResponse(
-        sessionId,
-        new CotejoResumen(0, 0, 0, 0, 0, false),
-        List.of());
+        sessionId, new CotejoResumen(0, 0, 0, 0, 0, false), List.of());
   }
 
   static String normalizeValue(String raw) {
-    String s = Normalizer.normalize(raw.trim(), Normalizer.Form.NFD)
-        .replaceAll("\\p{M}+", "")
-        .toLowerCase(Locale.ROOT)
-        .replaceAll("[\\s._\\-/]+", " ")
-        .trim();
+    String s =
+        Normalizer.normalize(raw.trim(), Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "")
+            .toLowerCase(Locale.ROOT)
+            .replaceAll("[\\s._\\-/]+", " ")
+            .trim();
     return s;
   }
 
   static String humanLabel(String campo) {
     String spaced =
-        campo
-            .replace('_', ' ')
-            .replaceAll("([a-z])([A-Z])", "$1 $2")
-            .trim();
+        campo.replace('_', ' ').replaceAll("([a-z])([A-Z])", "$1 $2").trim();
     if (!StringUtils.hasText(spaced)) {
       return campo;
     }
