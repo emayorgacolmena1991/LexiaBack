@@ -30,6 +30,9 @@ spring:
       hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
+  ocr:
+    cache-ttl-hours: ${LEXIA_OCR_CACHE_TTL_HOURS:2}
+    cache-cleanup-ms: ${LEXIA_OCR_CACHE_CLEANUP_MS:300000}
   integrations:
     ejd:
       stub-live: true
@@ -75,9 +78,15 @@ anthropic:
 
 azure:
   ocr:
-    # Nombres oficiales (flujo). Fallback legado AZURE_OCR_*.
     endpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:${AZURE_OCR_ENDPOINT:}}
     key: ${AZURE_DOCUMENT_INTELLIGENCE_KEY:${AZURE_OCR_KEY:}}
+    max-concurrent: 1              # Debe seguir en 1 para no saturar la cuota
+    max-retries: 5                 # Reducimos los reintentos
+    backoff-base-ms: 2000
+    backoff-max-ms: 30000
+    acquire-timeout-ms: 600000
+    min-request-interval-ms: 4000  # Exactamente 1 petición cada 4 segundos (15 RPM)
+    poll-interval-ms: 4000         # Sincronizado para preguntar por resultados cada 4s
 
 management:
   endpoints:

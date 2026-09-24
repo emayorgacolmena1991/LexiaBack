@@ -114,7 +114,13 @@ public class SecurityConfig {
                             "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}/tipo"),
                         paths.matcher(
                             HttpMethod.DELETE,
-                            "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}")))
+                            "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ia/calidad-documento"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-batch"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-single"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/documents/reupload"),
+                        paths.matcher(
+                            HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
@@ -135,7 +141,11 @@ public class SecurityConfig {
                     .requestMatchers(
                         paths.matcher("/api/v1/actos-notariales"),
                         paths.matcher("/api/v1/actos-notariales/**"),
-                        paths.matcher("/api/v1/expedientes/**"))
+                        paths.matcher("/api/v1/expedientes/**"),
+                        paths.matcher("/api/v1/ia/**"),
+                        paths.matcher("/api/v1/ocr/**"),
+                        paths.matcher("/api/v1/documents/**"),
+                        paths.matcher("/api/v1/cache/**"))
                     .hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "USER")
                     .anyRequest()
                     .authenticated())
