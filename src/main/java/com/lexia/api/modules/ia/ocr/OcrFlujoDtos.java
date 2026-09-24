@@ -50,4 +50,26 @@ public final class OcrFlujoDtos {
   public record ConsolidateResponse(boolean success, String cacheKey) {}
 
   public record ConsolidatedGetResponse(String sessionId, String cacheKey, String consolidatedContent) {}
+
+  /** GET /api/v1/cache/cotejo/{sessionId} — E04 cotejo cross-doc (alineado a CotejoDto FE). */
+  public record CotejoFuente(String documento, String valor) {}
+
+  public record CotejoComparacion(
+      String campo,
+      String label,
+      String estado,
+      String relacion,
+      String valor,
+      List<CotejoFuente> fuentes) {}
+
+  public record CotejoResumen(
+      int total,
+      int coinciden,
+      int diferencias,
+      int noEncontrados,
+      Integer reglasAplicadas,
+      Boolean observacion) {}
+
+  public record CotejoResponse(
+      String sessionId, CotejoResumen resumen, List<CotejoComparacion> comparaciones) {}
 }

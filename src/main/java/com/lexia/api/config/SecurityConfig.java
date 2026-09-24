@@ -18,6 +18,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -33,6 +34,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @EnableWebSecurity
 @EnableConfigurationProperties(AuthProperties.class)
 public class SecurityConfig {
+
+  static {
+    SecurityContextHolder.setStrategyName(SecurityContextHolder.MODE_INHERITABLETHREADLOCAL);
+  }
 
   @Bean
   @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -138,6 +143,7 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/password/forgot"),
                         paths.matcher("/api/v1/auth/password/reset"))
                     .permitAll()
+                    // TICKET-DEV-401B: /api/v1/cache/** (E03 consolidate + E04 cotejo) requiere sesión.
                     .requestMatchers(
                         paths.matcher("/api/v1/actos-notariales"),
                         paths.matcher("/api/v1/actos-notariales/**"),
@@ -145,7 +151,8 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/ia/**"),
                         paths.matcher("/api/v1/ocr/**"),
                         paths.matcher("/api/v1/documents/**"),
-                        paths.matcher("/api/v1/cache/**"))
+                        paths.matcher("/api/v1/cache/**"),
+                        paths.matcher("/api/v1/cache/cotejo/**"))
                     .hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "USER")
                     .anyRequest()
                     .authenticated())
