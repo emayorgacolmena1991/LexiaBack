@@ -42,6 +42,17 @@ class OcrCotejoServiceTest {
   }
 
   @Test
+  void parseSections_documentoEqualsFormat() {
+    String content =
+        "=== DOCUMENTO: CEDULA ===\nJuan Perez\n\n=== DOCUMENTO: PAPELETA ===\nJuan Perez";
+    List<DocSection> sections = OcrCotejoService.parseSections(content, List.of());
+    assertEquals(2, sections.size());
+    assertEquals("CEDULA", sections.get(0).tipo());
+    assertTrue(sections.get(0).texto().contains("Juan Perez"));
+    assertEquals("PAPELETA", sections.get(1).tipo());
+  }
+
+  @Test
   void normalizeValue_ignoresAccentsAndCase() {
     assertEquals(
         OcrCotejoService.normalizeValue("Juan Pérez"),

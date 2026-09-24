@@ -93,4 +93,26 @@ public final class ExpedienteDtos {
       return datosClave == null ? java.util.Map.of() : datosClave;
     }
   }
+
+  /**
+   * Salida tool use Claude: cotejo notarial cross-documento (Cédula↔Papeleta,
+   * Avalúo↔Historia de Dominio).
+   */
+  public record ResultadoCotejoDTO(
+      boolean coincidePersona,
+      boolean coincideInmueble,
+      java.util.List<String> observaciones,
+      String resumenValidacion,
+      String estado) {
+
+    public java.util.List<String> observaciones() {
+      return observaciones == null ? java.util.List.of() : observaciones;
+    }
+
+    public static ResultadoCotejoDTO error(String motivo) {
+      return new ResultadoCotejoDTO(
+          false, false, java.util.List.of(motivo == null ? "Error de cotejo." : motivo),
+          motivo == null ? "No se pudo validar el expediente." : motivo, "RECHAZADO");
+    }
+  }
 }

@@ -112,6 +112,8 @@ public class SecurityConfig {
                         paths.matcher(
                             HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/procesar-ia"),
                         paths.matcher(
+                            HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/validar-ia"),
+                        paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{idExpediente}/documentos/upload"),
                         paths.matcher(
