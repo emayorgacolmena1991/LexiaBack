@@ -3,16 +3,22 @@ package com.lexia.api.modules.expedientes;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.data.domain.Persistable;
 
 @Entity
 @Table(schema = "app", name = "legal_case")
-public class LegalCase {
+public class LegalCase implements Persistable<UUID> {
 
   @Id private UUID id;
+
+  @Transient private boolean isNew = true;
 
   @Column(name = "tenant_id", nullable = false)
   private UUID tenantId;
@@ -104,11 +110,24 @@ public class LegalCase {
     Instant now = Instant.now();
     legalCase.createdAt = now;
     legalCase.updatedAt = now;
+    legalCase.isNew = true;
     return legalCase;
   }
 
+  @Override
   public UUID getId() {
     return id;
+  }
+
+  @Override
+  public boolean isNew() {
+    return isNew;
+  }
+
+  @PostLoad
+  @PostPersist
+  void markNotNew() {
+    this.isNew = false;
   }
 
   public UUID getTenantId() {

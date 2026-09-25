@@ -112,7 +112,8 @@ public class CaseService {
                 principal.userId(),
                 slaDue));
     bootstrap.bootstrap(created, request, tenantId, principal.userId());
-    legalCases.save(created);
+    // Entidad ya managed: el flush de commit persiste productCode/etapa.
+    // Segundo save() + WritingFile merge con @Version provocaba 409 concurrente.
     return toDetail(created);
   }
 

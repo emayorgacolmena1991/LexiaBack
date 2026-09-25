@@ -103,9 +103,19 @@ public class SecurityConfig {
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/forgot"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset"),
-                        // Flujo carga/tipificación + OCR: cookie sesión + Bearer; CSRF rompe POST/PATCH/DELETE.
+                        // Flujo carga/tipificación + OCR + escrituración abogado: cookie + Bearer; CSRF rompe mutaciones.
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/borrador"),
+                        paths.matcher(
+                            HttpMethod.PUT,
+                            "/api/v1/expedientes/{id}/escrituracion/producto"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/estudio-titulo"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/minutas"),
                         paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{idExpediente}/iniciar-procesamiento"),
@@ -149,6 +159,9 @@ public class SecurityConfig {
                     .requestMatchers(
                         paths.matcher("/api/v1/actos-notariales"),
                         paths.matcher("/api/v1/actos-notariales/**"),
+                        paths.matcher("/api/v1/productos-biess"),
+                        paths.matcher("/api/v1/productos-biess/**"),
+                        paths.matcher("/api/v1/expedientes"),
                         paths.matcher("/api/v1/expedientes/**"),
                         paths.matcher("/api/v1/ia/**"),
                         paths.matcher("/api/v1/ocr/**"),

@@ -46,7 +46,7 @@ public class CargaDocumentoController {
   @PostMapping("/borrador")
   @ResponseStatus(HttpStatus.CREATED)
   public BorradorResponse crearBorrador(@Valid @RequestBody CrearBorradorRequest request) {
-    return cargaDocumentoService.crearBorrador(request.idActo());
+    return cargaDocumentoService.crearBorrador(request);
   }
 
   @GetMapping("/{idExpediente}/tipos-permitidos")

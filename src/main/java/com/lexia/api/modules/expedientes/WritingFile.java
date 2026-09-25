@@ -3,16 +3,23 @@ package com.lexia.api.modules.expedientes;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.data.domain.Persistable;
 
 @Entity
 @Table(schema = "app", name = "writing_file")
-public class WritingFile {
+public class WritingFile implements Persistable<UUID> {
 
   @Id private UUID id;
+
+  /** UUID asignado en memoria: sin esto, save() hace merge/UPDATE y dispara 409. */
+  @Transient private boolean isNew = true;
 
   @Column(name = "tenant_id", nullable = false)
   private UUID tenantId;
@@ -62,12 +69,24 @@ public class WritingFile {
     Instant now = Instant.now();
     file.createdAt = now;
     file.updatedAt = now;
-    file.rowVersion = 1L;
+    file.isNew = true;
     return file;
   }
 
+  @Override
   public UUID getId() {
     return id;
+  }
+
+  @Override
+  public boolean isNew() {
+    return isNew;
+  }
+
+  @PostLoad
+  @PostPersist
+  void markNotNew() {
+    this.isNew = false;
   }
 
   public UUID getTenantId() {

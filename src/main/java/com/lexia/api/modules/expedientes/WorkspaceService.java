@@ -239,7 +239,7 @@ public class WorkspaceService {
     List<StageItem> stages = new ArrayList<>();
     for (CaseStage row : rows) {
       ProcessStageDef definition = stageDefById.get(row.getStageDefId());
-      if (definition == null) {
+      if (definition == null || !definition.isActive() || definition.getDeprecatedAt() != null) {
         continue;
       }
       stages.add(
