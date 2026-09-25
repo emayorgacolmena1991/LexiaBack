@@ -15,20 +15,23 @@ public class MinutaTemplateCatalog {
 
   public static final String PRODUCT_VIV_HIPOTECADA_BIESS = "VIV_HIPOTECADA_BIESS";
 
-  private static final String TEMPLATE_VIV_HIPOTECADA =
+  private static final String TEMPLATE_MINUTA_HIPOTECA =
       "templates/MINUTA_HIPOTECA_TEMPLATE.docx";
+
+  private static final String TEMPLATE_CONTRATO_MUTUO =
+      "templates/CONTRATO_SUSTITUCION_HIPOTECA_TEMPLATE.docx";
 
   private static final List<MinutaTemplateDescriptor> TEMPLATES =
       List.of(
           new MinutaTemplateDescriptor(
               PRODUCT_VIV_HIPOTECADA_BIESS,
               "MINUTA_COMPRAVENTA",
-              TEMPLATE_VIV_HIPOTECADA,
+              TEMPLATE_MINUTA_HIPOTECA,
               "minuta_compraventa_vivienda_hipotecada.docx"),
           new MinutaTemplateDescriptor(
               PRODUCT_VIV_HIPOTECADA_BIESS,
               "CONTRATO_MUTUO",
-              TEMPLATE_VIV_HIPOTECADA,
+              TEMPLATE_CONTRATO_MUTUO,
               "contrato_mutuo_vivienda_hipotecada.docx"));
 
   public Optional<MinutaTemplateDescriptor> find(String productCode, String templateKind) {

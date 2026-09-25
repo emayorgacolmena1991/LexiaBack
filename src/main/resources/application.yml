@@ -147,15 +147,16 @@ lexia:
       Genera observaciones si hay discrepancias.
       Responde siempre llamando a la herramienta registrar_datos_documento.
   ocr:
-    cache-ttl-hours: ${LEXIA_OCR_CACHE_TTL_HOURS:2}
-    cache-cleanup-ms: ${LEXIA_OCR_CACHE_CLEANUP_MS:300000}
+    cache-ttl-hours: ${LEXIA_OCR_CACHE_TTL_HOURS:24}
+    cache-cleanup-ms: ${LEXIA_OCR_CACHE_CLEANUP_MS:600000}
   integrations:
     ejd:
-      stub-live: true
+      # false = worker live (S0 / producción). Override: LEXIA_EJD_STUB_LIVE=true
+      stub-live: ${LEXIA_EJD_STUB_LIVE:false}
       live-base-url: ${LEXIA_EJD_CONNECTOR_BASE_URL:}
       worker:
-        poll-interval-ms: 5000
-        batch-size: 20
+        poll-interval-ms: ${LEXIA_EJD_WORKER_POLL_MS:500}
+        batch-size: ${LEXIA_EJD_WORKER_BATCH_SIZE:50}
   cors:
     allowed-origins:
       - http://localhost:4200
@@ -186,7 +187,7 @@ lexia:
       api-version: ${AZURE_DOCUMENT_INTELLIGENCE_API_VERSION:2024-11-30}
       model-id: prebuilt-read
       timeout-ms: ${AZURE_DOCUMENT_INTELLIGENCE_TIMEOUT_MS:120000}
-      poll-interval-ms: ${AZURE_DOCUMENT_INTELLIGENCE_POLL_INTERVAL_MS:1000}
+      poll-interval-ms: ${AZURE_DOCUMENT_INTELLIGENCE_POLL_INTERVAL_MS:500}
 
 gemini:
   api:
@@ -205,13 +206,14 @@ azure:
   ocr:
     endpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:${AZURE_OCR_ENDPOINT:}}
     key: ${AZURE_DOCUMENT_INTELLIGENCE_KEY:${AZURE_OCR_KEY:}}
-    max-concurrent: 1              # Debe seguir en 1 para no saturar la cuota
-    max-retries: 5                 # Reducimos los reintentos
-    backoff-base-ms: 2000
-    backoff-max-ms: 30000
-    acquire-timeout-ms: 600000
-    min-request-interval-ms: 4000  # Exactamente 1 petición cada 4 segundos (15 RPM)
-    poll-interval-ms: 4000         # Sincronizado para preguntar por resultados cada 4s
+    # Standard S0: paralelizar. F0 (free): bajar a max-concurrent=1 y min-request-interval-ms=4000
+    max-concurrent: ${AZURE_OCR_MAX_CONCURRENT:10}
+    max-retries: ${AZURE_OCR_MAX_RETRIES:5}
+    backoff-base-ms: ${AZURE_OCR_BACKOFF_BASE_MS:1000}
+    backoff-max-ms: ${AZURE_OCR_BACKOFF_MAX_MS:30000}
+    acquire-timeout-ms: ${AZURE_OCR_ACQUIRE_TIMEOUT_MS:600000}
+    min-request-interval-ms: ${AZURE_OCR_MIN_REQUEST_INTERVAL_MS:100}
+    poll-interval-ms: ${AZURE_OCR_POLL_INTERVAL_MS:500}
 
 management:
   endpoints:

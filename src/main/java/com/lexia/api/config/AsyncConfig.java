@@ -25,12 +25,27 @@ public class AsyncConfig {
 
   @Bean(name = "taskExecutor")
   Executor taskExecutor() {
+    return wrapWithTenantAuth(newPool("lexia-async-", 4, 16, 100));
+  }
+
+  /** Pool paralelo para OCR Azure (batch documentos). */
+  @Bean(name = "ocrExecutor")
+  Executor ocrExecutor() {
+    return wrapWithTenantAuth(newPool("AzureOCR-", 10, 20, 100));
+  }
+
+  private static ThreadPoolTaskExecutor newPool(
+      String prefix, int core, int max, int queueCapacity) {
     ThreadPoolTaskExecutor delegate = new ThreadPoolTaskExecutor();
-    delegate.setThreadNamePrefix("lexia-async-");
-    delegate.setCorePoolSize(4);
-    delegate.setMaxPoolSize(16);
-    delegate.setQueueCapacity(100);
+    delegate.setThreadNamePrefix(prefix);
+    delegate.setCorePoolSize(core);
+    delegate.setMaxPoolSize(max);
+    delegate.setQueueCapacity(queueCapacity);
     delegate.initialize();
+    return delegate;
+  }
+
+  private static Executor wrapWithTenantAuth(ThreadPoolTaskExecutor delegate) {
     Executor secured = new DelegatingSecurityContextExecutor(delegate);
     return command -> {
       AuthPrincipal principal = AuthContext.get();
