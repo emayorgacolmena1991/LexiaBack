@@ -8,9 +8,13 @@ public final class CargaDocumentoDtos {
 
   private CargaDocumentoDtos() {}
 
-  public record CrearBorradorRequest(@NotBlank @Size(max = 64) String idActo) {}
+  public record CrearBorradorRequest(
+      @Size(max = 64) String idActo,
+      @Size(max = 64) String productCode,
+      @Size(max = 64) String canton) {}
 
-  public record BorradorResponse(String idExpediente, String idActo, String estado) {}
+  public record BorradorResponse(
+      String idExpediente, String idActo, String estado, String productCode) {}
 
   public record TipoPermitidoDTO(String codigo, String nombre) {}
 

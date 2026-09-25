@@ -8,6 +8,8 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.ActualizarTipoRequest;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.BorradorResponse;
+import com.lexia.api.modules.expedientes.CargaDocumentoDtos.CrearBorradorRequest;
+import com.lexia.api.modules.expedientes.EscrituracionDtos.DocumentoRequisitoItem;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.CargaDocumentoDtos.IniciarProcesamientoResponse;
@@ -46,31 +48,70 @@ public class CargaDocumentoService {
   private final ActoNotarialService actoNotarialService;
   private final ProcesamientoDocumentalService procesamientoDocumentalService;
   private final DocumentoTextoOcrRepository ocrRepository;
+  private final ProductoBiessService productos;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
   private final AtomicInteger seq = new AtomicInteger(480);
 
   public CargaDocumentoService(
       ActoNotarialService actoNotarialService,
       @Lazy ProcesamientoDocumentalService procesamientoDocumentalService,
-      DocumentoTextoOcrRepository ocrRepository) {
+      DocumentoTextoOcrRepository ocrRepository,
+      ProductoBiessService productos) {
     this.actoNotarialService = actoNotarialService;
     this.procesamientoDocumentalService = procesamientoDocumentalService;
     this.ocrRepository = ocrRepository;
+    this.productos = productos;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
-    actoNotarialService.obtenerRequisitosPorActo(idActo);
+    return crearBorrador(new CrearBorradorRequest(idActo, null, null));
+  }
+
+  public BorradorResponse crearBorrador(CrearBorradorRequest request) {
+    String productCode =
+        request.productCode() == null || request.productCode().isBlank()
+            ? null
+            : request.productCode().trim();
+    String idActo =
+        request.idActo() == null || request.idActo().isBlank() ? null : request.idActo().trim();
+    String canton =
+        request.canton() == null || request.canton().isBlank() ? null : request.canton().trim();
+    if (productCode == null && idActo == null) {
+      throw ApiException.badRequest("Debes enviar productCode o idActo.");
+    }
+    if (productCode != null) {
+      productos.requireProducto(AuthContext.require().tenantId(), productCode);
+    } else {
+      actoNotarialService.obtenerRequisitosPorActo(idActo);
+    }
     String id =
         "EXP-"
             + Year.now().getValue()
             + "-"
             + String.format(Locale.ROOT, "%05d", seq.incrementAndGet());
-    drafts.put(id, new DraftExpediente(id, idActo.trim()));
-    return new BorradorResponse(id, idActo.trim(), "BORRADOR");
+    drafts.put(id, new DraftExpediente(id, idActo, productCode, canton));
+    return new BorradorResponse(id, idActo, "BORRADOR", productCode);
   }
 
   public List<TipoPermitidoDTO> tiposPermitidos(String idExpediente) {
     DraftExpediente draft = requireDraft(idExpediente);
+    if (StringUtils.hasText(draft.productCode())) {
+      Map<String, TipoPermitidoDTO> byCode = new LinkedHashMap<>();
+      for (DocumentoRequisitoItem item :
+          productos.detalle(draft.productCode(), draft.canton()).requisitos()) {
+        String code = item.documentTypeCode();
+        if (!StringUtils.hasText(code) || byCode.containsKey(code)) {
+          continue;
+        }
+        String nombre =
+            StringUtils.hasText(item.description()) ? item.description() : code;
+        byCode.put(code, new TipoPermitidoDTO(code, nombre));
+      }
+      return List.copyOf(byCode.values());
+    }
+    if (!StringUtils.hasText(draft.idActo())) {
+      return List.of();
+    }
     ActoNotarialRespuestaDTO requisitos =
         actoNotarialService.obtenerRequisitosPorActo(draft.idActo());
     List<DocumentoRequeridoDTO> docs =
@@ -425,6 +466,8 @@ public class CargaDocumentoService {
   static final class DraftExpediente {
     private final String id;
     private final String idActo;
+    private final String productCode;
+    private final String canton;
     private final Map<String, StoredDoc> documentos =
         Collections.synchronizedMap(new LinkedHashMap<>());
     /** OCR+LLM solo en RAM hasta crear expediente. */
@@ -433,8 +476,14 @@ public class CargaDocumentoService {
     private volatile PrevalidacionState prevalidacion;
 
     DraftExpediente(String id, String idActo) {
+      this(id, idActo, null, null);
+    }
+
+    DraftExpediente(String id, String idActo, String productCode, String canton) {
       this.id = id;
       this.idActo = idActo;
+      this.productCode = productCode;
+      this.canton = canton;
     }
 
     String id() {
@@ -443,6 +492,14 @@ public class CargaDocumentoService {
 
     String idActo() {
       return idActo;
+    }
+
+    String productCode() {
+      return productCode;
+    }
+
+    String canton() {
+      return canton;
     }
 
     Map<String, StoredDoc> documentos() {
