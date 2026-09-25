@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -24,8 +25,19 @@ public class EjdOperationDocumentReq {
   @Column(name = "sort_order", nullable = false)
   private int sortOrder;
 
+  @Column(name = "deprecated_at")
+  private Instant deprecatedAt;
+
   public String getOperationCode() {
     return operationCode;
+  }
+
+  public Instant getDeprecatedAt() {
+    return deprecatedAt;
+  }
+
+  public boolean isDeprecated() {
+    return deprecatedAt != null;
   }
 
   public String getDocumentTypeCode() {
