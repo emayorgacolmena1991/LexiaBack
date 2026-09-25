@@ -118,6 +118,9 @@ public class SecurityConfig {
                             "/api/v1/expedientes/{id}/escrituracion/minutas"),
                         paths.matcher(
                             HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/analizar-ia"),
+                        paths.matcher(
+                            HttpMethod.POST,
                             "/api/v1/expedientes/{idExpediente}/iniciar-procesamiento"),
                         paths.matcher(
                             HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/procesar-ia"),
@@ -161,6 +164,8 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/actos-notariales/**"),
                         paths.matcher("/api/v1/productos-biess"),
                         paths.matcher("/api/v1/productos-biess/**"),
+                        paths.matcher("/api/v1/prompts"),
+                        paths.matcher("/api/v1/prompts/**"),
                         paths.matcher("/api/v1/expedientes"),
                         paths.matcher("/api/v1/expedientes/**"),
                         paths.matcher("/api/v1/ia/**"),

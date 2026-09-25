@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoResponse;
 import com.lexia.api.modules.ia.cotejo.CotejoMotor.Bloque;

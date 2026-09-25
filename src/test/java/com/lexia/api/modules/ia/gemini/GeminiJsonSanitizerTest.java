@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.GeminiSchemas;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.ocr.GeminiSchemas;
 import org.junit.jupiter.api.Test;
 
 class GeminiJsonSanitizerTest {

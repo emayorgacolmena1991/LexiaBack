@@ -1,7 +1,7 @@
 package com.lexia.api.modules.ia.llm;
 
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.ResultadoCotejoDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import org.springframework.util.StringUtils;
 
 /** Contrato común de extracción/cotejo con LLM. Gemini y Claude lo implementan. */
@@ -16,6 +16,14 @@ public interface AnalisisDocumentoService {
    * Claude lo implementa con tool use {@code cotejar_documentos_expediente}.
    */
   default ExtraccionCotejo cotejarExpediente(String ocrConsolidado) {
+    return cotejarExpediente(ocrConsolidado, null, null);
+  }
+
+  /**
+   * Cotejo por producto BIESS: resuelve prompt vía {@code product_prompt_map} + registry.
+   */
+  default ExtraccionCotejo cotejarExpediente(
+      String ocrConsolidado, String productCode, String canton) {
     return ExtraccionCotejo.error("Cotejo notarial no disponible para este proveedor LLM.");
   }
 

@@ -7,7 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.ia.ocr.OcrCotejoService.DocSection;

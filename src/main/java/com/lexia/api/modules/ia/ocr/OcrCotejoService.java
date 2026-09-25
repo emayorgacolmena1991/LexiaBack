@@ -1,7 +1,7 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.ResultadoCotejoDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
