@@ -66,6 +66,41 @@ public class MinutaViviendaData {
   @JsonProperty("superficie_m2")
   private String superficieM2 = "";
 
+  // --- Contrato de mutuo / sustitución (tags adicionales) ---
+
+  @JsonProperty("estado_civil")
+  private String estadoCivil = "";
+
+  @JsonProperty("monto_prestamo")
+  private String montoPrestamo = "";
+
+  @JsonProperty("monto_prestamo_letras")
+  private String montoPrestamoLetras = "";
+
+  @JsonProperty("plazo_credito")
+  private String plazoCredito = "";
+
+  @JsonProperty("tasa_interes_inicial")
+  private String tasaInteresInicial = "";
+
+  @JsonProperty("institucion_financiera_original")
+  private String institucionFinancieraOriginal = "";
+
+  @JsonProperty("direccion_deudor")
+  private String direccionDeudor = "";
+
+  @JsonProperty("telefono_deudor")
+  private String telefonoDeudor = "";
+
+  @JsonProperty("correo_deudor")
+  private String correoDeudor = "";
+
+  @JsonProperty("ciudad_firma")
+  private String ciudadFirma = "";
+
+  @JsonProperty("fecha_firma")
+  private String fechaFirma = "";
+
   public String getNombreConyuge1() {
     return nombreConyuge1;
   }
@@ -210,31 +245,140 @@ public class MinutaViviendaData {
     this.superficieM2 = nullToEmpty(superficieM2);
   }
 
-  /** Mapa listo para poi-tl (keys = tags del .docx). Nunca null. */
+  public String getEstadoCivil() {
+    return estadoCivil;
+  }
+
+  public void setEstadoCivil(String estadoCivil) {
+    this.estadoCivil = nullToEmpty(estadoCivil);
+  }
+
+  public String getMontoPrestamo() {
+    return montoPrestamo;
+  }
+
+  public void setMontoPrestamo(String montoPrestamo) {
+    this.montoPrestamo = nullToEmpty(montoPrestamo);
+  }
+
+  public String getMontoPrestamoLetras() {
+    return montoPrestamoLetras;
+  }
+
+  public void setMontoPrestamoLetras(String montoPrestamoLetras) {
+    this.montoPrestamoLetras = nullToEmpty(montoPrestamoLetras);
+  }
+
+  public String getPlazoCredito() {
+    return plazoCredito;
+  }
+
+  public void setPlazoCredito(String plazoCredito) {
+    this.plazoCredito = nullToEmpty(plazoCredito);
+  }
+
+  public String getTasaInteresInicial() {
+    return tasaInteresInicial;
+  }
+
+  public void setTasaInteresInicial(String tasaInteresInicial) {
+    this.tasaInteresInicial = nullToEmpty(tasaInteresInicial);
+  }
+
+  public String getInstitucionFinancieraOriginal() {
+    return institucionFinancieraOriginal;
+  }
+
+  public void setInstitucionFinancieraOriginal(String institucionFinancieraOriginal) {
+    this.institucionFinancieraOriginal = nullToEmpty(institucionFinancieraOriginal);
+  }
+
+  public String getDireccionDeudor() {
+    return direccionDeudor;
+  }
+
+  public void setDireccionDeudor(String direccionDeudor) {
+    this.direccionDeudor = nullToEmpty(direccionDeudor);
+  }
+
+  public String getTelefonoDeudor() {
+    return telefonoDeudor;
+  }
+
+  public void setTelefonoDeudor(String telefonoDeudor) {
+    this.telefonoDeudor = nullToEmpty(telefonoDeudor);
+  }
+
+  public String getCorreoDeudor() {
+    return correoDeudor;
+  }
+
+  public void setCorreoDeudor(String correoDeudor) {
+    this.correoDeudor = nullToEmpty(correoDeudor);
+  }
+
+  public String getCiudadFirma() {
+    return ciudadFirma;
+  }
+
+  public void setCiudadFirma(String ciudadFirma) {
+    this.ciudadFirma = nullToEmpty(ciudadFirma);
+  }
+
+  public String getFechaFirma() {
+    return fechaFirma;
+  }
+
+  public void setFechaFirma(String fechaFirma) {
+    this.fechaFirma = nullToEmpty(fechaFirma);
+  }
+
+  /**
+   * Mapa listo para poi-tl (keys = tags del .docx). Valores vacíos → {@code nodata}.
+   */
   public Map<String, Object> toTemplateMap() {
     Map<String, Object> map = new LinkedHashMap<>();
-    map.put("nombre_conyuge_1", nullToEmpty(nombreConyuge1));
-    map.put("cedula_conyuge_1", nullToEmpty(cedulaConyuge1));
-    map.put("nombre_conyuge_2", nullToEmpty(nombreConyuge2));
-    map.put("cedula_conyuge_2", nullToEmpty(cedulaConyuge2));
-    map.put("profesion_conyuge_1", nullToEmpty(profesionConyuge1));
-    map.put("profesion_conyuge_2", nullToEmpty(profesionConyuge2));
-    map.put("canton_domicilio", nullToEmpty(cantonDomicilio));
-    map.put("nombre_afiliado", nullToEmpty(nombreAfiliado));
-    map.put("descripcion_inmuebles_antecedentes", nullToEmpty(descripcionInmueblesAntecedentes));
-    map.put("descripcion_inmueble_hipoteca", nullToEmpty(descripcionInmuebleHipoteca));
-    map.put("parroquia_inmueble", nullToEmpty(parroquiaInmueble));
-    map.put("canton_inmueble", nullToEmpty(cantonInmueble));
-    map.put("provincia_inmueble", nullToEmpty(provinciaInmueble));
-    map.put("lindero_norte", nullToEmpty(linderoNorte));
-    map.put("lindero_sur", nullToEmpty(linderoSur));
-    map.put("lindero_este", nullToEmpty(linderoEste));
-    map.put("lindero_oeste", nullToEmpty(linderoOeste));
-    map.put("superficie_m2", nullToEmpty(superficieM2));
+    map.put("nombre_conyuge_1", blankToNodata(nombreConyuge1));
+    map.put("cedula_conyuge_1", blankToNodata(cedulaConyuge1));
+    map.put("nombre_conyuge_2", blankToNodata(nombreConyuge2));
+    map.put("cedula_conyuge_2", blankToNodata(cedulaConyuge2));
+    map.put("profesion_conyuge_1", blankToNodata(profesionConyuge1));
+    map.put("profesion_conyuge_2", blankToNodata(profesionConyuge2));
+    map.put("canton_domicilio", blankToNodata(cantonDomicilio));
+    map.put("nombre_afiliado", blankToNodata(nombreAfiliado));
+    map.put("descripcion_inmuebles_antecedentes", blankToNodata(descripcionInmueblesAntecedentes));
+    map.put("descripcion_inmueble_hipoteca", blankToNodata(descripcionInmuebleHipoteca));
+    map.put("parroquia_inmueble", blankToNodata(parroquiaInmueble));
+    map.put("canton_inmueble", blankToNodata(cantonInmueble));
+    map.put("provincia_inmueble", blankToNodata(provinciaInmueble));
+    map.put("lindero_norte", blankToNodata(linderoNorte));
+    map.put("lindero_sur", blankToNodata(linderoSur));
+    map.put("lindero_este", blankToNodata(linderoEste));
+    map.put("lindero_oeste", blankToNodata(linderoOeste));
+    map.put("superficie_m2", blankToNodata(superficieM2));
+    map.put("estado_civil", blankToNodata(estadoCivil));
+    map.put("monto_prestamo", blankToNodata(montoPrestamo));
+    map.put("monto_prestamo_letras", blankToNodata(montoPrestamoLetras));
+    map.put("plazo_credito", blankToNodata(plazoCredito));
+    map.put("tasa_interes_inicial", blankToNodata(tasaInteresInicial));
+    map.put("institucion_financiera_original", blankToNodata(institucionFinancieraOriginal));
+    map.put("direccion_deudor", blankToNodata(direccionDeudor));
+    map.put("telefono_deudor", blankToNodata(telefonoDeudor));
+    map.put("correo_deudor", blankToNodata(correoDeudor));
+    map.put("ciudad_firma", blankToNodata(ciudadFirma));
+    map.put("fecha_firma", blankToNodata(fechaFirma));
     return map;
   }
 
   private static String nullToEmpty(String value) {
     return value == null ? "" : value.trim();
+  }
+
+  private static String blankToNodata(String value) {
+    String t = nullToEmpty(value);
+    if (t.isEmpty() || "null".equalsIgnoreCase(t) || "n/a".equalsIgnoreCase(t)) {
+      return "nodata";
+    }
+    return t;
   }
 }

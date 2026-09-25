@@ -65,7 +65,7 @@ public class AzureDocumentIntelligenceClient {
     this.backoffMaxMs = Math.max(this.backoffBaseMs, backoffMaxMs);
     this.acquireTimeoutMs = Math.max(1000, acquireTimeoutMs);
     this.minRequestIntervalMs = Math.max(0, minRequestIntervalMs);
-    this.pollIntervalMs = Math.max(1000, pollIntervalMs);
+    this.pollIntervalMs = Math.max(200, pollIntervalMs);
   }
 
   public boolean isConfigured() {
@@ -73,7 +73,8 @@ public class AzureDocumentIntelligenceClient {
   }
 
   /**
-   * Analyze + poll. Retiene 1 permiso del semáforo durante toda la operación (F0-safe).
+   * Analyze + poll. Retiene 1 permiso del semáforo durante toda la operación
+   * (paralelismo acotado por {@code azure.ocr.max-concurrent}).
    *
    * @return nodo {@code analyzeResult}
    */
@@ -197,7 +198,7 @@ public class AzureDocumentIntelligenceClient {
             + truncate(last == null ? null : last.body()));
   }
 
-  /** Espacia requests para no superar ~15 RPM del F0. */
+  /** Espacia requests según {@code azure.ocr.min-request-interval-ms} (0 = sin throttle). */
   private void awaitRateSlot() throws InterruptedException {
     if (minRequestIntervalMs <= 0) {
       return;

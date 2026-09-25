@@ -16,8 +16,12 @@ import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ReuploadResponse;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -25,6 +29,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 /**
  * Pantalla 2: Azure OCR + calidad (sin Gemini/Claude). Resultados en caché de sesión.
+ * Batch: paralelo vía {@code ocrExecutor} (S0).
  */
 @Service
 public class OcrAzureBatchService {
@@ -34,14 +39,17 @@ public class OcrAzureBatchService {
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
   private final OcrSessionCacheService cache;
+  private final Executor ocrExecutor;
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
       CargaDocumentoService cargaDocumentoService,
-      OcrSessionCacheService cache) {
+      OcrSessionCacheService cache,
+      @Qualifier("ocrExecutor") Executor ocrExecutor) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
+    this.ocrExecutor = ocrExecutor;
   }
 
   public AnalyzeBatchResponse analyzeBatch(AnalyzeBatchRequest request) {
@@ -59,60 +67,41 @@ public class OcrAzureBatchService {
     }
 
     String sessionId = request.sessionId().trim();
-    List<AnalyzeBatchResultItem> results = new ArrayList<>();
-    boolean anyIllegible = false;
-    boolean anyError = false;
+    List<CompletableFuture<AnalyzeBatchResultItem>> futures = new ArrayList<>();
 
     for (AnalyzeBatchDocument doc : request.documents()) {
       if (doc == null || !StringUtils.hasText(doc.fileId())) {
         throw ApiException.badRequest("fileId requerido en cada documento.");
       }
-      String fileId = doc.fileId().trim();
-      String tipo =
-          StringUtils.hasText(doc.tipoDocumento())
-              ? doc.tipoDocumento().trim()
-              : null;
+      AnalyzeBatchDocument snapshot = doc;
+      futures.add(
+          CompletableFuture.supplyAsync(
+              () -> procesarDocumentoBatch(sessionId, snapshot), ocrExecutor));
+    }
 
+    List<AnalyzeBatchResultItem> results = new ArrayList<>(futures.size());
+    boolean anyIllegible = false;
+    boolean anyError = false;
+
+    for (CompletableFuture<AnalyzeBatchResultItem> future : futures) {
       try {
-        StoredDoc stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
-        if (StringUtils.hasText(tipo) && !tipo.equals(stored.codigoTipoDocumento())) {
-          cargaDocumentoService.actualizarTipoDocumentoLibre(sessionId, fileId, tipo);
-          stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
-        }
-        String tipoFinal =
-            StringUtils.hasText(stored.codigoTipoDocumento())
-                ? stored.codigoTipoDocumento()
-                : (tipo == null ? "DOCUMENTO" : tipo);
-
-        AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal);
+        AnalyzeBatchResultItem item = future.join();
         results.add(item);
         if (!item.legible()) {
           anyIllegible = true;
         }
-      } catch (ApiException e) {
-        throw e;
-      } catch (Exception e) {
-        anyError = true;
-        LOG.warn("OCR batch fileId={} err={}", fileId, e.getMessage());
-        AnalyzeBatchResultItem fail =
-            new AnalyzeBatchResultItem(
-                fileId,
-                tipo == null ? "DOCUMENTO" : tipo,
-                false,
-                "Error Azure OCR: " + safe(e),
-                0.0,
-                "");
-        results.add(fail);
-        cache.putResult(
-            sessionId,
-            new OcrFileResult(
-                fail.fileId(),
-                doc.fileName(),
-                fail.tipoDocumento(),
-                false,
-                fail.motivo(),
-                0.0,
-                ""));
+        if (StringUtils.hasText(item.motivo()) && item.motivo().startsWith("Error Azure OCR:")) {
+          anyError = true;
+        }
+      } catch (CompletionException ce) {
+        Throwable cause = ce.getCause() == null ? ce : ce.getCause();
+        if (cause instanceof ApiException apiEx) {
+          throw apiEx;
+        }
+        throw new ApiException(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            "OCR_BATCH_FAILED",
+            "Fallo OCR batch: " + safe(cause instanceof Exception e ? e : new Exception(cause)));
       }
     }
 
@@ -121,6 +110,48 @@ public class OcrAzureBatchService {
             ? "COMPLETED_WITH_ERRORS"
             : (anyIllegible ? "COMPLETED_WITH_WARNINGS" : "COMPLETED");
     return new AnalyzeBatchResponse(sessionId, status, results);
+  }
+
+  private AnalyzeBatchResultItem procesarDocumentoBatch(
+      String sessionId, AnalyzeBatchDocument doc) {
+    String fileId = doc.fileId().trim();
+    String tipo =
+        StringUtils.hasText(doc.tipoDocumento()) ? doc.tipoDocumento().trim() : null;
+    try {
+      StoredDoc stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
+      if (StringUtils.hasText(tipo) && !tipo.equals(stored.codigoTipoDocumento())) {
+        cargaDocumentoService.actualizarTipoDocumentoLibre(sessionId, fileId, tipo);
+        stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
+      }
+      String tipoFinal =
+          StringUtils.hasText(stored.codigoTipoDocumento())
+              ? stored.codigoTipoDocumento()
+              : (tipo == null ? "DOCUMENTO" : tipo);
+      return procesarArchivo(sessionId, stored, tipoFinal);
+    } catch (ApiException e) {
+      throw e;
+    } catch (Exception e) {
+      LOG.warn("OCR batch fileId={} err={}", fileId, e.getMessage());
+      AnalyzeBatchResultItem fail =
+          new AnalyzeBatchResultItem(
+              fileId,
+              tipo == null ? "DOCUMENTO" : tipo,
+              false,
+              "Error Azure OCR: " + safe(e),
+              0.0,
+              "");
+      cache.putResult(
+          sessionId,
+          new OcrFileResult(
+              fail.fileId(),
+              doc.fileName(),
+              fail.tipoDocumento(),
+              false,
+              fail.motivo(),
+              0.0,
+              ""));
+      return fail;
+    }
   }
 
   public AnalyzeSingleResponse analyzeSingle(AnalyzeSingleRequest request) {
