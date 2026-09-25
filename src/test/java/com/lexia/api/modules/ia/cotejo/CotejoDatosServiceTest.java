@@ -61,6 +61,25 @@ class CotejoDatosServiceTest {
   }
 
   @Test
+  void parteFormatoDocumentoDelFrontend() {
+    String contenido =
+        """
+        === DOCUMENTO: Cédula ===
+        Juan Carlos Pérez García
+        Cédula 091.234.567-8
+
+        === DOCUMENTO: Minuta ===
+        Compareciente Juan Perez
+        """;
+    List<Bloque> bloques = CotejoMotor.parse(contenido);
+    assertEquals(2, bloques.size());
+    assertEquals("Cédula", bloques.get(0).tipo());
+    assertTrue(bloques.get(0).texto().contains("091.234.567-8"));
+    assertEquals("Minuta", bloques.get(1).tipo());
+    assertTrue(bloques.get(1).texto().contains("Juan Perez"));
+  }
+
+  @Test
   void normalizaAcentosEspaciosCedulaFechasYMontos() {
     assertEquals("juan perez", CotejoMotor.fold("  Juan   Pérez "));
     assertEquals("0912345678", CotejoMotor.comparable("identificacion", "091.234.567-8"));
