@@ -2,8 +2,11 @@ package com.lexia.api.common.api;
 
 import com.lexia.api.modules.auth.AuthException;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -11,6 +14,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+  private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
   @ExceptionHandler(AuthException.class)
   public ResponseEntity<Map<String, String>> auth(AuthException exception) {
@@ -22,6 +27,18 @@ public class ApiExceptionHandler {
   public ResponseEntity<Map<String, String>> api(ApiException exception) {
     return ResponseEntity.status(exception.getStatus())
         .body(Map.of("code", exception.getCode(), "message", exception.getMessage()));
+  }
+
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  public ResponseEntity<Map<String, String>> unreadable(HttpMessageNotReadableException exception) {
+    LOG.warn("JSON request inválido: {}", exception.getMostSpecificCause().getMessage());
+    return ResponseEntity.badRequest()
+        .body(
+            Map.of(
+                "code",
+                "BAD_JSON",
+                "message",
+                "El formato JSON enviado en la petición no es válido."));
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)
