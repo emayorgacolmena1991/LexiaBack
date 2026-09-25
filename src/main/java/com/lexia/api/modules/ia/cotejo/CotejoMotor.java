@@ -24,10 +24,10 @@ final class CotejoMotor {
   static final String DIFERENCIA = "DIFERENCIA";
   static final String NO_ENCONTRADO = "NO_ENCONTRADO";
 
-  /** Marcadores de sección, incluido el formato FE {@code === DOCUMENTO: TIPO ===}. */
+  /** Marcadores de sección, incluido FE {@code === DOCUMENTO: TIPO ===} y markdown {@code # Tipo}. */
   private static final Pattern MARCADOR =
       Pattern.compile(
-          "^(?:\\[\\[DOC:(.+?)\\]\\]|---\\s*(.+?)\\s*---|===\\s*DOCUMENTO:\\s*(.+?)\\s*===|\\[([^\\]]+)\\])\\s*$");
+          "^(?:\\[\\[DOC:(.+?)\\]\\]|---\\s*(.+?)\\s*---|===\\s*DOCUMENTO:\\s*(.+?)\\s*===|#\\s+(.+?)|\\[([^\\]]+)\\])\\s*$");
   private static final Pattern FECHA_ISO = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
   private static final Pattern FECHA_NUM = Pattern.compile("(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})");
   private static final Pattern FECHA_TEXTO =

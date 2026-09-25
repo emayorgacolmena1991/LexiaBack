@@ -55,6 +55,7 @@ public class OcrCotejoService {
    * Formatos soportados:
    * <ul>
    *   <li>{@code === DOCUMENTO: TIPO ===\ntexto} (TICKET-DEV-802)
+   *   <li>FE markdown: {@code # Tipo\ntexto} (consolidación OCR paso 3)
    *   <li>FE: {@code [Tipo]\n:\n: texto}
    *   <li>BE legado: {@code Tipo:\n:\n: texto}
    * </ul>
@@ -62,6 +63,7 @@ public class OcrCotejoService {
   private static final Pattern SECTION =
       Pattern.compile(
           "(?:===\\s*DOCUMENTO:\\s*([^=\\n]+?)\\s*===\\s*"
+              + "|^#+\\s+([^\\n]+?)\\s*$\\n?"
               + "|\\[([^\\]]+)\\]\\s*\\n:\\s*\\n:\\s*"
               + "|([^:\\n\\r\\[=]+):\\s*\\n:\\s*\\n:\\s*)",
           Pattern.MULTILINE);
@@ -155,16 +157,19 @@ public class OcrCotejoService {
       }
       ResultadoCotejoDTO r = cotejo.resultado();
       LOG.info("Cotejo notarial OK estado={} (solo observación general)", r.estado());
-      if (StringUtils.hasText(r.resumenValidacion())) {
-        return r.resumenValidacion().trim();
-      }
+      // Preferir lista detallada (una por línea) para el panel Observaciones del FE.
       if (r.observaciones() != null && !r.observaciones().isEmpty()) {
         String joined =
             r.observaciones().stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
-                .collect(Collectors.joining(" "));
-        return StringUtils.hasText(joined) ? joined : null;
+                .collect(Collectors.joining("\n"));
+        if (StringUtils.hasText(joined)) {
+          return joined;
+        }
+      }
+      if (StringUtils.hasText(r.resumenValidacion())) {
+        return r.resumenValidacion().trim();
       }
     } catch (Exception ex) {
       LOG.warn("Cotejo notarial fail err={}", ex.getMessage());
@@ -1595,13 +1600,8 @@ public class OcrCotejoService {
     List<int[]> ranges = new ArrayList<>();
     List<String> tipos = new ArrayList<>();
     while (m.find()) {
-      String tipo =
-          StringUtils.hasText(m.group(1))
-              ? m.group(1).trim()
-              : StringUtils.hasText(m.group(2))
-                  ? m.group(2).trim()
-                  : (m.group(3) == null ? "DOCUMENTO" : m.group(3).trim());
-      tipos.add(tipo);
+      String tipo = firstNonBlank(m.group(1), m.group(2), m.group(3), m.group(4));
+      tipos.add(tipo != null ? tipo : "DOCUMENTO");
       ranges.add(new int[] {m.start(), m.end()});
     }
     if (ranges.isEmpty()) {
@@ -1660,6 +1660,18 @@ public class OcrCotejoService {
       sb.append("\n\n");
     }
     return sb.toString().trim();
+  }
+
+  private static String firstNonBlank(String... values) {
+    if (values == null) {
+      return null;
+    }
+    for (String v : values) {
+      if (StringUtils.hasText(v)) {
+        return v.trim();
+      }
+    }
+    return null;
   }
 
   private static CotejoResponse empty(String sessionId) {

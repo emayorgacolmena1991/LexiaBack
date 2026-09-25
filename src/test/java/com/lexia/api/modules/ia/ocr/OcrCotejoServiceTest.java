@@ -46,6 +46,38 @@ class OcrCotejoServiceTest {
   }
 
   @Test
+  void parseSections_markdownHeadingFormat() {
+    String content =
+        "# Cédula\nJuan Perez CI 010203\n\n# Papeleta de Votación\nJuan Perez CI 010203";
+    List<DocSection> sections = OcrCotejoService.parseSections(content, List.of());
+    assertEquals(2, sections.size());
+    assertEquals("Cédula", sections.get(0).tipo());
+    assertTrue(sections.get(0).texto().contains("Juan Perez"));
+    assertEquals("Papeleta de Votación", sections.get(1).tipo());
+  }
+
+  @Test
+  void cotejar_coincideConFormatoMarkdownFe() {
+    when(cache.getConsolidated("EXP-MD"))
+        .thenReturn("# Cédula\ntexto A\n\n# Papeleta\ntexto B");
+    when(cache.listResults("EXP-MD")).thenReturn(List.of());
+    when(analisis.isConfigured()).thenReturn(true);
+    when(analisis.extraerDatosClave(anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              String tipo = inv.getArgument(1);
+              return ExtraccionDocumento.fromDatos(
+                  new DatosExtraidosDTO(tipo, "ok", Map.of("nombre", "Juan Perez")));
+            });
+
+    CotejoResponse resp = service.cotejar("EXP-MD");
+    assertEquals(1, resp.comparaciones().size());
+    assertEquals("COINCIDE", resp.comparaciones().get(0).estado());
+    assertEquals(1, resp.grupos().size());
+    assertEquals("identidad", resp.grupos().get(0).id());
+  }
+
+  @Test
   void parseSections_documentoEqualsFormat() {
     String content =
         "=== DOCUMENTO: CEDULA ===\nJuan Perez\n\n=== DOCUMENTO: PAPELETA ===\nJuan Perez";
