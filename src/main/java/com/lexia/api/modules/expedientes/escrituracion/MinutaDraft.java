@@ -31,6 +31,9 @@ public class MinutaDraft {
   @Column(name = "product_code", length = 64)
   private String productCode;
 
+  @Column(name = "storage_path", length = 1024)
+  private String storagePath;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -72,8 +75,21 @@ public class MinutaDraft {
     return productCode;
   }
 
+  public String getStoragePath() {
+    return storagePath;
+  }
+
+  public UUID getTenantId() {
+    return tenantId;
+  }
+
   public void markReady() {
     this.status = "READY";
     this.updatedAt = Instant.now();
+  }
+
+  public void markReady(String storagePath) {
+    this.storagePath = storagePath;
+    markReady();
   }
 }

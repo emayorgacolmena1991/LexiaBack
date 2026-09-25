@@ -4,7 +4,6 @@ import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
@@ -151,46 +150,6 @@ public class EscrituracionAbogadoService {
     return toEstudio(study, tenantId);
   }
 
-  @Transactional
-  public MinutaItem crearMinuta(UUID caseId, CrearMinutaRequest request) {
-    authorization.requirePermission("expedientes:caso:escribir");
-    UUID tenantId = AuthContext.require().tenantId();
-    LegalCase legalCase = requireCase(caseId, tenantId);
-    WritingFile file =
-        writingFiles
-            .findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
-            .orElseThrow(
-                () ->
-                    new AuthException(
-                        HttpStatus.CONFLICT,
-                        "NO_WRITING_FILE",
-                        "Configura el producto BIESS antes de generar minutas."));
-    String product = file.getProductCode() != null ? file.getProductCode() : legalCase.getProductCode();
-    if (product == null) {
-      throw new AuthException(
-          HttpStatus.CONFLICT, "NO_PRODUCT", "El expediente no tiene producto BIESS.");
-    }
-    String kind =
-        request.templateKind() == null || request.templateKind().isBlank()
-            ? "MINUTA_COMPRAVENTA"
-            : request.templateKind().trim().toUpperCase(Locale.ROOT);
-
-    boolean allowed =
-        templates
-            .findByTenantIdAndProductCodeAndActiveTrueOrderBySortOrderAsc(tenantId, product)
-            .stream()
-            .anyMatch(t -> kind.equals(t.getTemplateKind()) && !t.isCompanySuppliesCv());
-    if (!allowed) {
-      throw new AuthException(
-          HttpStatus.BAD_REQUEST,
-          "TEMPLATE_NOT_ALLOWED",
-          "Plantilla no disponible para este producto (o la suministra la compañía): " + kind);
-    }
-
-    MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
-    return new MinutaItem(draft.getId(), draft.getTemplateKind(), draft.getProductCode(), draft.getStatus());
-  }
-
   private WritingSnapshot toSnapshot(WritingFile file, UUID tenantId) {
     TitleStudy study =
         titleStudies
@@ -201,7 +160,11 @@ public class EscrituracionAbogadoService {
             .map(
                 m ->
                     new MinutaItem(
-                        m.getId(), m.getTemplateKind(), m.getProductCode(), m.getStatus()))
+                        m.getId(),
+                        m.getTemplateKind(),
+                        m.getProductCode(),
+                        m.getStatus(),
+                        m.getStoragePath() != null && !m.getStoragePath().isBlank()))
             .toList();
     return new WritingSnapshot(
         file.getId(),

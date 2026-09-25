@@ -10,10 +10,14 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.Product
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisResultDTO;
+import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
+import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +28,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -33,15 +36,18 @@ public class EscrituracionAbogadoController {
   private final ProductoBiessService productos;
   private final EscrituracionAbogadoService escritura;
   private final IaAnalysisService iaAnalysis;
+  private final MinutaGenerationService minutaGeneration;
 
   public EscrituracionAbogadoController(
       ProductoBiessService productos,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
           EscrituracionAbogadoService escritura,
-      IaAnalysisService iaAnalysis) {
+      IaAnalysisService iaAnalysis,
+      MinutaGenerationService minutaGeneration) {
     this.productos = productos;
     this.escritura = escritura;
     this.iaAnalysis = iaAnalysis;
+    this.minutaGeneration = minutaGeneration;
   }
 
   @GetMapping("/productos-biess")
@@ -91,12 +97,22 @@ public class EscrituracionAbogadoController {
   @ResponseStatus(HttpStatus.CREATED)
   public ResponseEntity<MinutaItem> crearMinuta(
       @PathVariable UUID id, @Valid @RequestBody(required = false) CrearMinutaRequest request) {
-    if (escritura == null) {
-      return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
-    }
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(
-            escritura.crearMinuta(
-                id, request == null ? new CrearMinutaRequest(null) : request));
+            minutaGeneration.generar(
+                id, request == null ? new CrearMinutaRequest(null, null) : request));
+  }
+
+  @GetMapping("/expedientes/{id}/escrituracion/minutas/{minutaId}/download")
+  public ResponseEntity<byte[]> descargarMinuta(
+      @PathVariable UUID id, @PathVariable UUID minutaId) {
+    var file = minutaGeneration.descargar(id, minutaId);
+    return ResponseEntity.ok()
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.fileName() + "\"")
+        .contentType(
+            MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+        .body(file.bytes());
   }
 }

@@ -30,6 +30,8 @@ spring:
       hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
+  minutas:
+    storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
   prompts:
     PROMPT_COMPRAVENTA_BIESS: |
       Eres un abogado notarial experto en escrituración BIESS en el cantón ${canton}.

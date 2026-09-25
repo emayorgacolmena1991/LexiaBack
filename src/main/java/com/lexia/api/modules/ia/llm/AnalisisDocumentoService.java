@@ -2,6 +2,7 @@ package com.lexia.api.modules.ia.llm;
 
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
+import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import org.springframework.util.StringUtils;
 
 /** Contrato común de extracción/cotejo con LLM. Gemini y Claude lo implementan. */
@@ -27,7 +28,15 @@ public interface AnalisisDocumentoService {
     return ExtraccionCotejo.error("Cotejo notarial no disponible para este proveedor LLM.");
   }
 
-  /** Mismo record que tenías dentro de GeminiAnalysisService, ahora compartido. */
+  /**
+   * Extracción estructurada para minuta vivienda hipotecada (tool use JSON estricto).
+   * Default: no soportado.
+   */
+  default ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
+    return ExtraccionMinutaVivienda.error(
+        "Extracción de minuta vivienda no disponible para este proveedor LLM.");
+  }
+
   record ExtraccionDocumento(
       DatosExtraidosDTO datos, String estado, String motivo, int camposDetectados) {
 
@@ -66,8 +75,19 @@ public interface AnalisisDocumentoService {
     }
 
     public static ExtraccionCotejo error(String motivo) {
-      return new ExtraccionCotejo(
-          ResultadoCotejoDTO.error(motivo), "ERROR", motivo);
+      return new ExtraccionCotejo(ResultadoCotejoDTO.error(motivo), "ERROR", motivo);
+    }
+  }
+
+  record ExtraccionMinutaVivienda(MinutaViviendaData data, String estado, String motivo) {
+
+    public static ExtraccionMinutaVivienda ok(MinutaViviendaData data) {
+      return new ExtraccionMinutaVivienda(
+          data == null ? new MinutaViviendaData() : data, "OK", null);
+    }
+
+    public static ExtraccionMinutaVivienda error(String motivo) {
+      return new ExtraccionMinutaVivienda(new MinutaViviendaData(), "ERROR", motivo);
     }
   }
 }

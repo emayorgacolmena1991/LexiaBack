@@ -33,10 +33,15 @@ public final class EscrituracionDtos {
   public record EstudioTituloResponse(
       java.util.UUID studyId, String status, String summary, List<String> openObservations) {}
 
-  public record CrearMinutaRequest(String templateKind) {}
+  @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+  public record CrearMinutaRequest(String templateKind, String sessionId) {}
 
   public record MinutaItem(
-      java.util.UUID id, String templateKind, String productCode, String status) {}
+      java.util.UUID id,
+      String templateKind,
+      String productCode,
+      String status,
+      boolean downloadable) {}
 
   public record WritingSnapshot(
       java.util.UUID writingFileId,
