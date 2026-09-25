@@ -1,8 +1,8 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.CargaDocumentoService;
-import com.lexia.api.modules.expedientes.CargaDocumentoService.StoredDoc;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchResponse;

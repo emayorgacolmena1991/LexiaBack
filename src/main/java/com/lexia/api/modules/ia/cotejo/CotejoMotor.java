@@ -1,6 +1,6 @@
 package com.lexia.api.modules.ia.cotejo;
 
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoFuente;
 import java.math.BigDecimal;

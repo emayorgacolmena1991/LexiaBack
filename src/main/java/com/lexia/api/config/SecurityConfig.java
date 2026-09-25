@@ -161,6 +161,8 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/actos-notariales/**"),
                         paths.matcher("/api/v1/productos-biess"),
                         paths.matcher("/api/v1/productos-biess/**"),
+                        paths.matcher("/api/v1/prompts"),
+                        paths.matcher("/api/v1/prompts/**"),
                         paths.matcher("/api/v1/expedientes"),
                         paths.matcher("/api/v1/expedientes/**"),
                         paths.matcher("/api/v1/ia/**"),
