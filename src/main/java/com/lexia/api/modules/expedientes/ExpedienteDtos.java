@@ -18,7 +18,10 @@ public final class ExpedienteDtos {
       @Size(max = 160) String stage,
       @Size(max = 16) String priority,
       @Size(max = 240) String participants,
-      @Size(max = 64) String operationTypeCode) {}
+      @Size(max = 64) String operationTypeCode,
+      @Size(max = 64) String productCode,
+      @Size(max = 32) String ingestionMode,
+      @Size(max = 64) String canton) {}
 
   public record StageAdvanceRequest(
       @Size(max = 16) String targetStageCode, @Size(max = 500) String comment) {}

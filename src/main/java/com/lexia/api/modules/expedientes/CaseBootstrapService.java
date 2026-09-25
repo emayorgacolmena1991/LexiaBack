@@ -27,6 +27,7 @@ public class CaseBootstrapService {
   private final TenantParameterService tenantParameters;
   private final SlaCalendarService slaCalendar;
   private final CollectionFileRepository collectionFiles;
+  private final WritingFileRepository writingFiles;
 
   public CaseBootstrapService(
       ProcessDefinitionRepository processDefinitions,
@@ -41,7 +42,8 @@ public class CaseBootstrapService {
       CaseActionRepository caseActions,
       TenantParameterService tenantParameters,
       SlaCalendarService slaCalendar,
-      CollectionFileRepository collectionFiles) {
+      CollectionFileRepository collectionFiles,
+      WritingFileRepository writingFiles) {
     this.processDefinitions = processDefinitions;
     this.stageDefs = stageDefs;
     this.caseStages = caseStages;
@@ -55,6 +57,7 @@ public class CaseBootstrapService {
     this.tenantParameters = tenantParameters;
     this.slaCalendar = slaCalendar;
     this.collectionFiles = collectionFiles;
+    this.writingFiles = writingFiles;
   }
 
   public void bootstrap(LegalCase legalCase, CreateCaseRequest request, UUID tenantId, UUID userId) {
@@ -69,8 +72,13 @@ public class CaseBootstrapService {
     }
 
     List<ProcessStageDef> definitions =
-        stageDefs.findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
+        stageDefs.findByProcessDefinitionIdAndTenantIdAndActiveTrueOrderBySortOrderAsc(
             process.getId(), tenantId);
+    if (definitions.isEmpty()) {
+      definitions =
+          stageDefs.findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
+              process.getId(), tenantId);
+    }
     int currentIndex = resolveStageIndex(request.stage(), definitions);
     Instant now = Instant.now();
     UUID currentStageId = null;
@@ -96,6 +104,28 @@ public class CaseBootstrapService {
     legalCase.attachProcess(process.getId(), currentStageId, process.getConfigVersion());
     if (request.operationTypeCode() != null && !request.operationTypeCode().isBlank()) {
       legalCase.setOperationTypeCode(request.operationTypeCode().trim().toUpperCase(Locale.ROOT));
+    }
+    if (request.productCode() != null && !request.productCode().isBlank()) {
+      legalCase.setProductCode(request.productCode().trim().toUpperCase(Locale.ROOT));
+    }
+    if (request.ingestionMode() != null && !request.ingestionMode().isBlank()) {
+      String mode = request.ingestionMode().trim().toUpperCase(Locale.ROOT);
+      if ("FISICO_ESCANEDO".equals(mode)) {
+        mode = "FISICO_ESCANEADO";
+      }
+      legalCase.setIngestionMode(mode);
+    }
+
+    if ("EJD".equals(legalCase.getCaseType())) {
+      WritingFile writing = WritingFile.create(tenantId, legalCase.getId());
+      if (legalCase.getProductCode() != null) {
+        String canton =
+            request.canton() == null || request.canton().isBlank()
+                ? "ALL"
+                : request.canton().trim().toUpperCase(Locale.ROOT);
+        writing.applyProduct(legalCase.getProductCode(), canton, legalCase.getIngestionMode());
+      }
+      writingFiles.save(writing);
     }
 
     for (GateDef gateDef :

@@ -29,6 +29,7 @@ class EjdValidationEvaluationServiceTest {
   @Mock private RuleDefRepository ruleDefs;
   @Mock private CaseValidationRepository caseValidations;
   @Mock private EjdOperationDocumentReqRepository operationDocumentReqs;
+  @Mock private DocumentRequirementRepository documentRequirements;
   @Mock private EcdDocumentReqRepository ecdDocumentReqs;
   @Mock private LegalDocumentRepository documents;
   @Mock private DocumentVersionRepository documentVersions;

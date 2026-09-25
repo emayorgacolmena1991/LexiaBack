@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -35,6 +36,15 @@ public class ProcessStageDef {
 
   @Column(name = "color_key", nullable = false, length = 16)
   private String colorKey = "blue";
+
+  @Column(nullable = false)
+  private boolean active = true;
+
+  @Column(name = "owner_actor", nullable = false, length = 32)
+  private String ownerActor = "ABOGADO";
+
+  @Column(name = "deprecated_at")
+  private Instant deprecatedAt;
 
   public UUID getId() {
     return id;
@@ -86,5 +96,17 @@ public class ProcessStageDef {
 
   public void setColorKey(String colorKey) {
     this.colorKey = colorKey;
+  }
+
+  public boolean isActive() {
+    return active;
+  }
+
+  public String getOwnerActor() {
+    return ownerActor;
+  }
+
+  public Instant getDeprecatedAt() {
+    return deprecatedAt;
   }
 }

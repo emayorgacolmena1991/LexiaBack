@@ -28,6 +28,7 @@ public class EjdValidationEvaluationService {
   private final RuleDefRepository ruleDefs;
   private final CaseValidationRepository caseValidations;
   private final EjdOperationDocumentReqRepository operationDocumentReqs;
+  private final DocumentRequirementRepository documentRequirements;
   private final EcdDocumentReqRepository ecdDocumentReqs;
   private final LegalDocumentRepository documents;
   private final DocumentVersionRepository documentVersions;
@@ -40,6 +41,7 @@ public class EjdValidationEvaluationService {
       RuleDefRepository ruleDefs,
       CaseValidationRepository caseValidations,
       EjdOperationDocumentReqRepository operationDocumentReqs,
+      DocumentRequirementRepository documentRequirements,
       EcdDocumentReqRepository ecdDocumentReqs,
       LegalDocumentRepository documents,
       DocumentVersionRepository documentVersions,
@@ -50,6 +52,7 @@ public class EjdValidationEvaluationService {
     this.ruleDefs = ruleDefs;
     this.caseValidations = caseValidations;
     this.operationDocumentReqs = operationDocumentReqs;
+    this.documentRequirements = documentRequirements;
     this.ecdDocumentReqs = ecdDocumentReqs;
     this.documents = documents;
     this.documentVersions = documentVersions;
@@ -132,29 +135,26 @@ public class EjdValidationEvaluationService {
       evaluateEcdExecutivePresence(legalCase, validation, rule);
       return;
     }
-    String operation = legalCase.getOperationTypeCode();
-    if (operation == null || operation.isBlank()) {
+
+    List<String> required = resolveRequiredDocumentCodes(legalCase);
+    String scopeLabel =
+        legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()
+            ? legalCase.getProductCode()
+            : legalCase.getOperationTypeCode();
+
+    if (scopeLabel == null || scopeLabel.isBlank()) {
       validation.applyEvaluation(
           "PENDING",
-          "Sin tipo de operación en el expediente; no se puede evaluar presencia documental.",
+          "Sin producto BIESS ni tipo de operación; no se puede evaluar presencia documental.",
           "v" + rule.getVersion());
       caseValidations.save(validation);
       return;
     }
 
-    String op = operation.trim().toUpperCase(Locale.ROOT);
-    List<String> required =
-        operationDocumentReqs
-            .findByTenantIdOrderByOperationCodeAscSortOrderAsc(legalCase.getTenantId())
-            .stream()
-            .filter(row -> op.equals(row.getOperationCode()))
-            .map(EjdOperationDocumentReq::getDocumentTypeCode)
-            .toList();
-
     if (required.isEmpty()) {
       validation.applyEvaluation(
           "OBSERVATION",
-          "No hay documentos requeridos configurados para la operación " + op + ".",
+          "No hay documentos requeridos configurados para " + scopeLabel + ".",
           "v" + rule.getVersion());
       caseValidations.save(validation);
       return;
@@ -176,14 +176,58 @@ public class EjdValidationEvaluationService {
 
     if (missing.isEmpty()) {
       validation.applyEvaluation(
-          "PASS", "Documentación requerida presente para " + op + ".", "v" + rule.getVersion());
+          "PASS",
+          "Documentación requerida presente para " + scopeLabel + ".",
+          "v" + rule.getVersion());
     } else {
       validation.applyEvaluation(
           "FAIL",
-          "Faltan tipos documentales: " + String.join(", ", missing) + ".",
+          "Faltan documentos para " + scopeLabel + ": " + String.join(", ", missing),
           "v" + rule.getVersion());
     }
     caseValidations.save(validation);
+  }
+
+  private List<String> resolveRequiredDocumentCodes(LegalCase legalCase) {
+    UUID tenantId = legalCase.getTenantId();
+    if (legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
+      String product = legalCase.getProductCode().trim().toUpperCase(Locale.ROOT);
+      List<String> fromProduct =
+          documentRequirements
+              .findByTenantIdAndProductCodeOrderBySortOrderAsc(tenantId, product)
+              .stream()
+              .filter(DocumentRequirement::isMandatory)
+              .filter(r -> "ALL".equalsIgnoreCase(r.getCanton()))
+              .map(DocumentRequirement::getDocumentTypeCode)
+              .map(c -> c.trim().toUpperCase(Locale.ROOT))
+              .distinct()
+              .toList();
+      if (!fromProduct.isEmpty()) {
+        return fromProduct;
+      }
+    }
+
+    String operation = legalCase.getOperationTypeCode();
+    if (operation == null || operation.isBlank()) {
+      return List.of();
+    }
+    String op = operation.trim().toUpperCase(Locale.ROOT);
+    List<EjdOperationDocumentReq> all =
+        operationDocumentReqs.findByTenantIdOrderByOperationCodeAscSortOrderAsc(tenantId);
+    List<String> active =
+        all.stream()
+            .filter(row -> !row.isDeprecated())
+            .filter(row -> op.equals(row.getOperationCode()))
+            .map(EjdOperationDocumentReq::getDocumentTypeCode)
+            .toList();
+    if (!active.isEmpty()) {
+      return active;
+    }
+    // Fallback legacy (filas deprecated conservadas)
+    return all.stream()
+        .filter(row -> op.equals(row.getOperationCode()))
+        .map(EjdOperationDocumentReq::getDocumentTypeCode)
+        .toList();
   }
 
   private void evaluateDocumentIntegrity(LegalCase legalCase, CaseValidation validation, RuleDef rule) {

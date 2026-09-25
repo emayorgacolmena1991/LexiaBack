@@ -332,7 +332,7 @@ public class CaseStageTransitionService {
       return "El expediente no tiene etapa actual.";
     }
     if (context.nextStageDef() == null) {
-      return "El expediente ya está en la última etapa.";
+      return "Flujo abogado completado (e4). Etapas notaría/municipio/registro pendientes de activar.";
     }
     boolean failValidation =
         caseValidations.findByCaseIdAndTenantIdOrderByCreatedAtAsc(
@@ -365,8 +365,13 @@ public class CaseStageTransitionService {
       return null;
     }
     List<ProcessStageDef> definitions =
-        stageDefs.findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
+        stageDefs.findByProcessDefinitionIdAndTenantIdAndActiveTrueOrderBySortOrderAsc(
             legalCase.getProcessDefinitionId(), tenantId);
+    if (definitions.isEmpty()) {
+      definitions =
+          stageDefs.findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
+              legalCase.getProcessDefinitionId(), tenantId);
+    }
     if (definitions.isEmpty()) {
       return null;
     }

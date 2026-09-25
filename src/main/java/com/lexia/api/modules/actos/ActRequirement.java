@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -30,8 +31,20 @@ public class ActRequirement {
   @Column(name = "sort_order", nullable = false)
   private int sortOrder;
 
+  /** Non-null = matriz legacy; usar {@code document_requirement}. */
+  @Column(name = "deprecated_at")
+  private Instant deprecatedAt;
+
   public UUID getId() {
     return id;
+  }
+
+  public Instant getDeprecatedAt() {
+    return deprecatedAt;
+  }
+
+  public boolean isDeprecated() {
+    return deprecatedAt != null;
   }
 
   public UUID getActItemId() {

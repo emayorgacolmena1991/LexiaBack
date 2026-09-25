@@ -10,5 +10,8 @@ public interface ProcessStageDefRepository extends JpaRepository<ProcessStageDef
   List<ProcessStageDef> findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
       UUID processDefinitionId, UUID tenantId);
 
+  List<ProcessStageDef> findByProcessDefinitionIdAndTenantIdAndActiveTrueOrderBySortOrderAsc(
+      UUID processDefinitionId, UUID tenantId);
+
   Optional<ProcessStageDef> findByIdAndTenantId(UUID id, UUID tenantId);
 }

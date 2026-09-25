@@ -50,6 +50,12 @@ public class LegalCase {
   @Column(name = "operation_type_code", length = 64)
   private String operationTypeCode;
 
+  @Column(name = "product_code", length = 64)
+  private String productCode;
+
+  @Column(name = "ingestion_mode", length = 32)
+  private String ingestionMode;
+
   @Column(name = "process_config_version")
   private Integer processConfigVersion;
 
@@ -182,6 +188,24 @@ public class LegalCase {
 
   public void setOperationTypeCode(String operationTypeCode) {
     this.operationTypeCode = operationTypeCode;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getProductCode() {
+    return productCode;
+  }
+
+  public void setProductCode(String productCode) {
+    this.productCode = productCode;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getIngestionMode() {
+    return ingestionMode;
+  }
+
+  public void setIngestionMode(String ingestionMode) {
+    this.ingestionMode = ingestionMode;
     this.updatedAt = Instant.now();
   }
 
