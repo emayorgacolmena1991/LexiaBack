@@ -114,14 +114,15 @@ public class ValidacionIaService {
 
   private record ProductContext(String productCode, String canton) {}
 
-  static String rebuildConsolidado(List<OcrFileResult> results) {
+  public static String rebuildConsolidado(List<OcrFileResult> results) {
     StringBuilder sb = new StringBuilder();
     for (OcrFileResult r : results) {
       if (r == null || !r.legible()) {
         continue;
       }
       String tipo = StringUtils.hasText(r.tipoDocumento()) ? r.tipoDocumento().trim() : "DOCUMENTO";
-      sb.append("=== DOCUMENTO: ").append(tipo).append(" ===\n");
+      // Formato nativo CotejoMotor.parseCache: "TIPO:\n:\n: texto"
+      sb.append(tipo).append(":\n:\n: ");
       sb.append(r.textoExtraido() == null ? "" : r.textoExtraido().trim());
       sb.append("\n\n");
     }

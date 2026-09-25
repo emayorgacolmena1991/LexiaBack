@@ -8,6 +8,8 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaI
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
+import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
+import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisResultDTO;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
@@ -30,13 +32,16 @@ public class EscrituracionAbogadoController {
 
   private final ProductoBiessService productos;
   private final EscrituracionAbogadoService escritura;
+  private final IaAnalysisService iaAnalysis;
 
   public EscrituracionAbogadoController(
       ProductoBiessService productos,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
-          EscrituracionAbogadoService escritura) {
+          EscrituracionAbogadoService escritura,
+      IaAnalysisService iaAnalysis) {
     this.productos = productos;
     this.escritura = escritura;
+    this.iaAnalysis = iaAnalysis;
   }
 
   @GetMapping("/productos-biess")
@@ -74,6 +79,12 @@ public class EscrituracionAbogadoController {
       return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
     }
     return ResponseEntity.ok(escritura.registrarEstudio(id, request));
+  }
+
+  @PostMapping("/expedientes/{id}/escrituracion/analizar-ia")
+  public ResponseEntity<AnalysisResultDTO> analizarIa(
+      @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
+    return ResponseEntity.ok(iaAnalysis.analizarExpedienteConPromptProducto(id, request));
   }
 
   @PostMapping("/expedientes/{id}/escrituracion/minutas")

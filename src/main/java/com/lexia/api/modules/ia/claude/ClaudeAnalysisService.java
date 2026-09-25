@@ -248,7 +248,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
    */
   private String resolverCotejoSystemPrompt(String productCode, String canton) {
     Map<String, String> vars =
-        Map.of("canton", StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL");
+        Map.of(
+            "canton", StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL",
+            "vigenciaDias", "60");
 
     if (StringUtils.hasText(productCode)) {
       try {
@@ -257,11 +259,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
                 .findPromptKeyByProductCode(productCode.trim())
                 .orElse(PROMPT_DEFAULT_KEY);
         String resolved = promptRegistryService.resolvePrompt(promptKey, vars);
-        if (StringUtils.hasText(resolved)
-            && !resolved.equals("Prompt por defecto no encontrado.")) {
-          return adaptToolName(resolved);
-        }
-        LOG.warn("Prompt vacío para product={} key={} → fallback COTEJO", productCode, promptKey);
+        return adaptToolName(resolved);
       } catch (Exception e) {
         LOG.warn(
             "product_prompt_map {}: usando COTEJO. {}", productCode, e.getMessage());
