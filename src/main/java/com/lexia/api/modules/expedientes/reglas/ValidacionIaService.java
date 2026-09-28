@@ -134,7 +134,6 @@ public class ValidacionIaService {
         continue;
       }
       String tipo = StringUtils.hasText(r.tipoDocumento()) ? r.tipoDocumento().trim() : "DOCUMENTO";
-      // Formato nativo CotejoMotor.parseCache: "TIPO:\n:\n: texto"
       sb.append(tipo).append(":\n:\n: ");
       sb.append(r.textoExtraido() == null ? "" : r.textoExtraido().trim());
       sb.append("\n\n");
