@@ -18,9 +18,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Lee una captura de la plataforma BIESS (Azure OCR → LLM) y devuelve solo monto, tasa, plazo y
- * apoderado. La captura no es un documento del expediente: no se persiste, no entra al cotejo ni a
- * la caché OCR de la sesión.
+ * Lee una captura de la plataforma BIESS (Azure OCR → LLM) y devuelve monto, tasa, plazo y
+ * apoderado. La captura no es un documento del expediente: no entra al cotejo ni a la caché OCR.
+ * Los cuatro campos sí se guardan en {@code extracted_data} (grupo {@code biess}) del expediente.
  */
 @Service
 public class CapturaBiessService {
@@ -38,16 +38,19 @@ public class CapturaBiessService {
   private final LegalCaseRepository legalCases;
   private final AzureOcrService ocr;
   private final AnalisisDocumentoService analisis;
+  private final DatosBiessStore datosBiess;
 
   public CapturaBiessService(
       AuthorizationService authorization,
       LegalCaseRepository legalCases,
       AzureOcrService ocr,
-      AnalisisDocumentoService analisis) {
+      AnalisisDocumentoService analisis,
+      DatosBiessStore datosBiess) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.ocr = ocr;
     this.analisis = analisis;
+    this.datosBiess = datosBiess;
   }
 
   public DatosBiessMinuta extraer(UUID caseId, MultipartFile file) {
@@ -88,8 +91,10 @@ public class CapturaBiessService {
               ? extraccion.motivo()
               : "No se pudieron extraer datos de la captura BIESS.");
     }
-    LOG.info("Captura BIESS extraída case={} bytes={}", caseId, file.getSize());
-    return extraccion.data();
+    DatosBiessMinuta data = extraccion.data() == null ? DatosBiessMinuta.empty() : extraccion.data();
+    datosBiess.guardar(tenantId, caseId, data);
+    LOG.info("Captura BIESS persistida case={} bytes={}", caseId, file.getSize());
+    return data;
   }
 
   private static String resolveMime(MultipartFile file) {

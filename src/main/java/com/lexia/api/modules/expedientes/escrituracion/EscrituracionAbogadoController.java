@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.escrituracion;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoMinutaBorrador;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
@@ -42,6 +43,7 @@ public class EscrituracionAbogadoController {
   private final IaAnalysisService iaAnalysis;
   private final MinutaGenerationService minutaGeneration;
   private final CapturaBiessService capturaBiess;
+  private final ExpedienteEstadoService estado;
 
   public EscrituracionAbogadoController(
       ProductoBiessService productos,
@@ -49,12 +51,14 @@ public class EscrituracionAbogadoController {
           EscrituracionAbogadoService escritura,
       IaAnalysisService iaAnalysis,
       MinutaGenerationService minutaGeneration,
-      CapturaBiessService capturaBiess) {
+      CapturaBiessService capturaBiess,
+      ExpedienteEstadoService estado) {
     this.productos = productos;
     this.escritura = escritura;
     this.iaAnalysis = iaAnalysis;
     this.minutaGeneration = minutaGeneration;
     this.capturaBiess = capturaBiess;
+    this.estado = estado;
   }
 
   @GetMapping("/productos-biess")
@@ -130,7 +134,15 @@ public class EscrituracionAbogadoController {
         .body(file.bytes());
   }
 
-  /** Captura BIESS: fuente externa al expediente; solo devuelve monto, tasa, plazo y apoderado. */
+  /**
+   * Estado persistido (BIESS, cotejo, minuta) para hidratar el FE sin re-ejecutar OCR ni LLM.
+   */
+  @GetMapping("/expedientes/{id}/escrituracion/minuta-borrador")
+  public EstadoMinutaBorrador minutaBorrador(@PathVariable UUID id) {
+    return estado.hidratar(id);
+  }
+
+  /** Captura BIESS: persiste monto, tasa, plazo y apoderado en extracted_data del expediente. */
   @PostMapping(
       value = "/expedientes/{id}/escrituracion/captura-biess",
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

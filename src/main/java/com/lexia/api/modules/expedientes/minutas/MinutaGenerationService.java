@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.minutas;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
@@ -53,6 +54,7 @@ public class MinutaGenerationService {
   private final AnalisisDocumentoService analisis;
   private final MinutaTemplateCatalog catalog;
   private final DocxMinutaRenderer renderer;
+  private final DatosBiessStore datosBiess;
   private final ObjectMapper objectMapper;
   private final Path storageDir;
 
@@ -66,6 +68,7 @@ public class MinutaGenerationService {
       AnalisisDocumentoService analisis,
       MinutaTemplateCatalog catalog,
       DocxMinutaRenderer renderer,
+      DatosBiessStore datosBiess,
       ObjectMapper objectMapper,
       @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir) {
     this.authorization = authorization;
@@ -77,6 +80,7 @@ public class MinutaGenerationService {
     this.analisis = analisis;
     this.catalog = catalog;
     this.renderer = renderer;
+    this.datosBiess = datosBiess;
     this.objectMapper = objectMapper;
     this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
   }
@@ -143,9 +147,10 @@ public class MinutaGenerationService {
     byte[] docx = renderer.renderVivienda(descriptor, extraccion.data());
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft.getId(), extraccion.data());
+    persistData(draft, extraccion.data());
     draft.markReady(stored.toString());
     minutaDrafts.save(draft);
+    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(extraccion.data()));
 
     LOG.info(
         "Minuta generada case={} product={} kind={} draft={} bytes={}",
@@ -162,7 +167,7 @@ public class MinutaGenerationService {
   public DatosBiessMinutaResponse obtenerDatosBiess(UUID caseId, UUID minutaId) {
     authorization.requirePermission("expedientes:caso:leer");
     MinutaDraft draft = requireDraft(caseId, minutaId);
-    MinutaViviendaData data = loadData(draft.getId());
+    MinutaViviendaData data = loadData(draft);
     return new DatosBiessMinutaResponse(
         toItem(draft), data == null ? DatosBiessMinuta.empty() : DatosBiessMinuta.from(data));
   }
@@ -180,7 +185,7 @@ public class MinutaGenerationService {
         catalog.require(draft.getProductCode(), draft.getTemplateKind());
     DatosBiessMinuta biess = datos == null ? DatosBiessMinuta.empty() : datos;
 
-    MinutaViviendaData data = loadData(draft.getId());
+    MinutaViviendaData data = loadData(draft);
     if (data == null) {
       // Borradores generados antes de guardar los datos: se reconstruyen una única vez.
       LOG.info("Minuta {} sin datos persistidos; se re-extraen desde OCR en caché", draft.getId());
@@ -199,9 +204,10 @@ public class MinutaGenerationService {
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft.getId(), data);
+    persistData(draft, data);
     draft.markReady(stored.toString());
     minutaDrafts.save(draft);
+    datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
 
     LOG.info(
         "Datos BIESS aplicados case={} draft={} kind={} bytes={}",
@@ -234,6 +240,11 @@ public class MinutaGenerationService {
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo de la minuta.");
     }
+  }
+
+  /** Payload en BD; si el borrador es anterior a V47, cae al JSON en disco. */
+  public MinutaViviendaData leerDatos(MinutaDraft draft) {
+    return loadData(draft);
   }
 
   public static MinutaItem toItem(MinutaDraft draft) {
@@ -287,24 +298,33 @@ public class MinutaGenerationService {
     return storageDir.resolve(draftId + "_datos.json");
   }
 
-  private void persistData(UUID draftId, MinutaViviendaData data) {
+  private void persistData(MinutaDraft draft, MinutaViviendaData data) {
     try {
-      Files.createDirectories(storageDir);
-      objectMapper.writeValue(dataPath(draftId).toFile(), data);
-    } catch (IOException e) {
+      draft.setPayload(objectMapper.writeValueAsString(data));
+    } catch (JsonProcessingException e) {
       throw ApiException.badRequest("No se pudieron guardar los datos de la minuta.");
     }
   }
 
-  private MinutaViviendaData loadData(UUID draftId) {
-    Path path = dataPath(draftId);
+  private MinutaViviendaData loadData(MinutaDraft draft) {
+    if (draft != null && StringUtils.hasText(draft.getPayload())) {
+      try {
+        return objectMapper.readValue(draft.getPayload(), MinutaViviendaData.class);
+      } catch (IOException e) {
+        LOG.warn("Payload de minuta ilegible draft={}: {}", draft.getId(), e.getMessage());
+      }
+    }
+    if (draft == null) {
+      return null;
+    }
+    Path path = dataPath(draft.getId());
     if (!Files.isRegularFile(path)) {
       return null;
     }
     try {
       return objectMapper.readValue(path.toFile(), MinutaViviendaData.class);
     } catch (IOException e) {
-      LOG.warn("Datos de minuta ilegibles draft={}: {}", draftId, e.getMessage());
+      LOG.warn("Datos de minuta ilegibles draft={}: {}", draft.getId(), e.getMessage());
       return null;
     }
   }

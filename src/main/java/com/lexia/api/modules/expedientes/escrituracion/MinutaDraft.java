@@ -6,6 +6,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(schema = "app", name = "minuta_draft")
@@ -33,6 +35,10 @@ public class MinutaDraft {
 
   @Column(name = "storage_path", length = 1024)
   private String storagePath;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  private String payload;
 
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
@@ -77,6 +83,15 @@ public class MinutaDraft {
 
   public String getStoragePath() {
     return storagePath;
+  }
+
+  public String getPayload() {
+    return payload;
+  }
+
+  public void setPayload(String payload) {
+    this.payload = payload;
+    this.updatedAt = Instant.now();
   }
 
   public UUID getTenantId() {
