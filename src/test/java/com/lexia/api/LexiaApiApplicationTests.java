@@ -2,7 +2,10 @@ package com.lexia.api;
 
 import com.lexia.api.modules.actos.ActoNotarialService;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
+import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
+import com.lexia.api.modules.expedientes.escrituracion.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisService;
+import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
@@ -29,6 +32,12 @@ class LexiaApiApplicationTests {
 	@MockitoBean private IaAnalysisService iaAnalysisService;
 
 	@MockitoBean private MinutaGenerationService minutaGenerationService;
+
+	@MockitoBean private CapturaBiessService capturaBiessService;
+
+	@MockitoBean private ExpedienteEstadoService expedienteEstadoService;
+
+	@MockitoBean private ExtractedDataRepository extractedDataRepository;
 
 	@Test
 	void contextLoads() {
