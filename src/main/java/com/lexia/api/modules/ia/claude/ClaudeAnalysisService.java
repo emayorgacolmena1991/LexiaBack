@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
@@ -38,6 +40,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String API_VERSION = "2023-06-01";
   private static final String EXPEDIENTE_TOOL_NAME = ProcesarExpedienteCompletoPayload.TOOL_NAME;
   private static final String MINUTA_VIVIENDA_TOOL_NAME = "registrar_datos_minuta_vivienda";
+  private static final String CAPTURA_BIESS_TOOL_NAME = "registrar_datos_captura_biess";
+  private static final int MAX_INTENTOS_CAPTURA_BIESS = 2;
+  private static final int MAX_CHARS_CAPTURA = 20_000;
   private static final int MAX_TOKENS = 4096;
   private static final int MAX_TOKENS_EXPEDIENTE = 8192;
   private static final int MAX_CHARS_OCR = 120_000;
@@ -205,6 +210,80 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     }
     return ExtraccionMinutaVivienda.error(
         "No se pudo extraer datos de minuta. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
+    String texto = textoCaptura == null ? "" : textoCaptura;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ExtraccionCapturaBiess.error("La captura BIESS no contiene texto legible.");
+    }
+    if (!isConfigured()) {
+      return ExtraccionCapturaBiess.error("ANTHROPIC_API_KEY no configurada.");
+    }
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_CAPTURA_BIESS; intento++) {
+        try {
+          HttpResponse<String> res = enviar(construirBodyCapturaBiess(modelo, texto));
+          int status = res.statusCode();
+          if (status == 200) {
+            DatosBiessMinuta data =
+                leerToolUse(objectMapper.readTree(res.body()), DatosBiessMinuta.class);
+            if (data != null) {
+              return ExtraccionCapturaBiess.ok(data);
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use captura BIESS";
+          } else if (status == 429 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+          } else {
+            return ExtraccionCapturaBiess.error(
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ExtraccionCapturaBiess.error("Extracción de captura BIESS interrumpida.");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude captura BIESS: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ExtraccionCapturaBiess.error(
+        "No se pudo leer la captura BIESS. Último: " + ultimoDiagnostico);
+  }
+
+  private String construirBodyCapturaBiess(String modelo, String texto) throws IOException {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    ArrayNode required = schema.putArray("required");
+    for (String field : new String[] {"monto", "tasa", "plazo", "apoderado"}) {
+      props
+          .putObject(field)
+          .put("type", "string")
+          .put("description", "Valor de " + field + " tal como aparece; cadena vacía si no está.");
+      required.add(field);
+    }
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", 512);
+    body.put("system", CAPTURA_BIESS_PROMPT);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", CAPTURA_BIESS_TOOL_NAME);
+    tool.put("description", "Registra monto, tasa, plazo y apoderado de la captura BIESS.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", CAPTURA_BIESS_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "<captura_biess_ocr>\n" + truncate(texto, MAX_CHARS_CAPTURA) + "\n</captura_biess_ocr>");
+    return objectMapper.writeValueAsString(body);
   }
 
   private String construirBodyMinutaVivienda(String modelo, String texto) throws IOException {

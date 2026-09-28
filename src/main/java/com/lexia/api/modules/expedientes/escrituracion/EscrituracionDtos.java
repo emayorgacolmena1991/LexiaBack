@@ -43,6 +43,9 @@ public final class EscrituracionDtos {
       String status,
       boolean downloadable) {}
 
+  public record DatosBiessMinutaResponse(
+      MinutaItem minuta, com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta datos) {}
+
   public record WritingSnapshot(
       java.util.UUID writingFileId,
       String productCode,

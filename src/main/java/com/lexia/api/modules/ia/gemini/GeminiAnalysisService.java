@@ -6,7 +6,9 @@ import com.google.genai.types.Content;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.util.List;
@@ -139,6 +141,60 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     }
     return ExtraccionExpedienteCompleto.error(
         "No se pudo procesar el expediente con Gemini. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
+    String texto = textoCaptura == null ? "" : textoCaptura;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ExtraccionCapturaBiess.error("La captura BIESS no contiene texto legible.");
+    }
+    if (!isConfigured()) {
+      return ExtraccionCapturaBiess.error("GEMINI_API_KEY no configurada.");
+    }
+    Content content =
+        Content.fromParts(
+            Part.fromText(
+                CAPTURA_BIESS_PROMPT
+                    + "\nResponde ÚNICAMENTE con JSON: "
+                    + "{\"monto\": \"\", \"tasa\": \"\", \"plazo\": \"\", \"apoderado\": \"\"}"),
+            Part.fromText(
+                "<captura_biess_ocr>\n" + truncate(texto, 20_000) + "\n</captura_biess_ocr>"));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0f)
+            .maxOutputTokens(512)
+            .build();
+
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= 2; intento++) {
+          try {
+            String raw = client.models.generateContent(modelo, content, config).text();
+            if (StringUtils.hasText(raw)) {
+              DatosBiessMinuta data =
+                  objectMapper.readValue(GeminiJsonSanitizer.limpiar(raw), DatosBiessMinuta.class);
+              return ExtraccionCapturaBiess.ok(data);
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+            sleepBackoff(intento, false);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini captura BIESS {}", ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
+          }
+        }
+      }
+    }
+    return ExtraccionCapturaBiess.error(
+        "No se pudo leer la captura BIESS. Último: " + ultimoDiagnostico);
   }
 
   private static String classifyError(String msg) {

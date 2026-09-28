@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.escrituracion;
 
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
@@ -10,6 +11,8 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.Product
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
+import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
@@ -28,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -37,17 +41,20 @@ public class EscrituracionAbogadoController {
   private final EscrituracionAbogadoService escritura;
   private final IaAnalysisService iaAnalysis;
   private final MinutaGenerationService minutaGeneration;
+  private final CapturaBiessService capturaBiess;
 
   public EscrituracionAbogadoController(
       ProductoBiessService productos,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
           EscrituracionAbogadoService escritura,
       IaAnalysisService iaAnalysis,
-      MinutaGenerationService minutaGeneration) {
+      MinutaGenerationService minutaGeneration,
+      CapturaBiessService capturaBiess) {
     this.productos = productos;
     this.escritura = escritura;
     this.iaAnalysis = iaAnalysis;
     this.minutaGeneration = minutaGeneration;
+    this.capturaBiess = capturaBiess;
   }
 
   @GetMapping("/productos-biess")
@@ -121,5 +128,28 @@ public class EscrituracionAbogadoController {
             MediaType.parseMediaType(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
         .body(file.bytes());
+  }
+
+  /** Captura BIESS: fuente externa al expediente; solo devuelve monto, tasa, plazo y apoderado. */
+  @PostMapping(
+      value = "/expedientes/{id}/escrituracion/captura-biess",
+      consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public DatosBiessMinuta extraerCapturaBiess(
+      @PathVariable UUID id, @RequestParam("file") MultipartFile file) {
+    return capturaBiess.extraer(id, file);
+  }
+
+  @GetMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/datos-biess")
+  public DatosBiessMinutaResponse obtenerDatosBiess(
+      @PathVariable UUID id, @PathVariable UUID minutaId) {
+    return minutaGeneration.obtenerDatosBiess(id, minutaId);
+  }
+
+  @PutMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/datos-biess")
+  public DatosBiessMinutaResponse aplicarDatosBiess(
+      @PathVariable UUID id,
+      @PathVariable UUID minutaId,
+      @RequestBody DatosBiessMinuta request) {
+    return minutaGeneration.aplicarDatosBiess(id, minutaId, request);
   }
 }

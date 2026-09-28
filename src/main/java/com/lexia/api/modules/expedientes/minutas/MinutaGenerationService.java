@@ -1,10 +1,12 @@
 package com.lexia.api.modules.expedientes.minutas;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraft;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraftRepository;
@@ -51,6 +53,7 @@ public class MinutaGenerationService {
   private final AnalisisDocumentoService analisis;
   private final MinutaTemplateCatalog catalog;
   private final DocxMinutaRenderer renderer;
+  private final ObjectMapper objectMapper;
   private final Path storageDir;
 
   public MinutaGenerationService(
@@ -63,6 +66,7 @@ public class MinutaGenerationService {
       AnalisisDocumentoService analisis,
       MinutaTemplateCatalog catalog,
       DocxMinutaRenderer renderer,
+      ObjectMapper objectMapper,
       @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir) {
     this.authorization = authorization;
     this.legalCases = legalCases;
@@ -73,6 +77,7 @@ public class MinutaGenerationService {
     this.analisis = analisis;
     this.catalog = catalog;
     this.renderer = renderer;
+    this.objectMapper = objectMapper;
     this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
   }
 
@@ -138,6 +143,7 @@ public class MinutaGenerationService {
     byte[] docx = renderer.renderVivienda(descriptor, extraccion.data());
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft.getId(), extraccion.data());
     draft.markReady(stored.toString());
     minutaDrafts.save(draft);
 
@@ -153,24 +159,63 @@ public class MinutaGenerationService {
   }
 
   @Transactional(readOnly = true)
+  public DatosBiessMinutaResponse obtenerDatosBiess(UUID caseId, UUID minutaId) {
+    authorization.requirePermission("expedientes:caso:leer");
+    MinutaDraft draft = requireDraft(caseId, minutaId);
+    MinutaViviendaData data = loadData(draft.getId());
+    return new DatosBiessMinutaResponse(
+        toItem(draft), data == null ? DatosBiessMinuta.empty() : DatosBiessMinuta.from(data));
+  }
+
+  /**
+   * Re-renderiza el borrador con los datos BIESS (captura o manuales) sobre los datos ya extraídos
+   * al generar la minuta. No vuelve a ejecutar OCR, cotejo ni validación del expediente.
+   */
+  @Transactional
+  public DatosBiessMinutaResponse aplicarDatosBiess(
+      UUID caseId, UUID minutaId, DatosBiessMinuta datos) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    MinutaDraft draft = requireDraft(caseId, minutaId);
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(draft.getProductCode(), draft.getTemplateKind());
+    DatosBiessMinuta biess = datos == null ? DatosBiessMinuta.empty() : datos;
+
+    MinutaViviendaData data = loadData(draft.getId());
+    if (data == null) {
+      // Borradores generados antes de guardar los datos: se reconstruyen una única vez.
+      LOG.info("Minuta {} sin datos persistidos; se re-extraen desde OCR en caché", draft.getId());
+      data = extraerDatosLegacy(caseId);
+    }
+
+    String montoAnterior = DatosBiessMinuta.from(data).monto();
+    data.setMontoPrestamo(biess.monto());
+    data.setTasaInteresInicial(biess.tasa());
+    data.setPlazoCredito(biess.plazo());
+    data.setApoderadoBiess(biess.apoderado());
+    if (!montoAnterior.equals(biess.monto())) {
+      // Evita un monto en letras que ya no coincide con la cifra; queda como dato pendiente.
+      data.setMontoPrestamoLetras("");
+    }
+
+    byte[] docx = renderer.renderVivienda(descriptor, data);
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft.getId(), data);
+    draft.markReady(stored.toString());
+    minutaDrafts.save(draft);
+
+    LOG.info(
+        "Datos BIESS aplicados case={} draft={} kind={} bytes={}",
+        caseId,
+        draft.getId(),
+        draft.getTemplateKind(),
+        docx.length);
+    return new DatosBiessMinutaResponse(toItem(draft), DatosBiessMinuta.from(data));
+  }
+
+  @Transactional(readOnly = true)
   public DownloadedMinuta descargar(UUID caseId, UUID minutaId) {
     authorization.requirePermission("expedientes:caso:leer");
-    UUID tenantId = AuthContext.require().tenantId();
-    legalCases
-        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
-        .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
-
-    WritingFile file =
-        writingFiles
-            .findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
-            .orElseThrow(() -> ApiException.notFound("Escrituración no encontrada."));
-
-    MinutaDraft draft =
-        minutaDrafts
-            .findById(minutaId)
-            .filter(m -> tenantId.equals(m.getTenantId()))
-            .filter(m -> file.getId().equals(m.getWritingFileId()))
-            .orElseThrow(() -> ApiException.notFound("Minuta no encontrada."));
+    MinutaDraft draft = requireDraft(caseId, minutaId);
 
     if (!StringUtils.hasText(draft.getStoragePath())) {
       throw ApiException.badRequest("La minuta aún no tiene archivo generado.");
@@ -201,6 +246,68 @@ public class MinutaGenerationService {
   }
 
   public record DownloadedMinuta(String fileName, byte[] bytes) {}
+
+  private MinutaDraft requireDraft(UUID caseId, UUID minutaId) {
+    UUID tenantId = AuthContext.require().tenantId();
+    legalCases
+        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
+        .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+
+    WritingFile file =
+        writingFiles
+            .findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
+            .orElseThrow(() -> ApiException.notFound("Escrituración no encontrada."));
+
+    return minutaDrafts
+        .findById(minutaId)
+        .filter(m -> tenantId.equals(m.getTenantId()))
+        .filter(m -> file.getId().equals(m.getWritingFileId()))
+        .orElseThrow(() -> ApiException.notFound("Minuta no encontrada."));
+  }
+
+  private MinutaViviendaData extraerDatosLegacy(UUID caseId) {
+    UUID tenantId = AuthContext.require().tenantId();
+    LegalCase legalCase =
+        legalCases
+            .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
+            .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    if (!analisis.isConfigured()) {
+      throw ApiException.badRequest("Proveedor LLM no configurado para generar minutas.");
+    }
+    ExtraccionMinutaVivienda extraccion =
+        analisis.extraerMinutaVivienda(loadOcrConsolidated(legalCase, null));
+    if (extraccion == null || "ERROR".equals(extraccion.estado())) {
+      throw ApiException.badRequest(
+          "Este borrador no tiene datos guardados. Genera la minuta nuevamente.");
+    }
+    return extraccion.data();
+  }
+
+  private Path dataPath(UUID draftId) {
+    return storageDir.resolve(draftId + "_datos.json");
+  }
+
+  private void persistData(UUID draftId, MinutaViviendaData data) {
+    try {
+      Files.createDirectories(storageDir);
+      objectMapper.writeValue(dataPath(draftId).toFile(), data);
+    } catch (IOException e) {
+      throw ApiException.badRequest("No se pudieron guardar los datos de la minuta.");
+    }
+  }
+
+  private MinutaViviendaData loadData(UUID draftId) {
+    Path path = dataPath(draftId);
+    if (!Files.isRegularFile(path)) {
+      return null;
+    }
+    try {
+      return objectMapper.readValue(path.toFile(), MinutaViviendaData.class);
+    } catch (IOException e) {
+      LOG.warn("Datos de minuta ilegibles draft={}: {}", draftId, e.getMessage());
+      return null;
+    }
+  }
 
   private Path persistDocx(UUID draftId, String fileName, byte[] bytes) {
     try {

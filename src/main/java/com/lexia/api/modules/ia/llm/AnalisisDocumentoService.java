@@ -1,6 +1,7 @@
 package com.lexia.api.modules.ia.llm;
 
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import org.springframework.util.StringUtils;
 
@@ -27,6 +28,41 @@ public interface AnalisisDocumentoService {
   default ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
     return ExtraccionMinutaVivienda.error(
         "Extracción de minuta vivienda no disponible para este proveedor LLM.");
+  }
+
+  /**
+   * Captura de pantalla de la plataforma BIESS (fuente externa al expediente): solo monto, tasa,
+   * plazo y apoderado. Default: no soportado.
+   */
+  default ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
+    return ExtraccionCapturaBiess.error(
+        "Extracción de captura BIESS no disponible para este proveedor LLM.");
+  }
+
+  /** Prompt compartido por los proveedores para la captura BIESS. */
+  String CAPTURA_BIESS_PROMPT =
+      """
+      Eres un asistente que lee capturas de pantalla de la plataforma del BIESS (Ecuador).
+      Del texto OCR de la captura extrae ÚNICAMENTE estos cuatro datos del crédito hipotecario:
+      - monto: monto del préstamo aprobado, tal como aparece (ej. $85,000.00).
+      - tasa: tasa de interés nominal anual (ej. 7.25%).
+      - plazo: plazo del crédito con su unidad (ej. 20 años o 240 meses).
+      - apoderado: nombre completo del apoderado especial del BIESS.
+      REGLAS:
+      1. Si un dato no aparece o es ilegible, devuelve cadena vacía para ese campo.
+      2. No inventes ni calcules valores. No extraigas otros campos.
+      """;
+
+  record ExtraccionCapturaBiess(DatosBiessMinuta data, String estado, String motivo) {
+
+    public static ExtraccionCapturaBiess ok(DatosBiessMinuta data) {
+      return new ExtraccionCapturaBiess(
+          data == null ? DatosBiessMinuta.empty() : data, "OK", null);
+    }
+
+    public static ExtraccionCapturaBiess error(String motivo) {
+      return new ExtraccionCapturaBiess(DatosBiessMinuta.empty(), "ERROR", motivo);
+    }
   }
 
   record ExtraccionDocumento(
