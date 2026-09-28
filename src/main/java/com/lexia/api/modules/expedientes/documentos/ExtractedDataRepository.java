@@ -9,6 +9,9 @@ public interface ExtractedDataRepository extends JpaRepository<ExtractedData, UU
 
   List<ExtractedData> findByCaseIdAndTenantIdOrderByFieldLabelAsc(UUID caseId, UUID tenantId);
 
+  List<ExtractedData> findByCaseIdAndTenantIdAndFieldGroupOrderByFieldLabelAsc(
+      UUID caseId, UUID tenantId, String fieldGroup);
+
   void deleteByCaseIdAndTenantIdAndFieldGroupIn(
       UUID caseId, UUID tenantId, Collection<String> fieldGroups);
 }

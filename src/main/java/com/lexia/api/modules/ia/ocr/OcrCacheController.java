@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** E03/E04: caché consolidada de textos OCR + cotejo IA por sesión. */
@@ -35,9 +36,13 @@ public class OcrCacheController {
     return batchService.getConsolidated(sessionId);
   }
 
-  /** E04 — lee E03 y coteja campos entre documentos (Bearer/cookie requeridos). */
+  /**
+   * E04 — coteja con la extracción persistida por analizar-ia (sin LLM). {@code caseId} es el
+   * expediente cuando difiere del borrador {@code sessionId}.
+   */
   @GetMapping("/cotejo/{sessionId}")
-  public CotejoResponse cotejo(@PathVariable String sessionId) {
-    return cotejoService.cotejar(sessionId);
+  public CotejoResponse cotejo(
+      @PathVariable String sessionId, @RequestParam(required = false) String caseId) {
+    return cotejoService.cotejar(sessionId, caseId);
   }
 }

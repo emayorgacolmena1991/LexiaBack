@@ -17,6 +17,8 @@ import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Dictamen;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Inmueble;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Observacion;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Persona;
+import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore;
+import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
 import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto;
 import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto.DocOcr;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
@@ -36,8 +38,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 /**
- * Una llamada LLM por expediente: OCR Azure ya guardado → texto {@code <documento id>} → Claude.
- * Sin unir PDFs.
+ * Una llamada LLM por expediente: OCR Azure ya guardado → texto {@code <documento id>} → LLM.
+ * La misma respuesta alimenta el cotejo ({@code extracted_data} grupo documento), los datos
+ * consolidados y el dictamen ({@code title_study}). Sin unir PDFs.
  */
 @Service
 public class IaAnalysisService {
@@ -55,6 +58,7 @@ public class IaAnalysisService {
   private final DocumentoTextoOcrRepository documentoTextoOcr;
   private final OcrSessionCacheService ocrCache;
   private final ExpedienteCompletoLlmService llm;
+  private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
 
   public IaAnalysisService(
@@ -66,6 +70,7 @@ public class IaAnalysisService {
       DocumentoTextoOcrRepository documentoTextoOcr,
       OcrSessionCacheService ocrCache,
       ExpedienteCompletoLlmService llm,
+      DocumentosExtraidosStore documentos,
       AuthorizationService authorization) {
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -75,6 +80,7 @@ public class IaAnalysisService {
     this.documentoTextoOcr = documentoTextoOcr;
     this.ocrCache = ocrCache;
     this.llm = llm;
+    this.documentos = documentos;
     this.authorization = authorization;
   }
 
@@ -110,7 +116,7 @@ public class IaAnalysisService {
 
     String canton = resolveCanton(writingFile);
     String ocrText = loadOcrMarcado(legalCase, request);
-    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton, force);
+    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
       throw ApiException.badRequest(
@@ -119,11 +125,18 @@ public class IaAnalysisService {
               : "No se obtuvo resultado de análisis IA.");
     }
 
+    List<DocumentoExtraidoDTO> documentosExtraidos =
+        documentos.guardar(
+            tenantId,
+            expedienteId,
+            ext.payload().documentosExtraidos(),
+            OcrExpedienteTexto.cabeceras(ocrText));
     ProcesarExpedienteCompletoResult response =
         new ProcesarExpedienteCompletoResult(
             expedienteId,
             productCode,
             ejecucion.promptKey(),
+            documentosExtraidos,
             ext.payload().datosExtraidos(),
             ext.payload().dictamen());
 
@@ -137,11 +150,11 @@ public class IaAnalysisService {
     }
 
     LOG.info(
-        "analizar-ia id={} product={} key={} cache={} estado={}",
+        "analizar-ia id={} product={} key={} documentos={} estado={}",
         expedienteId,
         productCode,
         ejecucion.promptKey(),
-        ejecucion.desdeCache(),
+        documentosExtraidos.size(),
         response.dictamen() == null ? null : response.dictamen().estado());
     return response;
   }
@@ -163,6 +176,7 @@ public class IaAnalysisService {
                   expedienteId,
                   productCode,
                   null,
+                  documentos.cargar(expedienteId, tenantId),
                   loadDatos(expedienteId, tenantId),
                   new Dictamen(study.getStatus(), study.getSummary(), obs));
             })

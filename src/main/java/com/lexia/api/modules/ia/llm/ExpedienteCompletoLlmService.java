@@ -4,17 +4,13 @@ import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.prompt.ProductPromptMapRepository;
 import com.lexia.api.modules.ia.prompt.PromptRegistryService;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Una llamada LLM por hash de OCR + producto. {@code analizar-ia} y {@code validar-ia} comparten
- * esta caché para no repetir la extracción.
+ * Resuelve el prompt del producto y ejecuta la única llamada LLM del expediente. Sin caché en
+ * memoria: la reutilización sale de lo persistido en BD ({@code title_study}/{@code extracted_data}).
  */
 @Service
 public class ExpedienteCompletoLlmService {
@@ -24,8 +20,6 @@ public class ExpedienteCompletoLlmService {
   private final AnalisisDocumentoService analisis;
   private final ProductPromptMapRepository productPromptMapRepository;
   private final PromptRegistryService promptRegistryService;
-  private final ConcurrentHashMap<String, ExtraccionExpedienteCompleto> cache =
-      new ConcurrentHashMap<>();
 
   public ExpedienteCompletoLlmService(
       AnalisisDocumentoService analisis,
@@ -36,8 +30,7 @@ public class ExpedienteCompletoLlmService {
     this.promptRegistryService = promptRegistryService;
   }
 
-  public Ejecucion ejecutar(
-      String ocrMarcado, String productCode, String canton, boolean force) {
+  public Ejecucion ejecutar(String ocrMarcado, String productCode, String canton) {
     if (!StringUtils.hasText(ocrMarcado)) {
       throw ApiException.badRequest("Sin texto OCR para procesar el expediente.");
     }
@@ -53,34 +46,11 @@ public class ExpedienteCompletoLlmService {
                 .orElse(DEFAULT_PROMPT_KEY)
             : DEFAULT_PROMPT_KEY;
     String cantonResuelto = StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL";
-    String cacheKey = promptKey + "|" + code + "|" + sha(ocrMarcado);
-    if (!force) {
-      ExtraccionExpedienteCompleto hit = cache.get(cacheKey);
-      if (hit != null && "OK".equals(hit.estado())) {
-        return new Ejecucion(promptKey, hit, true);
-      }
-    }
-
     String prompt =
         promptRegistryService.resolvePrompt(
             promptKey, Map.of("canton", cantonResuelto, "vigenciaDias", "60"));
-    ExtraccionExpedienteCompleto ext = analisis.procesarExpedienteCompleto(ocrMarcado, prompt);
-    if (ext != null && "OK".equals(ext.estado())) {
-      cache.put(cacheKey, ext);
-    }
-    return new Ejecucion(promptKey, ext, false);
+    return new Ejecucion(promptKey, analisis.procesarExpedienteCompleto(ocrMarcado, prompt));
   }
 
-  private static String sha(String text) {
-    try {
-      byte[] dig =
-          MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(dig);
-    } catch (Exception e) {
-      return Integer.toHexString(text.hashCode());
-    }
-  }
-
-  public record Ejecucion(
-      String promptKey, ExtraccionExpedienteCompleto extraccion, boolean desdeCache) {}
+  public record Ejecucion(String promptKey, ExtraccionExpedienteCompleto extraccion) {}
 }

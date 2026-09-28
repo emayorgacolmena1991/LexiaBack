@@ -6,9 +6,7 @@ import com.google.genai.types.Content;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.util.List;
@@ -21,7 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Extracción dinámica con Gemini. Reintenta modelos free-tier con backoff ante 429/503.
+ * Análisis de expediente con Gemini: una sola llamada por expediente (extracción por documento +
+ * consolidado + dictamen). Reintenta modelos free-tier con backoff ante 429/503.
  */
 @Service
 @ConditionalOnProperty(name = "llm.provider", havingValue = "gemini", matchIfMissing = true)
@@ -37,7 +36,21 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
           );
 
   private static final int MAX_INTENTOS_POR_MODELO = 4;
+  private static final int MAX_OUTPUT_TOKENS = 8192;
   private static final long BACKOFF_BASE_MS = 1500L;
+
+  private static final String FORMATO_JSON =
+      """
+
+      Responde ÚNICAMENTE con un objeto JSON válido, sin markdown:
+      {"documentosExtraidos": [{"documentoId": "...", "tipoDocumento": "...", "resumen": "...",
+        "datosClave": {}}],
+       "datosConsolidados": {"comprador": {"nombres": "", "cedula": "", "estadoCivil": ""},
+        "vendedor": {"nombres": "", "cedula": "", "estadoCivil": ""},
+        "inmueble": {"claveCatastral": "", "linderos": "", "avaluo": 0}},
+       "dictamen": {"estado": "APPROVED|WITH_OBSERVATIONS|REJECTED", "resumen": "",
+        "observaciones": [{"codigo": "", "severidad": "HIGH|MEDIUM|LOW", "mensaje": ""}]}}
+      """;
 
   private final String apiKey;
   private final ObjectMapper objectMapper;
@@ -54,97 +67,6 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
-  public ExtraccionDocumento extraerDatosClave(String textoOcr, String tipoDocumento) {
-    String tipo = StringUtils.hasText(tipoDocumento) ? tipoDocumento : "DOCUMENTO";
-    String texto = textoOcr == null ? "" : textoOcr;
-
-    if (!StringUtils.hasText(texto.trim())) {
-      return ExtraccionDocumento.error("Sin texto OCR para extraer datos.");
-    }
-    if (!isConfigured()) {
-      return ExtraccionDocumento.error("GEMINI_API_KEY no configurada.");
-    }
-
-    String prompt =
-        "Analiza el siguiente texto OCR perteneciente a un documento de tipo '"
-            + tipo
-            + "'.\n"
-            + "Identifica y extrae los datos más relevantes e importantes del documento.\n\n"
-            + "REGLAS DE SALIDA:\n"
-            + "1. Responde ÚNICAMENTE con un objeto JSON válido.\n"
-            + "2. Estructura el JSON con los siguientes campos:\n"
-            + "   - \"tipoDocumento\": Nombre exacto o identificado del documento.\n"
-            + "   - \"resumen\": Una breve descripción de 1 a 2 oraciones del contenido del documento.\n"
-            + "   - \"datosClave\": Un objeto JSON con los pares clave-valor más importantes "
-            + "encontrados (ej: nombres, identificaciones, fechas, montos, números de registro, etc.).\n"
-            + "3. No agregues comillas triples de markdown (```json), ni explicaciones adicionales.\n\n"
-            + "TEXTO OCR:\n"
-            + truncate(texto, 120_000);
-
-    Content content = Content.fromParts(Part.fromText(prompt));
-    GenerateContentConfig config =
-        GenerateContentConfig.builder()
-            .responseMimeType("application/json")
-            .temperature(0.1f)
-            .build();
-
-    String ultimoDiagnostico = "sin respuesta";
-
-    try (Client client = Client.builder().apiKey(apiKey).build()) {
-      for (String modelo : MODELOS_FREE) {
-        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
-          try {
-            LOG.info(
-                "Gemini free: modelo={} intento={}/{}", modelo, intento, MAX_INTENTOS_POR_MODELO);
-            GenerateContentResponse response =
-                client.models.generateContent(modelo, content, config);
-            String raw = response.text();
-
-            if (!StringUtils.hasText(raw)) {
-              ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
-              LOG.warn(ultimoDiagnostico);
-              sleepBackoff(intento, false);
-              continue;
-            }
-
-            String jsonLimpio = GeminiJsonSanitizer.limpiar(raw);
-            try {
-              DatosExtraidosDTO datos =
-                  objectMapper.readValue(jsonLimpio, DatosExtraidosDTO.class);
-              LOG.info("Gemini OK con modelo={}", modelo);
-              return ExtraccionDocumento.fromDatos(datos);
-            } catch (Exception parseEx) {
-              ultimoDiagnostico =
-                  "modelo=" + modelo + " JSON inválido: " + parseEx.getMessage();
-              LOG.warn("{} | preview={}", ultimoDiagnostico, truncate(raw, 200));
-              // Reintentar mismo modelo: a veces el free tier recorta la salida
-              sleepBackoff(intento, false);
-            }
-          } catch (Exception e) {
-            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            String kind = classifyError(msg);
-            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
-            LOG.warn("Fallo Gemini {}: {}", kind, ultimoDiagnostico);
-
-            if ("NOT_FOUND".equals(kind)) {
-              // Modelo no existe en este proyecto → siguiente modelo
-              break;
-            }
-            if ("RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind)) {
-              sleepBackoff(intento, true);
-              continue;
-            }
-            sleepBackoff(intento, false);
-          }
-        }
-      }
-    }
-
-    return ExtraccionDocumento.error(
-        "No se pudieron extraer datos con Gemini (free). Último: " + ultimoDiagnostico);
-  }
-
-  @Override
   public ExtraccionExpedienteCompleto procesarExpedienteCompleto(
       String ocrMarcado, String systemPrompt) {
     String texto = ocrMarcado == null ? "" : ocrMarcado;
@@ -156,7 +78,8 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     }
     String system =
         (StringUtils.hasText(systemPrompt) ? systemPrompt : "Procesa el expediente notarial.")
-            + "\nResponde ÚNICAMENTE con un objeto JSON {datosExtraidos, dictamen}. Sin markdown.";
+            + ProcesarExpedienteCompletoPayload.REGLAS_SALIDA
+            + FORMATO_JSON;
     String marcado =
         texto.contains("<expediente_ocr>")
             ? texto
@@ -165,7 +88,11 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         Content.fromParts(
             Part.fromText(system), Part.fromText(truncate(marcado, 120_000)));
     GenerateContentConfig config =
-        GenerateContentConfig.builder().responseMimeType("application/json").temperature(0.1f).build();
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0.1f)
+            .maxOutputTokens(MAX_OUTPUT_TOKENS)
+            .build();
 
     String ultimoDiagnostico = "sin respuesta";
     try (Client client = Client.builder().apiKey(apiKey).build()) {
@@ -189,15 +116,23 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
                 objectMapper.readValue(
                     GeminiJsonSanitizer.limpiar(raw), ProcesarExpedienteCompletoPayload.class);
             if (payload != null && payload.datosExtraidos() != null && payload.dictamen() != null) {
+              LOG.info(
+                  "Gemini expediente completo OK modelo={} documentos={}",
+                  modelo,
+                  payload.documentosExtraidos().size());
               return ExtraccionExpedienteCompleto.ok(payload);
             }
-            ultimoDiagnostico = "modelo=" + modelo + " JSON sin datosExtraidos/dictamen";
+            ultimoDiagnostico = "modelo=" + modelo + " JSON sin datosConsolidados/dictamen";
             sleepBackoff(intento, false);
           } catch (Exception e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
-            LOG.warn("Fallo Gemini expediente completo: {}", ultimoDiagnostico);
-            sleepBackoff(intento, false);
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini expediente completo {}: {}", kind, ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
           }
         }
       }

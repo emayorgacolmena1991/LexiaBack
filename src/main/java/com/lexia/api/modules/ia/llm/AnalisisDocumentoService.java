@@ -9,11 +9,10 @@ public interface AnalisisDocumentoService {
 
   boolean isConfigured();
 
-  ExtraccionDocumento extraerDatosClave(String textoOcr, String tipoDocumento);
-
   /**
-   * Una sola llamada: variables de minuta + dictamen. El prompt ya viene resuelto.
-   * El OCR llega marcado por archivo ({@code <documento id="...">}), sin PDF unificado.
+   * Una sola llamada por expediente: extracción por documento (cotejo) + datos consolidados +
+   * dictamen. El prompt ya viene resuelto. El OCR llega marcado por archivo
+   * ({@code <documento id="...">}), sin PDF unificado.
    */
   default ExtraccionExpedienteCompleto procesarExpedienteCompleto(
       String ocrMarcado, String systemPrompt) {
@@ -63,7 +62,7 @@ public interface AnalisisDocumentoService {
 
     public static ExtraccionExpedienteCompleto ok(ProcesarExpedienteCompletoPayload payload) {
       if (payload == null || payload.datosExtraidos() == null || payload.dictamen() == null) {
-        return error("Respuesta sin datosExtraidos o dictamen.");
+        return error("Respuesta sin datosConsolidados o dictamen.");
       }
       String estado = payload.dictamen().estado() == null ? "" : payload.dictamen().estado().trim();
       String normalizado =
@@ -74,6 +73,7 @@ public interface AnalisisDocumentoService {
                   : "WITH_OBSERVATIONS";
       ProcesarExpedienteCompletoPayload listo =
           new ProcesarExpedienteCompletoPayload(
+              payload.documentosExtraidos(),
               payload.datosExtraidos(),
               new ProcesarExpedienteCompletoPayload.Dictamen(
                   normalizado, payload.dictamen().resumen(), payload.dictamen().observaciones()));

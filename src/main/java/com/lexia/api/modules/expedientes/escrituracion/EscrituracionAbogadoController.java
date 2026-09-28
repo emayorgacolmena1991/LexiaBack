@@ -93,7 +93,7 @@ public class EscrituracionAbogadoController {
     return ResponseEntity.ok(iaAnalysis.analizarExpedienteConPromptProducto(id, request));
   }
 
-  /** Mismo single-pass que analizar-ia. La caché evita una segunda llamada al LLM. */
+  /** Mismo single-pass que analizar-ia. Sin forceReanalysis devuelve lo persistido en BD. */
   @PostMapping("/expedientes/{id}/procesar-completo")
   public ResponseEntity<ProcesarExpedienteCompletoResult> procesarCompleto(
       @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {

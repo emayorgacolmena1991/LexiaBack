@@ -1,7 +1,10 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.util.StringUtils;
 
 /**
@@ -96,11 +99,41 @@ public final class OcrExpedienteTexto {
         + "\n</documento>\n</expediente_ocr>";
   }
 
+  /** Cabeceras {@code <documento id tipo nombre>} del texto marcado, en orden (sin texto). */
+  public static List<DocOcr> cabeceras(String marcado) {
+    List<DocOcr> out = new ArrayList<>();
+    if (!StringUtils.hasText(marcado)) {
+      return out;
+    }
+    Matcher m = CABECERA.matcher(marcado);
+    while (m.find()) {
+      String attrs = m.group(1);
+      out.add(
+          new DocOcr(atributo(attrs, "id"), atributo(attrs, "tipo"), atributo(attrs, "nombre"), null));
+    }
+    return out;
+  }
+
+  private static final Pattern CABECERA = Pattern.compile("<documento\\b([^>]*)>");
+
+  private static String atributo(String attrs, String nombre) {
+    Matcher m = Pattern.compile("\\b" + nombre + "=\"([^\"]*)\"").matcher(attrs);
+    return m.find() ? unxml(m.group(1)) : null;
+  }
+
   static String xml(String value) {
     return value
         .replace("&", "&amp;")
         .replace("\"", "&quot;")
         .replace("<", "&lt;")
         .replace(">", "&gt;");
+  }
+
+  private static String unxml(String value) {
+    return value
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
   }
 }
