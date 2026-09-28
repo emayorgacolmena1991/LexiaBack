@@ -15,9 +15,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -37,18 +40,21 @@ public class ProcesamientoDocumentalService {
   private final CargaDocumentoService cargaDocumentoService;
   private final TenantGovernanceService governance;
   private final ObjectMapper objectMapper;
+  private final Executor ocrExecutor;
 
   public ProcesamientoDocumentalService(
       AzureOcrService azureOcrService,
       AnalisisDocumentoService analisisDocumentoService,
       CargaDocumentoService cargaDocumentoService,
       @Autowired(required = false) TenantGovernanceService governance,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      @Qualifier("ocrExecutor") Executor ocrExecutor) {
     this.azureOcrService = azureOcrService;
     this.analisisDocumentoService = analisisDocumentoService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.governance = governance;
     this.objectMapper = objectMapper;
+    this.ocrExecutor = ocrExecutor;
   }
 
   @Async
@@ -96,70 +102,27 @@ public class ProcesamientoDocumentalService {
     int legibles = 0;
     boolean huboErrorGrave = false;
 
-    int idx = 0;
-    for (StoredDoc doc : documentos) {
-      idx++;
-      String tipo = doc.codigoTipoDocumento();
-      String nombre = doc.nombreOriginal();
-      String textoOcr = null;
-      try {
-        LOG.info(
-            "IA doc {}/{} id={} nombre={}",
-            idx,
-            documentos.size(),
-            doc.idDocumento(),
-            nombre);
+    int totalDocs = documentos.size();
+    List<CompletableFuture<DocOutcome>> futures = new ArrayList<>(totalDocs);
+    for (int i = 0; i < totalDocs; i++) {
+      StoredDoc doc = documentos.get(i);
+      int idx = i + 1;
+      boolean demoMode = demo;
+      futures.add(
+          CompletableFuture.supplyAsync(
+              () -> procesarUnDocumento(idExpediente, doc, idx, totalDocs, demoMode),
+              ocrExecutor));
+    }
 
-        Evaluacion evaluacion = evaluarDocumento(idExpediente, doc, tipo, demo);
-        textoOcr = evaluacion.textoOcr();
-        ExtraccionDocumento extraccion = evaluacion.extraccion();
-        String analisisJson = objectMapper.writeValueAsString(extraccion.datos());
-        guardarMemoria(
-            idExpediente,
-            doc,
-            evaluacion.textoOcr(),
-            analisisJson,
-            extraccion.estado(),
-            extraccion.motivo(),
-            extraccion.camposDetectados());
-
-        resultados.add(
-            new PrevalidacionDocumentoDTO(
-                doc.idDocumento(),
-                nombre,
-                tipo,
-                extraccion.estado(),
-                extraccion.motivo()));
-        sumaCampos += extraccion.camposDetectados();
-        if ("LEGIBLE".equals(extraccion.estado())) {
-          legibles++;
-        }
-        if ("ERROR".equals(extraccion.estado())) {
-          huboErrorGrave = true;
-        }
-
-        cargaDocumentoService.actualizarDocPrevalidacion(
-            idExpediente,
-            doc.idDocumento(),
-            extraccion.estado(),
-            extraccion.motivo(),
-            extraccion.camposDetectados());
-      } catch (Exception e) {
-        LOG.warn(
-            "Error IA doc={} exp={} ({}/{}): {}",
-            doc.idDocumento(),
-            idExpediente,
-            idx,
-            documentos.size(),
-            e.getMessage());
+    for (CompletableFuture<DocOutcome> future : futures) {
+      DocOutcome outcome = future.join();
+      resultados.add(outcome.prevalidacion());
+      sumaCampos += outcome.campos();
+      if ("LEGIBLE".equals(outcome.prevalidacion().estado())) {
+        legibles++;
+      }
+      if (outcome.errorGrave()) {
         huboErrorGrave = true;
-        String motivo = "Fallo OCR/análisis: " + safeMsg(e);
-        // Conserva OCR si ya existía; Claude no llegó o falló después.
-        guardarMemoria(idExpediente, doc, textoOcr, null, "ERROR", motivo, 0);
-        resultados.add(
-            new PrevalidacionDocumentoDTO(doc.idDocumento(), nombre, tipo, "ERROR", motivo));
-        cargaDocumentoService.actualizarDocPrevalidacion(
-            idExpediente, doc.idDocumento(), "ERROR", motivo, 0);
       }
     }
 
@@ -169,6 +132,56 @@ public class ProcesamientoDocumentalService {
         total == 0 ? "ERROR" : (huboErrorGrave && legibles == 0 ? "ERROR" : "COMPLETADA");
     cargaDocumentoService.completarPrevalidacion(
         idExpediente, estadoGlobal, confianza, legibles, total, resultados);
+  }
+
+  private DocOutcome procesarUnDocumento(
+      String idExpediente, StoredDoc doc, int idx, int total, boolean demo) {
+    String tipo = doc.codigoTipoDocumento();
+    String nombre = doc.nombreOriginal();
+    String textoOcr = null;
+    try {
+      LOG.info(
+          "IA doc {}/{} id={} nombre={}", idx, total, doc.idDocumento(), nombre);
+
+      Evaluacion evaluacion = evaluarDocumento(idExpediente, doc, tipo, demo);
+      textoOcr = evaluacion.textoOcr();
+      ExtraccionDocumento extraccion = evaluacion.extraccion();
+      String analisisJson = objectMapper.writeValueAsString(extraccion.datos());
+      guardarMemoria(
+          idExpediente,
+          doc,
+          evaluacion.textoOcr(),
+          analisisJson,
+          extraccion.estado(),
+          extraccion.motivo(),
+          extraccion.camposDetectados());
+
+      PrevalidacionDocumentoDTO row =
+          new PrevalidacionDocumentoDTO(
+              doc.idDocumento(), nombre, tipo, extraccion.estado(), extraccion.motivo());
+      cargaDocumentoService.actualizarDocPrevalidacion(
+          idExpediente,
+          doc.idDocumento(),
+          extraccion.estado(),
+          extraccion.motivo(),
+          extraccion.camposDetectados());
+      return new DocOutcome(row, extraccion.camposDetectados(), "ERROR".equals(extraccion.estado()));
+    } catch (Exception e) {
+      LOG.warn(
+          "Error IA doc={} exp={} ({}/{}): {}",
+          doc.idDocumento(),
+          idExpediente,
+          idx,
+          total,
+          e.getMessage());
+      String motivo = "Fallo OCR/análisis: " + safeMsg(e);
+      guardarMemoria(idExpediente, doc, textoOcr, null, "ERROR", motivo, 0);
+      PrevalidacionDocumentoDTO row =
+          new PrevalidacionDocumentoDTO(doc.idDocumento(), nombre, tipo, "ERROR", motivo);
+      cargaDocumentoService.actualizarDocPrevalidacion(
+          idExpediente, doc.idDocumento(), "ERROR", motivo, 0);
+      return new DocOutcome(row, 0, true);
+    }
   }
 
   private Evaluacion evaluarDocumento(
@@ -273,4 +286,7 @@ public class ProcesamientoDocumentalService {
   }
 
   private record Evaluacion(String textoOcr, ExtraccionDocumento extraccion) {}
+
+  private record DocOutcome(
+      PrevalidacionDocumentoDTO prevalidacion, int campos, boolean errorGrave) {}
 }

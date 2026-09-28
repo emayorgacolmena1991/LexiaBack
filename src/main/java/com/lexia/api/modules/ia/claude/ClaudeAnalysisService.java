@@ -382,20 +382,42 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       "lindero_sur",
       "lindero_este",
       "lindero_oeste",
-      "superficie_m2"
+      "superficie_m2",
+      "estado_civil",
+      "monto_prestamo",
+      "monto_prestamo_letras",
+      "plazo_credito",
+      "tasa_interes_inicial",
+      "institucion_financiera_original",
+      "direccion_deudor",
+      "telefono_deudor",
+      "correo_deudor",
+      "ciudad_firma",
+      "fecha_firma"
     };
     ArrayNode required = schema.putArray("required");
     for (String field : fields) {
-      props.putObject(field).put("type", "string").put("description", field);
+      ObjectNode prop = props.putObject(field);
+      prop.put("type", "string");
+      prop.put(
+          "description",
+          "Valor del campo "
+              + field
+              + ". Si no aparece en el OCR, usa exactamente nodata.");
       required.add(field);
     }
 
     String system =
         """
-        Eres un asistente legal experto en minutas hipotecarias de Ecuador.
+        Eres un asistente legal experto en minutas y contratos de mutuo hipotecario BIESS (Ecuador).
         Analiza el texto OCR del expediente y extrae exactamente los campos de la herramienta.
-        Si un dato no está presente, usa cadena vacía "".
-        No inventes datos. No agregues texto fuera de la herramienta.
+        Campos de identidad/inmueble (minuta) y de crédito/contacto (contrato de mutuo).
+        REGLAS:
+        1. Si un dato no está presente o es ilegible, usa exactamente la cadena nodata.
+        2. No inventes montos, tasas, plazos, cédulas ni nombres.
+        3. monto_prestamo: cifra en números (ej. 45000.00). monto_prestamo_letras: en palabras.
+        4. institucion_financiera_original: banco acreedor anterior a cancelar (sustitución).
+        5. No agregues texto fuera de la herramienta.
         """;
 
     ObjectNode body = objectMapper.createObjectNode();
@@ -405,7 +427,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
 
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", MINUTA_VIVIENDA_TOOL_NAME);
-    tool.put("description", "Registra los datos estructurados para la minuta de vivienda hipotecada.");
+    tool.put(
+        "description",
+        "Registra datos para minuta de hipoteca y contrato de mutuo (vivienda hipotecada BIESS).");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", MINUTA_VIVIENDA_TOOL_NAME);
 
@@ -413,7 +437,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     msg.put("role", "user");
     msg.put(
         "content",
-        "Extrae los datos de minuta del siguiente expediente OCR.\n\n<expediente_ocr>\n"
+        "Extrae los datos de minuta/contrato de mutuo del siguiente expediente OCR.\n\n<expediente_ocr>\n"
             + truncate(texto, MAX_CHARS_OCR)
             + "\n</expediente_ocr>");
 
