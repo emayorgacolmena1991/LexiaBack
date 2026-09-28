@@ -1,9 +1,7 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoFuente;
@@ -21,7 +19,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,8 +26,7 @@ import org.springframework.util.StringUtils;
 
   /**
    * E04: lee caché consolidada (E03) y coteja campos entre documentos.
-   * Las filas de comparación salen siempre del cotejo campo-a-campo (valores reales por fuente).
-   * Claude, si está configurado, aporta la observación general / resumen notarial.
+   * El dictamen notarial no se pide aquí: sale de POST procesar-completo / analizar-ia (1 llamada LLM).
    *
    * <p>Parejas comparables (mismas reglas que {@code COTEJO_NOTARIAL_V1} / Claude fallback;
    * no inventa nuevas):
@@ -122,11 +118,7 @@ public class OcrCotejoService {
     }
 
     CotejoResponse porCampos = cotejarPorCampos(id, content, results);
-    String observacionIa = observacionDesdeIa(content);
-    String observacionGeneral =
-        StringUtils.hasText(observacionIa)
-            ? observacionIa.trim()
-            : observacionDesdeResumen(porCampos.resumen());
+    String observacionGeneral = observacionDesdeResumen(porCampos.resumen());
 
     CotejoResumen resumen = porCampos.resumen();
     return new CotejoResponse(
@@ -141,40 +133,6 @@ public class OcrCotejoService {
             observacionGeneral),
         porCampos.comparaciones(),
         porCampos.grupos());
-  }
-
-  private String observacionDesdeIa(String content) {
-    if (analisis == null || !analisis.isConfigured()) {
-      return null;
-    }
-    try {
-      ExtraccionCotejo cotejo = analisis.cotejarExpediente(content);
-      if (cotejo == null || !"OK".equals(cotejo.estado()) || cotejo.resultado() == null) {
-        if (cotejo != null && "ERROR".equals(cotejo.estado())) {
-          LOG.info("Cotejo notarial no aplicado motivo={} → observación por reglas", cotejo.motivo());
-        }
-        return null;
-      }
-      ResultadoCotejoDTO r = cotejo.resultado();
-      LOG.info("Cotejo notarial OK estado={} (solo observación general)", r.estado());
-      // Preferir lista detallada (una por línea) para el panel Observaciones del FE.
-      if (r.observaciones() != null && !r.observaciones().isEmpty()) {
-        String joined =
-            r.observaciones().stream()
-                .filter(StringUtils::hasText)
-                .map(String::trim)
-                .collect(Collectors.joining("\n"));
-        if (StringUtils.hasText(joined)) {
-          return joined;
-        }
-      }
-      if (StringUtils.hasText(r.resumenValidacion())) {
-        return r.resumenValidacion().trim();
-      }
-    } catch (Exception ex) {
-      LOG.warn("Cotejo notarial fail err={}", ex.getMessage());
-    }
-    return null;
   }
 
   private CotejoResponse cotejarPorCampos(

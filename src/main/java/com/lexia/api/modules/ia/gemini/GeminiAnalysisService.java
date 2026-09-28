@@ -9,6 +9,8 @@ import com.google.genai.types.Part;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.util.List;
 import java.util.Locale;
 import org.slf4j.Logger;
@@ -140,6 +142,68 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
 
     return ExtraccionDocumento.error(
         "No se pudieron extraer datos con Gemini (free). Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ExtraccionExpedienteCompleto procesarExpedienteCompleto(
+      String ocrMarcado, String systemPrompt) {
+    String texto = ocrMarcado == null ? "" : ocrMarcado;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ExtraccionExpedienteCompleto.error("Sin texto OCR para procesar el expediente.");
+    }
+    if (!isConfigured()) {
+      return ExtraccionExpedienteCompleto.error("GEMINI_API_KEY no configurada.");
+    }
+    String system =
+        (StringUtils.hasText(systemPrompt) ? systemPrompt : "Procesa el expediente notarial.")
+            + "\nResponde ÚNICAMENTE con un objeto JSON {datosExtraidos, dictamen}. Sin markdown.";
+    String marcado =
+        texto.contains("<expediente_ocr>")
+            ? texto
+            : "<expediente_ocr>\n" + texto + "\n</expediente_ocr>";
+    Content content =
+        Content.fromParts(
+            Part.fromText(system), Part.fromText(truncate(marcado, 120_000)));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder().responseMimeType("application/json").temperature(0.1f).build();
+
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+          try {
+            LOG.info(
+                "Gemini expediente completo: modelo={} intento={}/{}",
+                modelo,
+                intento,
+                MAX_INTENTOS_POR_MODELO);
+            GenerateContentResponse response =
+                client.models.generateContent(modelo, content, config);
+            String raw = response.text();
+            if (!StringUtils.hasText(raw)) {
+              ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+              sleepBackoff(intento, false);
+              continue;
+            }
+            ProcesarExpedienteCompletoPayload payload =
+                objectMapper.readValue(
+                    GeminiJsonSanitizer.limpiar(raw), ProcesarExpedienteCompletoPayload.class);
+            if (payload != null && payload.datosExtraidos() != null && payload.dictamen() != null) {
+              return ExtraccionExpedienteCompleto.ok(payload);
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " JSON sin datosExtraidos/dictamen";
+            sleepBackoff(intento, false);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini expediente completo: {}", ultimoDiagnostico);
+            sleepBackoff(intento, false);
+          }
+        }
+      }
+    }
+    return ExtraccionExpedienteCompleto.error(
+        "No se pudo procesar el expediente con Gemini. Último: " + ultimoDiagnostico);
   }
 
   private static String classifyError(String msg) {

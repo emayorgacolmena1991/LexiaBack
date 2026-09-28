@@ -3,10 +3,15 @@ package com.lexia.api.modules.expedientes.reglas;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
+import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService;
+import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService.Ejecucion;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Dictamen;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Observacion;
+import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -17,24 +22,24 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
 import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
 
-/** POST /api/v1/expedientes/{id}/validar-ia — cotejo notarial Claude sobre OCR consolidado. */
+/** POST /api/v1/expedientes/{id}/validar-ia — dictamen del single-pass (sin segunda llamada LLM). */
 @Service
 public class ValidacionIaService {
 
   private static final Logger LOG = LoggerFactory.getLogger(ValidacionIaService.class);
 
   private final OcrSessionCacheService cache;
-  private final AnalisisDocumentoService analisis;
+  private final ExpedienteCompletoLlmService llm;
   private final LegalCaseRepository legalCases;
   private final WritingFileRepository writingFiles;
 
   public ValidacionIaService(
       OcrSessionCacheService cache,
-      AnalisisDocumentoService analisis,
+      ExpedienteCompletoLlmService llm,
       LegalCaseRepository legalCases,
       WritingFileRepository writingFiles) {
     this.cache = cache;
-    this.analisis = analisis;
+    this.llm = llm;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
   }
@@ -44,25 +49,15 @@ public class ValidacionIaService {
       throw ApiException.badRequest("idExpediente requerido.");
     }
     String id = idExpediente.trim();
-    String content = cache.getConsolidated(id);
-    List<OcrFileResult> results = cache.listResults(id);
-
-    if (content == null && (results == null || results.isEmpty())) {
-      throw ApiException.notFound("Caché OCR no encontrada o expirada para idExpediente=" + id);
-    }
-    if (!StringUtils.hasText(content) && results != null && !results.isEmpty()) {
-      content = rebuildConsolidado(results);
-    }
+    String content = OcrExpedienteTexto.paraClaude(cache, List.of(id));
     if (!StringUtils.hasText(content)) {
-      throw ApiException.badRequest("Sin texto OCR consolidado para validar.");
-    }
-    if (!analisis.isConfigured()) {
-      throw ApiException.badRequest("Proveedor LLM no configurado para validación IA.");
+      throw ApiException.notFound("Caché OCR no encontrada o expirada para idExpediente=" + id);
     }
 
     ProductContext ctx = resolveProductContext(id);
-    ExtraccionCotejo ext = analisis.cotejarExpediente(content, ctx.productCode(), ctx.canton());
-    if (ext == null || ext.resultado() == null) {
+    Ejecucion ejecucion = llm.ejecutar(content, ctx.productCode(), ctx.canton(), false);
+    ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
+    if (ext == null || ext.payload() == null || ext.payload().dictamen() == null) {
       throw ApiException.badRequest(
           ext != null && StringUtils.hasText(ext.motivo())
               ? ext.motivo()
@@ -73,13 +68,33 @@ public class ValidacionIaService {
       throw ApiException.badRequest(
           StringUtils.hasText(ext.motivo()) ? ext.motivo() : "Error en cotejo IA.");
     }
+    ResultadoCotejoDTO resultado = aCotejo(ext.payload().dictamen());
     LOG.info(
-        "validar-ia id={} product={} estado={} obs={}",
+        "validar-ia id={} product={} cache={} estado={}",
         id,
         ctx.productCode(),
-        ext.resultado().estado(),
-        ext.resultado().observaciones().size());
-    return ext.resultado();
+        ejecucion.desdeCache(),
+        resultado.estado());
+    return resultado;
+  }
+
+  private static ResultadoCotejoDTO aCotejo(Dictamen dictamen) {
+    String estado = dictamen.estado() == null ? "" : dictamen.estado().trim().toUpperCase();
+    boolean ok = "APPROVED".equals(estado);
+    boolean rechazo = "REJECTED".equals(estado);
+    List<String> mensajes = new ArrayList<>();
+    for (Observacion obs : dictamen.observaciones()) {
+      if (obs != null && StringUtils.hasText(obs.mensaje())) {
+        mensajes.add(obs.mensaje().trim());
+      }
+    }
+    String semaforo = ok ? "APROBADO" : rechazo ? "RECHAZADO" : "ADVERTENCIA";
+    return new ResultadoCotejoDTO(
+        ok,
+        ok,
+        mensajes,
+        StringUtils.hasText(dictamen.resumen()) ? dictamen.resumen() : "",
+        semaforo);
   }
 
   private ProductContext resolveProductContext(String idExpediente) {
@@ -112,8 +127,6 @@ public class ValidacionIaService {
     }
   }
 
-  private record ProductContext(String productCode, String canton) {}
-
   public static String rebuildConsolidado(List<OcrFileResult> results) {
     StringBuilder sb = new StringBuilder();
     for (OcrFileResult r : results) {
@@ -128,4 +141,6 @@ public class ValidacionIaService {
     }
     return sb.toString().trim();
   }
+
+  private record ProductContext(String productCode, String canton) {}
 }

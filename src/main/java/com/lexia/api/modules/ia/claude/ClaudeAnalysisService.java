@@ -5,16 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
-import com.lexia.api.modules.ia.prompt.ProductPromptMapRepository;
-import com.lexia.api.modules.ia.prompt.PromptCatalog;
-import com.lexia.api.modules.ia.prompt.PromptCatalogRepository;
-import com.lexia.api.modules.ia.prompt.PromptRegistryService;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -44,10 +40,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String API_URL = "https://api.anthropic.com/v1/messages";
   private static final String API_VERSION = "2023-06-01";
   private static final String TOOL_NAME = "registrar_datos_documento";
-  private static final String COTEJO_TOOL_NAME = "cotejar_documentos_expediente";
+  private static final String EXPEDIENTE_TOOL_NAME = "procesar_expediente_completo";
   private static final String MINUTA_VIVIENDA_TOOL_NAME = "registrar_datos_minuta_vivienda";
-  private static final String PROMPT_COTEJO_CODIGO = "COTEJO_NOTARIAL_V1";
-  private static final String PROMPT_DEFAULT_KEY = "PROMPT_DEFAULT";
   private static final int MAX_TOKENS = 4096;
   private static final int MAX_CHARS_OCR = 120_000;
   private static final int MAX_INTENTOS_POR_MODELO = 4;
@@ -67,43 +61,35 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       """
           .formatted(TOOL_NAME);
 
-  private static final String COTEJO_SYSTEM_PROMPT_FALLBACK =
+  private static final String EXPEDIENTE_SYSTEM_PROMPT_FALLBACK =
       """
       Eres un sistema experto en validación y cotejo notarial.
-      Recibirás el texto OCR de 4 documentos dentro de <expediente_ocr>.
+      Recibirás el texto OCR del expediente; cada archivo en su propio <documento id> dentro de
+      <expediente_ocr>.
 
-      TUS REGLAS DE COTEJO:
-      1. Compara CÉDULA vs PAPELETA DE VOTACIÓN: verifica que nombres, apellidos y número de cédula coincidan exactamente.
-      2. Compara AVALÚO MUNICIPAL vs HISTORIA DE DOMINIO: verifica que el propietario, dirección del inmueble y clave catastral coincidan.
-      3. Genera observaciones detalladas si encuentras cualquier discrepancia.
+      TAREAS EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble.
+      2. DICTAMINAR: compara Cédula vs Papeleta y Avalúo vs Historia de Dominio; reporta
+         discrepancias, vigencias vencidas y gravámenes.
 
       Responde exclusivamente invocando la herramienta %s.
       """
-          .formatted(COTEJO_TOOL_NAME);
+          .formatted(EXPEDIENTE_TOOL_NAME);
 
   private final String apiKey;
   private final List<String> modelos;
   private final ObjectMapper objectMapper;
-  private final PromptCatalogRepository promptCatalogRepository;
-  private final ProductPromptMapRepository productPromptMapRepository;
-  private final PromptRegistryService promptRegistryService;
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
   public ClaudeAnalysisService(
       @Value("${anthropic.api.key:}") String apiKey,
       @Value("${anthropic.models:claude-sonnet-5,claude-haiku-4-5-20251001}") String modelos,
-      ObjectMapper objectMapper,
-      PromptCatalogRepository promptCatalogRepository,
-      ProductPromptMapRepository productPromptMapRepository,
-      PromptRegistryService promptRegistryService) {
+      ObjectMapper objectMapper) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.modelos =
         Arrays.stream(modelos.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     this.objectMapper = objectMapper;
-    this.promptCatalogRepository = promptCatalogRepository;
-    this.productPromptMapRepository = productPromptMapRepository;
-    this.promptRegistryService = promptRegistryService;
   }
 
   @Override
@@ -178,48 +164,49 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
-  public ExtraccionCotejo cotejarExpediente(
-      String ocrConsolidado, String productCode, String canton) {
-    String texto = ocrConsolidado == null ? "" : ocrConsolidado;
-
+  public ExtraccionExpedienteCompleto procesarExpedienteCompleto(
+      String ocrMarcado, String systemPrompt) {
+    String texto = ocrMarcado == null ? "" : ocrMarcado;
     if (!StringUtils.hasText(texto.trim())) {
-      return ExtraccionCotejo.error("Sin texto OCR consolidado para cotejar.");
+      return ExtraccionExpedienteCompleto.error("Sin texto OCR para procesar el expediente.");
     }
     if (!isConfigured()) {
-      return ExtraccionCotejo.error("ANTHROPIC_API_KEY no configurada.");
+      return ExtraccionExpedienteCompleto.error("ANTHROPIC_API_KEY no configurada.");
     }
+    String prompt =
+        StringUtils.hasText(systemPrompt) ? systemPrompt : EXPEDIENTE_SYSTEM_PROMPT_FALLBACK;
 
-    String systemPrompt = resolverCotejoSystemPrompt(productCode, canton);
     String ultimoDiagnostico = "sin respuesta";
-
     for (String modelo : modelos) {
       for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
         try {
           LOG.info(
-              "Claude cotejo: modelo={} intento={}/{}", modelo, intento, MAX_INTENTOS_POR_MODELO);
-          HttpResponse<String> res = llamarCotejo(modelo, systemPrompt, texto);
+              "Claude expediente completo: modelo={} intento={}/{}",
+              modelo,
+              intento,
+              MAX_INTENTOS_POR_MODELO);
+          HttpResponse<String> res = llamarExpedienteCompleto(modelo, prompt, texto);
           int status = res.statusCode();
-
           if (status == 200) {
             JsonNode root = objectMapper.readTree(res.body());
             if ("max_tokens".equals(root.path("stop_reason").asText())) {
-              return ExtraccionCotejo.error(
+              return ExtraccionExpedienteCompleto.error(
                   "Respuesta truncada (max_tokens). Subir MAX_TOKENS o reducir el expediente.");
             }
-            ResultadoCotejoDTO resultado = leerToolUse(root, ResultadoCotejoDTO.class);
-            if (resultado != null) {
-              LOG.info("Claude OK con modelo={}", modelo);
-              return ExtraccionCotejo.from(normalizarEstado(resultado));
+            ProcesarExpedienteCompletoPayload payload =
+                leerToolUse(root, ProcesarExpedienteCompletoPayload.class);
+            if (payload != null && payload.datosExtraidos() != null && payload.dictamen() != null) {
+              LOG.info("Claude expediente completo OK modelo={}", modelo);
+              return ExtraccionExpedienteCompleto.ok(normalizarPayload(payload));
             }
-            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use cotejo válido";
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use procesar_expediente_completo";
             LOG.warn(ultimoDiagnostico);
             dormir(BACKOFF_BASE_MS * intento);
             continue;
           }
-
-          ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status + ": " + truncate(res.body(), 180);
-          LOG.warn("Fallo Claude cotejo {}", ultimoDiagnostico);
-
+          ultimoDiagnostico =
+              "modelo=" + modelo + " HTTP " + status + ": " + truncate(res.body(), 180);
+          LOG.warn("Fallo Claude expediente completo {}", ultimoDiagnostico);
           if (status == 404) {
             break;
           }
@@ -227,22 +214,20 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
             dormir(esperaReintento(res, intento));
             continue;
           }
-          return ExtraccionCotejo.error(ultimoDiagnostico);
-
+          return ExtraccionExpedienteCompleto.error(ultimoDiagnostico);
         } catch (InterruptedException ie) {
           Thread.currentThread().interrupt();
-          return ExtraccionCotejo.error("Cotejo interrumpido.");
+          return ExtraccionExpedienteCompleto.error("Procesamiento interrumpido.");
         } catch (Exception e) {
           String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
           ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
-          LOG.warn("Fallo Claude cotejo (red/parseo): {}", ultimoDiagnostico);
+          LOG.warn("Fallo Claude expediente completo: {}", ultimoDiagnostico);
           dormir(BACKOFF_BASE_MS * intento);
         }
       }
     }
-
-    return ExtraccionCotejo.error(
-        "No se pudo cotejar el expediente con Claude. Último: " + ultimoDiagnostico);
+    return ExtraccionExpedienteCompleto.error(
+        "No se pudo procesar el expediente con Claude. Último: " + ultimoDiagnostico);
   }
 
   @Override
@@ -300,59 +285,14 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         "No se pudo extraer datos de minuta. Último: " + ultimoDiagnostico);
   }
 
-  /**
-   * Por producto: {@code product_prompt_map} → {@link PromptRegistryService}. Sin producto: {@code
-   * prompt_catalog.COTEJO_NOTARIAL_V1}.
-   */
-  private String resolverCotejoSystemPrompt(String productCode, String canton) {
-    Map<String, String> vars =
-        Map.of(
-            "canton", StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL",
-            "vigenciaDias", "60");
-
-    if (StringUtils.hasText(productCode)) {
-      try {
-        String promptKey =
-            productPromptMapRepository
-                .findPromptKeyByProductCode(productCode.trim())
-                .orElse(PROMPT_DEFAULT_KEY);
-        String resolved = promptRegistryService.resolvePrompt(promptKey, vars);
-        return adaptToolName(resolved);
-      } catch (Exception e) {
-        LOG.warn(
-            "product_prompt_map {}: usando COTEJO. {}", productCode, e.getMessage());
-      }
-    }
-
-    try {
-      return promptCatalogRepository
-          .findByCodigo(PROMPT_COTEJO_CODIGO)
-          .map(PromptCatalog::getPromptText)
-          .filter(StringUtils::hasText)
-          .map(this::adaptToolName)
-          .orElse(COTEJO_SYSTEM_PROMPT_FALLBACK);
-    } catch (Exception e) {
-      LOG.warn("prompt_catalog {}: usando fallback. {}", PROMPT_COTEJO_CODIGO, e.getMessage());
-      return COTEJO_SYSTEM_PROMPT_FALLBACK;
-    }
-  }
-
-  private String adaptToolName(String text) {
-    if (text.contains("%s")) {
-      return text.formatted(COTEJO_TOOL_NAME);
-    }
-    // Templates YML mencionan registrar_datos_documento; cotejo usa tool distinto.
-    return text.replace("registrar_datos_documento", COTEJO_TOOL_NAME);
-  }
-
   private HttpResponse<String> llamarExtraccion(String modelo, String tipo, String texto)
       throws IOException, InterruptedException {
     return enviar(construirBodyExtraccion(modelo, tipo, texto));
   }
 
-  private HttpResponse<String> llamarCotejo(String modelo, String systemPrompt, String texto)
-      throws IOException, InterruptedException {
-    return enviar(construirBodyCotejo(modelo, systemPrompt, texto));
+  private HttpResponse<String> llamarExpedienteCompleto(
+      String modelo, String systemPrompt, String texto) throws IOException, InterruptedException {
+    return enviar(construirBodyExpedienteCompleto(modelo, systemPrompt, texto));
   }
 
   private HttpResponse<String> llamarMinutaVivienda(String modelo, String texto)
@@ -502,42 +442,14 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     return objectMapper.writeValueAsString(body);
   }
 
-  private String construirBodyCotejo(String modelo, String systemPrompt, String texto)
+  private String construirBodyExpedienteCompleto(String modelo, String systemPrompt, String texto)
       throws IOException {
     ObjectNode schema = objectMapper.createObjectNode();
     schema.put("type", "object");
     ObjectNode props = schema.putObject("properties");
-    props
-        .putObject("coincidePersona")
-        .put("type", "boolean")
-        .put("description", "true si Cédula y Papeleta coinciden en nombres y cédula.");
-    props
-        .putObject("coincideInmueble")
-        .put("type", "boolean")
-        .put(
-            "description",
-            "true si Avalúo e Historia de Dominio coinciden en propietario, dirección y clave catastral.");
-    ObjectNode obs = props.putObject("observaciones");
-    obs.put("type", "array");
-    obs.putObject("items").put("type", "string");
-    obs.put("description", "Lista de discrepancias o advertencias encontradas.");
-    props
-        .putObject("resumenValidacion")
-        .put("type", "string")
-        .put("description", "Resumen notarial de máximo 2 líneas.");
-    ObjectNode estadoProp = props.putObject("estado");
-    estadoProp.put("type", "string");
-    ArrayNode estadoEnum = estadoProp.putArray("enum");
-    estadoEnum.add("APROBADO");
-    estadoEnum.add("ADVERTENCIA");
-    estadoEnum.add("RECHAZADO");
-    estadoProp.put("description", "Semáforo del cotejo: APROBADO, ADVERTENCIA o RECHAZADO.");
-    ArrayNode required = schema.putArray("required");
-    required.add("coincidePersona");
-    required.add("coincideInmueble");
-    required.add("observaciones");
-    required.add("resumenValidacion");
-    required.add("estado");
+    props.set("datosExtraidos", schemaDatosExtraidos());
+    props.set("dictamen", schemaDictamen());
+    schema.putArray("required").add("datosExtraidos").add("dictamen");
 
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
@@ -545,22 +457,102 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     body.put("system", systemPrompt);
 
     ObjectNode tool = body.putArray("tools").addObject();
-    tool.put("name", COTEJO_TOOL_NAME);
+    tool.put("name", EXPEDIENTE_TOOL_NAME);
     tool.put(
         "description",
-        "Registra el resultado del cotejo notarial entre pares de documentos del expediente.");
+        "Devuelve la extracción consolidada de variables y el dictamen de titulación.");
     tool.set("input_schema", schema);
-    body.putObject("tool_choice").put("type", "tool").put("name", COTEJO_TOOL_NAME);
+    body.putObject("tool_choice").put("type", "tool").put("name", EXPEDIENTE_TOOL_NAME);
 
     ObjectNode msg = body.putArray("messages").addObject();
     msg.put("role", "user");
+    String marcado = texto.contains("<expediente_ocr>") ? texto : "<expediente_ocr>\n" + texto + "\n</expediente_ocr>";
     msg.put(
         "content",
-        "Coteja el siguiente expediente OCR.\n\n<expediente_ocr>\n"
-            + truncate(texto, MAX_CHARS_OCR)
-            + "\n</expediente_ocr>");
-
+        "Procesa el expediente. Cada archivo va en su propio <documento id>. No inventes datos.\n\n"
+            + truncate(marcado, MAX_CHARS_OCR));
     return objectMapper.writeValueAsString(body);
+  }
+
+  private ObjectNode schemaDatosExtraidos() {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("type", "object");
+    ObjectNode props = node.putObject("properties");
+    props.set("comprador", schemaPersona());
+    props.set("vendedor", schemaPersona());
+    props.set("inmueble", schemaInmueble());
+    node.putArray("required").add("comprador").add("vendedor").add("inmueble");
+    return node;
+  }
+
+  private ObjectNode schemaPersona() {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("type", "object");
+    ObjectNode props = node.putObject("properties");
+    props.putObject("nombres").put("type", "string");
+    props.putObject("cedula").put("type", "string");
+    props.putObject("estadoCivil").put("type", "string");
+    node.putArray("required").add("nombres").add("cedula").add("estadoCivil");
+    return node;
+  }
+
+  private ObjectNode schemaInmueble() {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("type", "object");
+    ObjectNode props = node.putObject("properties");
+    props.putObject("claveCatastral").put("type", "string");
+    props.putObject("linderos").put("type", "string");
+    props.putObject("avaluo").put("type", "number");
+    node.putArray("required").add("claveCatastral").add("linderos").add("avaluo");
+    return node;
+  }
+
+  private ObjectNode schemaDictamen() {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("type", "object");
+    ObjectNode props = node.putObject("properties");
+    ObjectNode estado = props.putObject("estado");
+    estado.put("type", "string");
+    estado.putArray("enum").add("APPROVED").add("WITH_OBSERVATIONS").add("REJECTED");
+    props.putObject("resumen").put("type", "string");
+    ObjectNode obs = props.putObject("observaciones");
+    obs.put("type", "array");
+    ObjectNode item = obs.putObject("items");
+    item.put("type", "object");
+    ObjectNode itemProps = item.putObject("properties");
+    itemProps.putObject("codigo").put("type", "string");
+    ObjectNode sev = itemProps.putObject("severidad");
+    sev.put("type", "string");
+    sev.putArray("enum").add("HIGH").add("MEDIUM").add("LOW");
+    itemProps.putObject("mensaje").put("type", "string");
+    item.putArray("required").add("codigo").add("severidad").add("mensaje");
+    node.putArray("required").add("estado").add("resumen").add("observaciones");
+    return node;
+  }
+
+  private static ProcesarExpedienteCompletoPayload normalizarPayload(
+      ProcesarExpedienteCompletoPayload payload) {
+    var dictamen = payload.dictamen();
+    String estado = normalizarEstadoDictamen(dictamen == null ? null : dictamen.estado());
+    var obs =
+        dictamen == null
+            ? java.util.List.<ProcesarExpedienteCompletoPayload.Observacion>of()
+            : dictamen.observaciones();
+    return new ProcesarExpedienteCompletoPayload(
+        payload.datosExtraidos(),
+        new ProcesarExpedienteCompletoPayload.Dictamen(
+            estado, dictamen == null ? "" : dictamen.resumen(), obs));
+  }
+
+  private static String normalizarEstadoDictamen(String estado) {
+    String e = estado == null ? "" : estado.trim().toUpperCase();
+    if ("APPROVED".equals(e) || "APROBADO".equals(e)) {
+      return "APPROVED";
+    }
+    if ("REJECTED".equals(e) || "RECHAZADO".equals(e)) {
+      return "REJECTED";
+    }
+    return "WITH_OBSERVATIONS";
   }
 
   private <T> T leerToolUse(JsonNode root, Class<T> type) throws IOException {
@@ -573,31 +565,6 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       }
     }
     return null;
-  }
-
-  private static ResultadoCotejoDTO normalizarEstado(ResultadoCotejoDTO r) {
-    String estado = r.estado() == null ? "" : r.estado().trim().toUpperCase();
-    if (!estado.equals("APROBADO") && !estado.equals("ADVERTENCIA") && !estado.equals("RECHAZADO")) {
-      if (!r.coincidePersona() || !r.coincideInmueble()) {
-        estado = r.observaciones().isEmpty() ? "RECHAZADO" : "ADVERTENCIA";
-      } else if (!r.observaciones().isEmpty()) {
-        estado = "ADVERTENCIA";
-      } else {
-        estado = "APROBADO";
-      }
-      return new ResultadoCotejoDTO(
-          r.coincidePersona(),
-          r.coincideInmueble(),
-          r.observaciones(),
-          r.resumenValidacion(),
-          estado);
-    }
-    return new ResultadoCotejoDTO(
-        r.coincidePersona(),
-        r.coincideInmueble(),
-        r.observaciones(),
-        r.resumenValidacion(),
-        estado);
   }
 
   private static long esperaReintento(HttpResponse<String> res, int intento) {

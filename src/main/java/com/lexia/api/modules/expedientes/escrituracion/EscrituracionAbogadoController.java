@@ -9,7 +9,7 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.Product
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
-import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisResultDTO;
+import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
@@ -88,7 +88,14 @@ public class EscrituracionAbogadoController {
   }
 
   @PostMapping("/expedientes/{id}/escrituracion/analizar-ia")
-  public ResponseEntity<AnalysisResultDTO> analizarIa(
+  public ResponseEntity<ProcesarExpedienteCompletoResult> analizarIa(
+      @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
+    return ResponseEntity.ok(iaAnalysis.analizarExpedienteConPromptProducto(id, request));
+  }
+
+  /** Mismo single-pass que analizar-ia. La caché evita una segunda llamada al LLM. */
+  @PostMapping("/expedientes/{id}/procesar-completo")
+  public ResponseEntity<ProcesarExpedienteCompletoResult> procesarCompleto(
       @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
     return ResponseEntity.ok(iaAnalysis.analizarExpedienteConPromptProducto(id, request));
   }

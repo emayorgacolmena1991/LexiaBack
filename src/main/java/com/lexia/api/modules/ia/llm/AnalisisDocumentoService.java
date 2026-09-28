@@ -1,11 +1,10 @@
 package com.lexia.api.modules.ia.llm;
 
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import org.springframework.util.StringUtils;
 
-/** Contrato común de extracción/cotejo con LLM. Gemini y Claude lo implementan. */
+/** Contrato común de extracción con LLM. Gemini y Claude lo implementan. */
 public interface AnalisisDocumentoService {
 
   boolean isConfigured();
@@ -13,19 +12,13 @@ public interface AnalisisDocumentoService {
   ExtraccionDocumento extraerDatosClave(String textoOcr, String tipoDocumento);
 
   /**
-   * Cotejo notarial multi-documento (OCR consolidado). Default: no soportado;
-   * Claude lo implementa con tool use {@code cotejar_documentos_expediente}.
+   * Una sola llamada: variables de minuta + dictamen. El prompt ya viene resuelto.
+   * El OCR llega marcado por archivo ({@code <documento id="...">}), sin PDF unificado.
    */
-  default ExtraccionCotejo cotejarExpediente(String ocrConsolidado) {
-    return cotejarExpediente(ocrConsolidado, null, null);
-  }
-
-  /**
-   * Cotejo por producto BIESS: resuelve prompt vía {@code product_prompt_map} + registry.
-   */
-  default ExtraccionCotejo cotejarExpediente(
-      String ocrConsolidado, String productCode, String canton) {
-    return ExtraccionCotejo.error("Cotejo notarial no disponible para este proveedor LLM.");
+  default ExtraccionExpedienteCompleto procesarExpedienteCompleto(
+      String ocrMarcado, String systemPrompt) {
+    return ExtraccionExpedienteCompleto.error(
+        "Procesamiento unificado no disponible para este proveedor LLM.");
   }
 
   /**
@@ -65,17 +58,30 @@ public interface AnalisisDocumentoService {
     }
   }
 
-  record ExtraccionCotejo(ResultadoCotejoDTO resultado, String estado, String motivo) {
+  record ExtraccionExpedienteCompleto(
+      ProcesarExpedienteCompletoPayload payload, String estado, String motivo) {
 
-    public static ExtraccionCotejo from(ResultadoCotejoDTO resultado) {
-      if (resultado == null) {
-        return error("Sin resultado de cotejo.");
+    public static ExtraccionExpedienteCompleto ok(ProcesarExpedienteCompletoPayload payload) {
+      if (payload == null || payload.datosExtraidos() == null || payload.dictamen() == null) {
+        return error("Respuesta sin datosExtraidos o dictamen.");
       }
-      return new ExtraccionCotejo(resultado, "OK", null);
+      String estado = payload.dictamen().estado() == null ? "" : payload.dictamen().estado().trim();
+      String normalizado =
+          "APPROVED".equalsIgnoreCase(estado) || "APROBADO".equalsIgnoreCase(estado)
+              ? "APPROVED"
+              : "REJECTED".equalsIgnoreCase(estado) || "RECHAZADO".equalsIgnoreCase(estado)
+                  ? "REJECTED"
+                  : "WITH_OBSERVATIONS";
+      ProcesarExpedienteCompletoPayload listo =
+          new ProcesarExpedienteCompletoPayload(
+              payload.datosExtraidos(),
+              new ProcesarExpedienteCompletoPayload.Dictamen(
+                  normalizado, payload.dictamen().resumen(), payload.dictamen().observaciones()));
+      return new ExtraccionExpedienteCompleto(listo, "OK", null);
     }
 
-    public static ExtraccionCotejo error(String motivo) {
-      return new ExtraccionCotejo(ResultadoCotejoDTO.error(motivo), "ERROR", motivo);
+    public static ExtraccionExpedienteCompleto error(String motivo) {
+      return new ExtraccionExpedienteCompleto(null, "ERROR", motivo);
     }
   }
 
