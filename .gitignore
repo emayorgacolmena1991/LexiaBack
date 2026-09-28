@@ -37,5 +37,4 @@ build/
 .tokensave/
 .cursorignore
 instrucciones/
-src/main/resources/templates/
 data/minutas/
