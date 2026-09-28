@@ -37,3 +37,6 @@ build/
 .tokensave/
 .cursorignore
 instrucciones/
+
+### Archivos subidos en runtime ###
+data/minutas/
