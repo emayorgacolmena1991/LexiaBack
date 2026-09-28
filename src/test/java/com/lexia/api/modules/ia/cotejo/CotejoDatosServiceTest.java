@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoResponse;
 import com.lexia.api.modules.ia.cotejo.CotejoMotor.Bloque;
@@ -58,6 +58,25 @@ class CotejoDatosServiceTest {
     assertEquals(2, bloques.size());
     assertEquals("Cédula", bloques.get(0).tipo());
     assertEquals("Escritura", bloques.get(1).tipo());
+  }
+
+  @Test
+  void parteFormatoDocumentoDelFrontend() {
+    String contenido =
+        """
+        === DOCUMENTO: Cédula ===
+        Juan Carlos Pérez García
+        Cédula 091.234.567-8
+
+        === DOCUMENTO: Minuta ===
+        Compareciente Juan Perez
+        """;
+    List<Bloque> bloques = CotejoMotor.parse(contenido);
+    assertEquals(2, bloques.size());
+    assertEquals("Cédula", bloques.get(0).tipo());
+    assertTrue(bloques.get(0).texto().contains("091.234.567-8"));
+    assertEquals("Minuta", bloques.get(1).tipo());
+    assertTrue(bloques.get(1).texto().contains("Juan Perez"));
   }
 
   @Test

@@ -1,6 +1,6 @@
 package com.lexia.api.modules.ia.cotejo;
 
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.cotejo.CotejoDtos.CotejoFuente;
 import java.math.BigDecimal;
@@ -24,8 +24,10 @@ final class CotejoMotor {
   static final String DIFERENCIA = "DIFERENCIA";
   static final String NO_ENCONTRADO = "NO_ENCONTRADO";
 
+  /** Marcadores de sección, incluido FE {@code === DOCUMENTO: TIPO ===} y markdown {@code # Tipo}. */
   private static final Pattern MARCADOR =
-      Pattern.compile("^(?:\\[\\[DOC:(.+?)\\]\\]|---\\s*(.+?)\\s*---|\\[([^\\]]+)\\])\\s*$");
+      Pattern.compile(
+          "^(?:\\[\\[DOC:(.+?)\\]\\]|---\\s*(.+?)\\s*---|===\\s*DOCUMENTO:\\s*(.+?)\\s*===|#\\s+(.+?)|\\[([^\\]]+)\\])\\s*$");
   private static final Pattern FECHA_ISO = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
   private static final Pattern FECHA_NUM = Pattern.compile("(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})");
   private static final Pattern FECHA_TEXTO =

@@ -60,7 +60,21 @@ public final class OcrFlujoDtos {
       String estado,
       String relacion,
       String valor,
+      /** Explicación legible del resultado (por qué coincide / discrepa / revisar). */
+      String motivo,
       List<CotejoFuente> fuentes) {}
+
+  /**
+   * Resumen ejecutivo para la vista principal del paso 4 (máx. ~5 grupos).
+   * El detalle campo-a-campo vive en {@code comparaciones} del grupo, con
+   * {@code fuentes[]} por documento y {@code motivo} explicativo.
+   */
+  public record CotejoGrupo(
+      String id,
+      String label,
+      String estado,
+      String resumen,
+      List<CotejoComparacion> comparaciones) {}
 
   public record CotejoResumen(
       int total,
@@ -68,8 +82,15 @@ public final class OcrFlujoDtos {
       int diferencias,
       int noEncontrados,
       Integer reglasAplicadas,
-      Boolean observacion) {}
+      Boolean observacion,
+      /** Texto de observación general decidido por el backend (no hardcodear en FE). */
+      String observacionGeneral) {}
 
   public record CotejoResponse(
-      String sessionId, CotejoResumen resumen, List<CotejoComparacion> comparaciones) {}
+      String sessionId,
+      CotejoResumen resumen,
+      /** Lista plana (compatibilidad / consumo detallado). */
+      List<CotejoComparacion> comparaciones,
+      /** Vista principal: categorías funcionales (Identidad, Inmueble, Linderos, …). */
+      List<CotejoGrupo> grupos) {}
 }

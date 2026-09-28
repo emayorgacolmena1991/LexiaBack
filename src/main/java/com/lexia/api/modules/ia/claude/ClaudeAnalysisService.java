@@ -4,13 +4,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.expedientes.ExpedienteDtos.ResultadoCotejoDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
+import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
+import com.lexia.api.modules.ia.prompt.ProductPromptMapRepository;
 import com.lexia.api.modules.ia.prompt.PromptCatalog;
 import com.lexia.api.modules.ia.prompt.PromptCatalogRepository;
+import com.lexia.api.modules.ia.prompt.PromptRegistryService;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -19,6 +23,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,7 +45,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String API_VERSION = "2023-06-01";
   private static final String TOOL_NAME = "registrar_datos_documento";
   private static final String COTEJO_TOOL_NAME = "cotejar_documentos_expediente";
+  private static final String MINUTA_VIVIENDA_TOOL_NAME = "registrar_datos_minuta_vivienda";
   private static final String PROMPT_COTEJO_CODIGO = "COTEJO_NOTARIAL_V1";
+  private static final String PROMPT_DEFAULT_KEY = "PROMPT_DEFAULT";
   private static final int MAX_TOKENS = 4096;
   private static final int MAX_CHARS_OCR = 120_000;
   private static final int MAX_INTENTOS_POR_MODELO = 4;
@@ -78,6 +85,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private final List<String> modelos;
   private final ObjectMapper objectMapper;
   private final PromptCatalogRepository promptCatalogRepository;
+  private final ProductPromptMapRepository productPromptMapRepository;
+  private final PromptRegistryService promptRegistryService;
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -85,12 +94,16 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       @Value("${anthropic.api.key:}") String apiKey,
       @Value("${anthropic.models:claude-sonnet-5,claude-haiku-4-5-20251001}") String modelos,
       ObjectMapper objectMapper,
-      PromptCatalogRepository promptCatalogRepository) {
+      PromptCatalogRepository promptCatalogRepository,
+      ProductPromptMapRepository productPromptMapRepository,
+      PromptRegistryService promptRegistryService) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.modelos =
         Arrays.stream(modelos.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     this.objectMapper = objectMapper;
     this.promptCatalogRepository = promptCatalogRepository;
+    this.productPromptMapRepository = productPromptMapRepository;
+    this.promptRegistryService = promptRegistryService;
   }
 
   @Override
@@ -165,7 +178,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
-  public ExtraccionCotejo cotejarExpediente(String ocrConsolidado) {
+  public ExtraccionCotejo cotejarExpediente(
+      String ocrConsolidado, String productCode, String canton) {
     String texto = ocrConsolidado == null ? "" : ocrConsolidado;
 
     if (!StringUtils.hasText(texto.trim())) {
@@ -175,7 +189,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       return ExtraccionCotejo.error("ANTHROPIC_API_KEY no configurada.");
     }
 
-    String systemPrompt = resolverCotejoSystemPrompt();
+    String systemPrompt = resolverCotejoSystemPrompt(productCode, canton);
     String ultimoDiagnostico = "sin respuesta";
 
     for (String modelo : modelos) {
@@ -231,18 +245,104 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         "No se pudo cotejar el expediente con Claude. Último: " + ultimoDiagnostico);
   }
 
-  private String resolverCotejoSystemPrompt() {
+  @Override
+  public ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
+    String texto = ocrConsolidado == null ? "" : ocrConsolidado;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ExtraccionMinutaVivienda.error("Sin texto OCR consolidado para minuta.");
+    }
+    if (!isConfigured()) {
+      return ExtraccionMinutaVivienda.error("ANTHROPIC_API_KEY no configurada.");
+    }
+
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+        try {
+          LOG.info(
+              "Claude minuta vivienda: modelo={} intento={}/{}",
+              modelo,
+              intento,
+              MAX_INTENTOS_POR_MODELO);
+          HttpResponse<String> res = llamarMinutaVivienda(modelo, texto);
+          int status = res.statusCode();
+          if (status == 200) {
+            JsonNode root = objectMapper.readTree(res.body());
+            if ("max_tokens".equals(root.path("stop_reason").asText())) {
+              return ExtraccionMinutaVivienda.error(
+                  "Respuesta truncada (max_tokens) al extraer minuta.");
+            }
+            MinutaViviendaData data = leerToolUse(root, MinutaViviendaData.class);
+            if (data != null) {
+              return ExtraccionMinutaVivienda.ok(data);
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use minuta válido";
+          } else if (status == 429 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+          } else {
+            ultimoDiagnostico =
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180);
+            return ExtraccionMinutaVivienda.error(ultimoDiagnostico);
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ExtraccionMinutaVivienda.error("Extracción de minuta interrumpida.");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude minuta: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ExtraccionMinutaVivienda.error(
+        "No se pudo extraer datos de minuta. Último: " + ultimoDiagnostico);
+  }
+
+  /**
+   * Por producto: {@code product_prompt_map} → {@link PromptRegistryService}. Sin producto: {@code
+   * prompt_catalog.COTEJO_NOTARIAL_V1}.
+   */
+  private String resolverCotejoSystemPrompt(String productCode, String canton) {
+    Map<String, String> vars =
+        Map.of(
+            "canton", StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL",
+            "vigenciaDias", "60");
+
+    if (StringUtils.hasText(productCode)) {
+      try {
+        String promptKey =
+            productPromptMapRepository
+                .findPromptKeyByProductCode(productCode.trim())
+                .orElse(PROMPT_DEFAULT_KEY);
+        String resolved = promptRegistryService.resolvePrompt(promptKey, vars);
+        return adaptToolName(resolved);
+      } catch (Exception e) {
+        LOG.warn(
+            "product_prompt_map {}: usando COTEJO. {}", productCode, e.getMessage());
+      }
+    }
+
     try {
       return promptCatalogRepository
           .findByCodigo(PROMPT_COTEJO_CODIGO)
           .map(PromptCatalog::getPromptText)
           .filter(StringUtils::hasText)
-          .map(text -> text.contains("%s") ? text.formatted(COTEJO_TOOL_NAME) : text)
+          .map(this::adaptToolName)
           .orElse(COTEJO_SYSTEM_PROMPT_FALLBACK);
     } catch (Exception e) {
       LOG.warn("prompt_catalog {}: usando fallback. {}", PROMPT_COTEJO_CODIGO, e.getMessage());
       return COTEJO_SYSTEM_PROMPT_FALLBACK;
     }
+  }
+
+  private String adaptToolName(String text) {
+    if (text.contains("%s")) {
+      return text.formatted(COTEJO_TOOL_NAME);
+    }
+    // Templates YML mencionan registrar_datos_documento; cotejo usa tool distinto.
+    return text.replace("registrar_datos_documento", COTEJO_TOOL_NAME);
   }
 
   private HttpResponse<String> llamarExtraccion(String modelo, String tipo, String texto)
@@ -253,6 +353,95 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private HttpResponse<String> llamarCotejo(String modelo, String systemPrompt, String texto)
       throws IOException, InterruptedException {
     return enviar(construirBodyCotejo(modelo, systemPrompt, texto));
+  }
+
+  private HttpResponse<String> llamarMinutaVivienda(String modelo, String texto)
+      throws IOException, InterruptedException {
+    return enviar(construirBodyMinutaVivienda(modelo, texto));
+  }
+
+  private String construirBodyMinutaVivienda(String modelo, String texto) throws IOException {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    String[] fields = {
+      "nombre_conyuge_1",
+      "cedula_conyuge_1",
+      "nombre_conyuge_2",
+      "cedula_conyuge_2",
+      "profesion_conyuge_1",
+      "profesion_conyuge_2",
+      "canton_domicilio",
+      "nombre_afiliado",
+      "descripcion_inmuebles_antecedentes",
+      "descripcion_inmueble_hipoteca",
+      "parroquia_inmueble",
+      "canton_inmueble",
+      "provincia_inmueble",
+      "lindero_norte",
+      "lindero_sur",
+      "lindero_este",
+      "lindero_oeste",
+      "superficie_m2",
+      "estado_civil",
+      "monto_prestamo",
+      "monto_prestamo_letras",
+      "plazo_credito",
+      "tasa_interes_inicial",
+      "institucion_financiera_original",
+      "direccion_deudor",
+      "telefono_deudor",
+      "correo_deudor",
+      "ciudad_firma",
+      "fecha_firma"
+    };
+    ArrayNode required = schema.putArray("required");
+    for (String field : fields) {
+      ObjectNode prop = props.putObject(field);
+      prop.put("type", "string");
+      prop.put(
+          "description",
+          "Valor del campo "
+              + field
+              + ". Si no aparece en el OCR, usa exactamente nodata.");
+      required.add(field);
+    }
+
+    String system =
+        """
+        Eres un asistente legal experto en minutas y contratos de mutuo hipotecario BIESS (Ecuador).
+        Analiza el texto OCR del expediente y extrae exactamente los campos de la herramienta.
+        Campos de identidad/inmueble (minuta) y de crédito/contacto (contrato de mutuo).
+        REGLAS:
+        1. Si un dato no está presente o es ilegible, usa exactamente la cadena nodata.
+        2. No inventes montos, tasas, plazos, cédulas ni nombres.
+        3. monto_prestamo: cifra en números (ej. 45000.00). monto_prestamo_letras: en palabras.
+        4. institucion_financiera_original: banco acreedor anterior a cancelar (sustitución).
+        5. No agregues texto fuera de la herramienta.
+        """;
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", MAX_TOKENS);
+    body.put("system", system);
+
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", MINUTA_VIVIENDA_TOOL_NAME);
+    tool.put(
+        "description",
+        "Registra datos para minuta de hipoteca y contrato de mutuo (vivienda hipotecada BIESS).");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", MINUTA_VIVIENDA_TOOL_NAME);
+
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "Extrae los datos de minuta/contrato de mutuo del siguiente expediente OCR.\n\n<expediente_ocr>\n"
+            + truncate(texto, MAX_CHARS_OCR)
+            + "\n</expediente_ocr>");
+
+    return objectMapper.writeValueAsString(body);
   }
 
   private HttpResponse<String> enviar(String body) throws IOException, InterruptedException {
