@@ -1,26 +1,41 @@
 package com.lexia.api.modules.expedientes.escrituracion;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorrador;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
+import com.lexia.api.modules.expedientes.documentos.ExtractedData;
+import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
-import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisResultDTO;
-import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.ObservationItem;
-import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
+import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService;
+import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService.Ejecucion;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.DatosExtraidos;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Dictamen;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Inmueble;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Observacion;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Persona;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.DocumentoExtraido;
+import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore;
+import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
+import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto;
+import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto.DocOcr;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
-import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
-import com.lexia.api.modules.ia.prompt.ProductPromptMapRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,228 +43,364 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 /**
- * POST /expedientes/{id}/escrituracion/analizar-ia — estudio IA con prompt del producto
- * (TICKET-DEV-704).
+ * Una llamada LLM por expediente: OCR Azure ya guardado → texto {@code <documento id>} → LLM.
+ * La misma respuesta alimenta el cotejo ({@code extracted_data} grupo documento), los datos
+ * consolidados y el dictamen ({@code title_study}). Sin unir PDFs.
  */
 @Service
 public class IaAnalysisService {
 
   private static final Logger LOG = LoggerFactory.getLogger(IaAnalysisService.class);
-  private static final String DEFAULT_PROMPT_KEY = "PROMPT_DEFAULT";
+  private static final Set<String> GRUPOS = Set.of("comprador", "vendedor", "inmueble");
+  private static final Pattern OBS =
+      Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$");
 
   private final LegalCaseRepository legalCases;
+  private final ExpedienteBorradorStore borradores;
   private final WritingFileRepository writingFiles;
   private final TitleStudyRepository titleStudies;
   private final TitleObservationRepository titleObservations;
-  private final ProductPromptMapRepository productPromptMapRepository;
+  private final ExtractedDataRepository extractedData;
+  private final DocumentoTextoOcrRepository documentoTextoOcr;
   private final OcrSessionCacheService ocrCache;
-  private final AnalisisDocumentoService analisis;
+  private final ExpedienteCompletoLlmService llm;
+  private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
+  private final ObjectMapper objectMapper;
 
   public IaAnalysisService(
       LegalCaseRepository legalCases,
+      ExpedienteBorradorStore borradores,
       WritingFileRepository writingFiles,
       TitleStudyRepository titleStudies,
       TitleObservationRepository titleObservations,
-      ProductPromptMapRepository productPromptMapRepository,
+      ExtractedDataRepository extractedData,
+      DocumentoTextoOcrRepository documentoTextoOcr,
       OcrSessionCacheService ocrCache,
-      AnalisisDocumentoService analisis,
-      AuthorizationService authorization) {
+      ExpedienteCompletoLlmService llm,
+      DocumentosExtraidosStore documentos,
+      AuthorizationService authorization,
+      ObjectMapper objectMapper) {
     this.legalCases = legalCases;
+    this.borradores = borradores;
     this.writingFiles = writingFiles;
     this.titleStudies = titleStudies;
     this.titleObservations = titleObservations;
-    this.productPromptMapRepository = productPromptMapRepository;
+    this.extractedData = extractedData;
+    this.documentoTextoOcr = documentoTextoOcr;
     this.ocrCache = ocrCache;
-    this.analisis = analisis;
+    this.llm = llm;
+    this.documentos = documentos;
     this.authorization = authorization;
+    this.objectMapper = objectMapper;
   }
 
   @Transactional
-  public AnalysisResultDTO analizarExpedienteConPromptProducto(
+  public ProcesarExpedienteCompletoResult analizarExpedienteConPromptProducto(
       UUID expedienteId, AnalysisRequestDTO request) {
     authorization.requirePermission("expedientes:caso:escribir");
     UUID tenantId = AuthContext.require().tenantId();
 
-    LegalCase legalCase =
-        legalCases
-            .findByIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
-            .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    ExpedienteBorrador borrador = borradores.find(expedienteId, tenantId).orElse(null);
+    LegalCase legalCase = null;
+    if (borrador != null) {
+      LOG.info("analizar-ia usa borrador id={} tenant={}", expedienteId, tenantId);
+    } else {
+      legalCase =
+          legalCases
+              .findByIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
+              .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    }
 
     WritingFile writingFile =
-        writingFiles
-            .findByCaseIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
-            .orElse(null);
+        legalCase == null
+            ? null
+            : writingFiles
+                .findByCaseIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
+                .orElse(null);
 
-    String productCode = resolveProductCode(legalCase, writingFile);
+    String productCode =
+        legalCase != null ? resolveProductCode(legalCase, writingFile) : text(borrador.getProductCode());
     if (!StringUtils.hasText(productCode)) {
       throw ApiException.badRequest("El expediente no tiene un producto asignado.");
     }
 
-    String promptKey =
-        productPromptMapRepository
-            .findPromptKeyByProductCode(productCode.trim())
-            .filter(StringUtils::hasText)
-            .orElse(DEFAULT_PROMPT_KEY);
-
-    boolean force =
-        request == null
-            || request.forceReanalysis() == null
-            || Boolean.TRUE.equals(request.forceReanalysis());
-
+    boolean force = request != null && Boolean.TRUE.equals(request.forceReanalysis());
+    if (!force && borrador != null) {
+      ProcesarExpedienteCompletoResult cachedDraft = readDraftStudy(borrador);
+      if (cachedDraft != null) {
+        return cachedDraft;
+      }
+    }
     if (!force && writingFile != null) {
-      AnalysisResultDTO cached = loadCached(expedienteId, tenantId, writingFile, productCode, promptKey);
+      ProcesarExpedienteCompletoResult cached =
+          loadCached(expedienteId, tenantId, writingFile, productCode);
       if (cached != null) {
         return cached;
       }
     }
 
-    String canton = resolveCanton(writingFile);
-    String ocrText = loadOcrConsolidated(legalCase, request);
-    if (!analisis.isConfigured()) {
-      throw ApiException.badRequest("Proveedor LLM no configurado para análisis IA.");
-    }
-
-    ExtraccionCotejo ext = analisis.cotejarExpediente(ocrText, productCode, canton);
-    if (ext == null || ext.resultado() == null) {
+    String canton = legalCase != null ? resolveCanton(writingFile) : cantonOf(borrador);
+    String ocrText =
+        loadOcrMarcado(
+            expedienteId, legalCase == null ? null : legalCase.getCode(), request);
+    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
+    ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
+    if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
       throw ApiException.badRequest(
           ext != null && StringUtils.hasText(ext.motivo())
               ? ext.motivo()
               : "No se obtuvo resultado de análisis IA.");
     }
-    if ("ERROR".equals(ext.estado())) {
-      LOG.warn("analizar-ia id={} error={}", expedienteId, ext.motivo());
-      throw ApiException.badRequest(
-          StringUtils.hasText(ext.motivo()) ? ext.motivo() : "Error en análisis IA.");
+
+    List<DocOcr> cabeceras = OcrExpedienteTexto.cabeceras(ocrText);
+    List<DocumentoExtraido> extraidosLlm = ext.payload().documentosExtraidos();
+    List<DocumentoExtraidoDTO> documentosExtraidos =
+        legalCase == null
+            ? documentos.proyectar(extraidosLlm, cabeceras)
+            : documentos.guardar(tenantId, expedienteId, extraidosLlm, cabeceras);
+    ProcesarExpedienteCompletoResult response =
+        new ProcesarExpedienteCompletoResult(
+            expedienteId,
+            productCode,
+            ejecucion.promptKey(),
+            documentosExtraidos,
+            ext.payload().datosExtraidos(),
+            ext.payload().dictamen());
+
+    if (legalCase != null) {
+      persistExtracted(tenantId, expedienteId, response.datosExtraidos());
     }
-
-    ResultadoCotejoDTO resultado = ext.resultado();
-    AnalysisResultDTO response = toResult(expedienteId, productCode, promptKey, resultado);
-
     if (writingFile != null) {
-      persistStudy(tenantId, writingFile, response);
+      persistStudy(tenantId, writingFile, response.dictamen());
+    } else if (borrador != null) {
+      persistDraftStudy(borrador, response);
     } else {
       LOG.info(
-          "analizar-ia id={} sin writing_file: resultado no persistido en title_study",
+          "analizar-ia id={} sin writing_file: dictamen no persistido en title_study",
           expedienteId);
     }
 
     LOG.info(
-        "analizar-ia id={} product={} key={} status={} obs={}",
+        "analizar-ia id={} product={} key={} documentos={} estado={}",
         expedienteId,
         productCode,
-        promptKey,
-        response.status(),
-        response.observations().size());
+        ejecucion.promptKey(),
+        documentosExtraidos.size(),
+        response.dictamen() == null ? null : response.dictamen().estado());
     return response;
   }
 
-  private AnalysisResultDTO loadCached(
-      UUID expedienteId,
-      UUID tenantId,
-      WritingFile writingFile,
-      String productCode,
-      String promptKey) {
+  private ProcesarExpedienteCompletoResult readDraftStudy(ExpedienteBorrador borrador) {
+    if (borrador == null || !StringUtils.hasText(borrador.getDatosExtraidos())) {
+      return null;
+    }
+    try {
+      return objectMapper.readValue(
+          borrador.getDatosExtraidos(), ProcesarExpedienteCompletoResult.class);
+    } catch (JsonProcessingException e) {
+      LOG.warn("analizar-ia borrador id={} datos_extraidos ilegible", borrador.getId());
+      return null;
+    }
+  }
+
+  private void persistDraftStudy(ExpedienteBorrador borrador, ProcesarExpedienteCompletoResult response) {
+    try {
+      borradores.guardarEstudio(
+          borrador.getId(), borrador.getTenantId(), objectMapper.writeValueAsString(response));
+    } catch (JsonProcessingException e) {
+      throw ApiException.badRequest("No se pudo guardar el estudio IA del borrador.");
+    }
+  }
+
+  private ProcesarExpedienteCompletoResult loadCached(
+      UUID expedienteId, UUID tenantId, WritingFile writingFile, String productCode) {
     return titleStudies
         .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(writingFile.getId(), tenantId)
         .filter(s -> StringUtils.hasText(s.getStatus()) && !"PENDING".equalsIgnoreCase(s.getStatus()))
         .map(
             study -> {
-              List<ObservationItem> obs =
-                  titleObservations
-                      .findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(study.getId(), tenantId)
-                      .stream()
-                      .map(
-                          o ->
-                              new ObservationItem(
-                                  "OBS_CACHED",
-                                  "MEDIUM",
-                                  o.getDetail() == null ? "" : o.getDetail()))
-                      .toList();
-              return new AnalysisResultDTO(
+              List<Observacion> obs = new ArrayList<>();
+              for (TitleObservation row :
+                  titleObservations.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(
+                      study.getId(), tenantId)) {
+                obs.add(parseObs(row.getDetail()));
+              }
+              return new ProcesarExpedienteCompletoResult(
                   expedienteId,
                   productCode,
-                  promptKey,
-                  study.getStatus(),
-                  study.getSummary(),
-                  obs,
-                  Map.of());
+                  null,
+                  documentos.cargar(expedienteId, tenantId),
+                  loadDatos(expedienteId, tenantId),
+                  new Dictamen(study.getStatus(), study.getSummary(), obs));
             })
         .orElse(null);
   }
 
-  private void persistStudy(UUID tenantId, WritingFile writingFile, AnalysisResultDTO result) {
+  private DatosExtraidos loadDatos(UUID expedienteId, UUID tenantId) {
+    Map<String, String> values = new LinkedHashMap<>();
+    for (ExtractedData row :
+        extractedData.findByCaseIdAndTenantIdOrderByFieldLabelAsc(expedienteId, tenantId)) {
+      if (row.getFieldLabel() != null) {
+        values.put(row.getFieldLabel(), row.getFieldValue());
+      }
+    }
+    if (values.isEmpty()) {
+      return new DatosExtraidos(null, null, null);
+    }
+    return new DatosExtraidos(
+        new Persona(
+            values.get("comprador.nombres"),
+            values.get("comprador.cedula"),
+            values.get("comprador.estadoCivil")),
+        new Persona(
+            values.get("vendedor.nombres"),
+            values.get("vendedor.cedula"),
+            values.get("vendedor.estadoCivil")),
+        new Inmueble(
+            values.get("inmueble.claveCatastral"),
+            values.get("inmueble.linderos"),
+            parseDouble(values.get("inmueble.avaluo"))));
+  }
+
+  private void persistExtracted(UUID tenantId, UUID caseId, DatosExtraidos datos) {
+    extractedData.deleteByCaseIdAndTenantIdAndFieldGroupIn(caseId, tenantId, GRUPOS);
+    if (datos == null) {
+      return;
+    }
+    savePersona(tenantId, caseId, "comprador", datos.comprador());
+    savePersona(tenantId, caseId, "vendedor", datos.vendedor());
+    Inmueble inmueble = datos.inmueble();
+    if (inmueble == null) {
+      return;
+    }
+    saveCampo(tenantId, caseId, "inmueble", "claveCatastral", inmueble.claveCatastral());
+    saveCampo(tenantId, caseId, "inmueble", "linderos", inmueble.linderos());
+    if (inmueble.avaluo() != null) {
+      saveCampo(tenantId, caseId, "inmueble", "avaluo", inmueble.avaluo().toString());
+    }
+  }
+
+  private void savePersona(UUID tenantId, UUID caseId, String grupo, Persona persona) {
+    if (persona == null) {
+      return;
+    }
+    saveCampo(tenantId, caseId, grupo, "nombres", persona.nombres());
+    saveCampo(tenantId, caseId, grupo, "cedula", persona.cedula());
+    saveCampo(tenantId, caseId, grupo, "estadoCivil", persona.estadoCivil());
+  }
+
+  private void saveCampo(
+      UUID tenantId, UUID caseId, String grupo, String campo, String valor) {
+    if (!StringUtils.hasText(valor)) {
+      return;
+    }
+    extractedData.save(
+        ExtractedData.create(tenantId, caseId, grupo + "." + campo, valor.trim(), grupo));
+  }
+
+  private void persistStudy(UUID tenantId, WritingFile writingFile, Dictamen dictamen) {
     TitleStudy study =
         titleStudies
             .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(
                 writingFile.getId(), tenantId)
             .orElseGet(() -> titleStudies.save(TitleStudy.create(tenantId, writingFile.getId())));
-    study.applyResult(result.status(), result.summary());
+    String estado = dictamen == null || !StringUtils.hasText(dictamen.estado())
+        ? "WITH_OBSERVATIONS"
+        : dictamen.estado().trim();
+    String resumen = dictamen == null ? "" : dictamen.resumen();
+    study.applyResult(estado, resumen);
     titleStudies.save(study);
-
-    for (ObservationItem item : result.observations()) {
-      if (item != null && StringUtils.hasText(item.message())) {
-        String detail =
-            "["
-                + (item.severity() == null ? "MEDIUM" : item.severity())
-                + "] "
-                + (item.code() == null ? "OBS" : item.code())
-                + ": "
-                + item.message().trim();
-        titleObservations.save(TitleObservation.create(tenantId, study.getId(), detail));
+    titleObservations.deleteByTitleStudyIdAndTenantId(study.getId(), tenantId);
+    if (dictamen == null) {
+      return;
+    }
+    for (Observacion item : dictamen.observaciones()) {
+      if (item == null || !StringUtils.hasText(item.mensaje())) {
+        continue;
       }
+      String detail =
+          "["
+              + (item.severidad() == null ? "MEDIUM" : item.severidad())
+              + "] "
+              + (item.codigo() == null ? "OBS" : item.codigo())
+              + ": "
+              + item.mensaje().trim();
+      titleObservations.save(TitleObservation.create(tenantId, study.getId(), detail));
     }
   }
 
   /**
-   * OCR consolidado post-paso 3 (async): textos de todos los docs unidos en caché de sesión.
-   * La UI guarda bajo sessionId del borrador ({@code EXP-YYYY-NNNNN}), no bajo el UUID del caso.
+   * OCR por archivo (caché de sesión o {@code documento_texto_ocr}). No une binarios.
    */
-  private String loadOcrConsolidated(LegalCase legalCase, AnalysisRequestDTO request) {
+  String loadOcrMarcado(UUID expedienteId, String caseCode, AnalysisRequestDTO request) {
     List<String> candidates = new ArrayList<>();
     if (request != null && StringUtils.hasText(request.sessionId())) {
       candidates.add(request.sessionId().trim());
     }
-    if (StringUtils.hasText(legalCase.getCode())) {
-      candidates.add(legalCase.getCode().trim());
+    if (StringUtils.hasText(caseCode)) {
+      candidates.add(caseCode.trim());
     }
-    candidates.add(legalCase.getId().toString());
+    candidates.add(expedienteId.toString());
 
-    String content = null;
-    String usedSession = null;
-    for (String id : candidates) {
+    String marcado = OcrExpedienteTexto.paraClaude(ocrCache, candidates);
+    if (!StringUtils.hasText(marcado)) {
+      marcado = ocrDesdeDb(candidates);
+    }
+    if (!StringUtils.hasText(marcado)) {
+      throw ApiException.badRequest(
+          "Sin texto OCR para analizar. Ejecuta Azure OCR por archivo antes del estudio IA."
+              + " sessionHint="
+              + (request != null ? request.sessionId() : null)
+              + " case="
+              + expedienteId);
+    }
+    LOG.info("analizar-ia OCR caseId={} chars={}", expedienteId, marcado.length());
+    return marcado;
+  }
+
+  private String ocrDesdeDb(List<String> ids) {
+    for (String id : ids) {
       if (!StringUtils.hasText(id)) {
         continue;
       }
-      String cached = ocrCache.getConsolidated(id);
-      List<OcrFileResult> results = ocrCache.listResults(id);
-      if (cached == null && (results == null || results.isEmpty())) {
+      List<DocumentoTextoOcr> rows = documentoTextoOcr.findByIdExpedienteOrderByCreatedAtAsc(id);
+      if (rows == null || rows.isEmpty()) {
         continue;
       }
-      if (!StringUtils.hasText(cached) && results != null && !results.isEmpty()) {
-        cached = ValidacionIaService.rebuildConsolidado(results);
+      List<DocOcr> docs = new ArrayList<>();
+      for (DocumentoTextoOcr row : rows) {
+        if (row == null || !StringUtils.hasText(row.getTextoOcr())) {
+          continue;
+        }
+        docs.add(new DocOcr(row.getIdDocumento(), row.getTipoDocumento(), null, row.getTextoOcr()));
       }
-      if (StringUtils.hasText(cached)) {
-        content = cached;
-        usedSession = id;
-        break;
+      String marcado = OcrExpedienteTexto.documentos(docs);
+      if (StringUtils.hasText(marcado)) {
+        return marcado;
       }
     }
+    return "";
+  }
 
-    if (!StringUtils.hasText(content)) {
-      throw ApiException.badRequest(
-          "Sin texto OCR consolidado para analizar. Completa el paso 3 (OCR) y consolida los"
-              + " documentos antes de ejecutar el estudio IA. sessionHint="
-              + (request != null ? request.sessionId() : null)
-              + " case="
-              + legalCase.getId());
+  private static Observacion parseObs(String detail) {
+    String raw = detail == null ? "" : detail.trim();
+    Matcher m = OBS.matcher(raw);
+    if (m.matches()) {
+      return new Observacion(m.group(2).trim(), m.group(1), m.group(3).trim());
     }
-    LOG.info(
-        "analizar-ia OCR session={} caseId={} chars={}",
-        usedSession,
-        legalCase.getId(),
-        content.length());
-    return content;
+    return new Observacion("OBS", "MEDIUM", raw);
+  }
+
+  private static Double parseDouble(String raw) {
+    if (!StringUtils.hasText(raw)) {
+      return null;
+    }
+    try {
+      return Double.valueOf(raw.trim());
+    } catch (NumberFormatException e) {
+      return null;
+    }
   }
 
   private static String resolveProductCode(LegalCase legalCase, WritingFile writingFile) {
@@ -260,6 +411,17 @@ public class IaAnalysisService {
       return writingFile.getProductCode().trim();
     }
     return null;
+  }
+
+  private static String text(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private static String cantonOf(ExpedienteBorrador borrador) {
+    if (borrador != null && StringUtils.hasText(borrador.getCanton())) {
+      return borrador.getCanton().trim();
+    }
+    return "GUAYAQUIL";
   }
 
   private static String resolveCanton(WritingFile writingFile) {
@@ -273,58 +435,5 @@ public class IaAnalysisService {
       return writingFile.getMunicipality().trim();
     }
     return "GUAYAQUIL";
-  }
-
-  static AnalysisResultDTO toResult(
-      UUID expedienteId, String productCode, String promptKey, ResultadoCotejoDTO r) {
-    List<ObservationItem> observations = new ArrayList<>();
-    int i = 1;
-    for (String msg : r.observaciones()) {
-      if (!StringUtils.hasText(msg)) {
-        continue;
-      }
-      String severity =
-          "RECHAZADO".equalsIgnoreCase(r.estado())
-              ? "HIGH"
-              : "ADVERTENCIA".equalsIgnoreCase(r.estado()) ? "MEDIUM" : "LOW";
-      observations.add(new ObservationItem("OBS_" + i++, severity, msg.trim()));
-    }
-
-    String status = mapStatus(r, observations);
-    String summary =
-        StringUtils.hasText(r.resumenValidacion())
-            ? r.resumenValidacion()
-            : defaultSummary(r, observations);
-
-    Map<String, String> extracted = new LinkedHashMap<>();
-    extracted.put("coincidePersona", String.valueOf(r.coincidePersona()));
-    extracted.put("coincideInmueble", String.valueOf(r.coincideInmueble()));
-
-    return new AnalysisResultDTO(
-        expedienteId, productCode, promptKey, status, summary, observations, extracted);
-  }
-
-  private static String mapStatus(ResultadoCotejoDTO r, List<ObservationItem> observations) {
-    String estado = r.estado() == null ? "" : r.estado().trim().toUpperCase(Locale.ROOT);
-    if ("APROBADO".equals(estado) && observations.isEmpty()) {
-      return "APPROVED";
-    }
-    if ("RECHAZADO".equals(estado)) {
-      return "REJECTED";
-    }
-    if (!observations.isEmpty() || "ADVERTENCIA".equals(estado)) {
-      return "WITH_OBSERVATIONS";
-    }
-    return StringUtils.hasText(estado) ? estado : "WITH_OBSERVATIONS";
-  }
-
-  private static String defaultSummary(ResultadoCotejoDTO r, List<ObservationItem> observations) {
-    if (observations.isEmpty() && r.coincidePersona() && r.coincideInmueble()) {
-      return "Cotejo OK: identidad e inmueble coinciden.";
-    }
-    if (!observations.isEmpty()) {
-      return "Análisis con " + observations.size() + " observación(es).";
-    }
-    return "Análisis completado.";
   }
 }

@@ -1,10 +1,12 @@
 package com.lexia.api.modules.ia.ocr;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCotejo;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
+import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
+import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoFuente;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoGrupo;
@@ -19,18 +21,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
   /**
-   * E04: lee caché consolidada (E03) y coteja campos entre documentos.
-   * Las filas de comparación salen siempre del cotejo campo-a-campo (valores reales por fuente).
-   * Claude, si está configurado, aporta la observación general / resumen notarial.
+   * E04: coteja campos entre documentos a partir de la extracción documental persistida en
+   * {@code extracted_data} por {@code analizar-ia} (única llamada LLM del expediente). Este
+   * servicio no invoca al LLM.
    *
    * <p>Parejas comparables (mismas reglas que {@code COTEJO_NOTARIAL_V1} / Claude fallback;
    * no inventa nuevas):
@@ -95,38 +97,49 @@ public class OcrCotejoService {
 
   private static final Map<String, Integer> MESES = meses();
 
-  private final OcrSessionCacheService cache;
-  private final AnalisisDocumentoService analisis;
+  private final DocumentosExtraidosStore documentos;
+  private final ExpedienteBorradorStore borradores;
+  private final ObjectMapper objectMapper;
 
-  public OcrCotejoService(OcrSessionCacheService cache, AnalisisDocumentoService analisis) {
-    this.cache = cache;
-    this.analisis = analisis;
+  public OcrCotejoService(
+      DocumentosExtraidosStore documentos,
+      ExpedienteBorradorStore borradores,
+      ObjectMapper objectMapper) {
+    this.documentos = documentos;
+    this.borradores = borradores;
+    this.objectMapper = objectMapper;
   }
 
-  public CotejoResponse cotejar(String sessionId) {
+  /**
+   * Coteja con la extracción documental que persistió {@code analizar-ia} (sin llamada LLM).
+   * {@code caseId} es el expediente; si falta, se intenta interpretar {@code sessionId} como tal.
+   */
+  public CotejoResponse cotejar(String sessionId, String caseId) {
     if (!StringUtils.hasText(sessionId)) {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String id = sessionId.trim();
-    String content = cache.getConsolidated(id);
-    List<OcrFileResult> results = cache.listResults(id);
-
-    if (content == null && results.isEmpty()) {
-      throw ApiException.notFound("Caché OCR no encontrada o expirada para sessionId=" + id);
+    UUID caso = parseUuid(caseId);
+    if (caso == null) {
+      caso = parseUuid(id);
     }
-    if (!StringUtils.hasText(content) && !results.isEmpty()) {
-      content = rebuildFromResults(results);
+    if (caso == null) {
+      LOG.info("Cotejo sessionId={}: sin caseId, no hay extracción persistida", id);
+      return empty(id);
     }
-    if (!StringUtils.hasText(content)) {
+    UUID tenantId = AuthContext.require().tenantId();
+    List<DocumentoExtraidoDTO> docs = documentos.cargar(caso, tenantId);
+    if (docs.isEmpty()) {
+      docs = documentosBorrador(caso, tenantId);
+    }
+    SeccionesCotejo secciones = seccionesDesdeExtraccion(docs);
+    if (secciones.sections().isEmpty()) {
+      LOG.info("Cotejo sessionId={} caseId={}: sin extracción (ejecutar analizar-ia)", id, caso);
       return empty(id);
     }
 
-    CotejoResponse porCampos = cotejarPorCampos(id, content, results);
-    String observacionIa = observacionDesdeIa(content);
-    String observacionGeneral =
-        StringUtils.hasText(observacionIa)
-            ? observacionIa.trim()
-            : observacionDesdeResumen(porCampos.resumen());
+    CotejoResponse porCampos = cotejarPorCampos(id, secciones.sections(), secciones.datos());
+    String observacionGeneral = observacionDesdeResumen(porCampos.resumen());
 
     CotejoResumen resumen = porCampos.resumen();
     return new CotejoResponse(
@@ -143,51 +156,33 @@ public class OcrCotejoService {
         porCampos.grupos());
   }
 
-  private String observacionDesdeIa(String content) {
-    if (analisis == null || !analisis.isConfigured()) {
-      return null;
-    }
+  private List<DocumentoExtraidoDTO> documentosBorrador(UUID caso, UUID tenantId) {
+    return borradores
+        .find(caso, tenantId)
+        .map(row -> row.getDatosExtraidos())
+        .filter(StringUtils::hasText)
+        .map(this::docsDesdeJson)
+        .orElse(List.of());
+  }
+
+  private List<DocumentoExtraidoDTO> docsDesdeJson(String json) {
     try {
-      ExtraccionCotejo cotejo = analisis.cotejarExpediente(content);
-      if (cotejo == null || !"OK".equals(cotejo.estado()) || cotejo.resultado() == null) {
-        if (cotejo != null && "ERROR".equals(cotejo.estado())) {
-          LOG.info("Cotejo notarial no aplicado motivo={} → observación por reglas", cotejo.motivo());
-        }
-        return null;
-      }
-      ResultadoCotejoDTO r = cotejo.resultado();
-      LOG.info("Cotejo notarial OK estado={} (solo observación general)", r.estado());
-      // Preferir lista detallada (una por línea) para el panel Observaciones del FE.
-      if (r.observaciones() != null && !r.observaciones().isEmpty()) {
-        String joined =
-            r.observaciones().stream()
-                .filter(StringUtils::hasText)
-                .map(String::trim)
-                .collect(Collectors.joining("\n"));
-        if (StringUtils.hasText(joined)) {
-          return joined;
-        }
-      }
-      if (StringUtils.hasText(r.resumenValidacion())) {
-        return r.resumenValidacion().trim();
-      }
-    } catch (Exception ex) {
-      LOG.warn("Cotejo notarial fail err={}", ex.getMessage());
+      ProcesarExpedienteCompletoResult result =
+          objectMapper.readValue(json, ProcesarExpedienteCompletoResult.class);
+      return result.documentosExtraidos() == null ? List.of() : result.documentosExtraidos();
+    } catch (JsonProcessingException e) {
+      LOG.warn("Cotejo: datos_extraidos del borrador ilegible");
+      return List.of();
     }
-    return null;
   }
 
   private CotejoResponse cotejarPorCampos(
-      String id, String content, List<OcrFileResult> results) {
-    List<DocSection> sections = parseSections(content, results);
-    if (sections.isEmpty()) {
-      return empty(id);
-    }
-
+      String id, List<DocSection> sections, List<Map<String, String>> datosPorSeccion) {
     Map<String, Map<String, String>> valuesByField = new LinkedHashMap<>();
 
-    for (DocSection section : sections) {
-      Map<String, String> datos = extractDatos(section);
+    for (int i = 0; i < sections.size(); i++) {
+      DocSection section = sections.get(i);
+      Map<String, String> datos = datosPorSeccion.get(i);
       for (Map.Entry<String, String> e : datos.entrySet()) {
         String campo = e.getKey();
         String valor = e.getValue();
@@ -1354,33 +1349,44 @@ public class OcrCotejoService {
     return 50;
   }
 
-  private Map<String, String> extractDatos(DocSection section) {
-    Map<String, String> out = new LinkedHashMap<>();
-    if (!StringUtils.hasText(section.texto())) {
-      return out;
-    }
-    if (analisis != null && analisis.isConfigured()) {
-      try {
-        ExtraccionDocumento ext = analisis.extraerDatosClave(section.texto(), section.tipo());
-        if (ext != null && ext.datos() != null && ext.datos().datosClave() != null) {
-          Map<String, String> planos = new LinkedHashMap<>();
-          aplanarDatos("", ext.datos().datosClave(), planos);
-          for (Map.Entry<String, String> e : planos.entrySet()) {
-            incorporarCampo(out, e.getKey(), e.getValue());
-          }
-        }
-      } catch (Exception ex) {
-        LOG.warn("Cotejo extract fail tipo={} err={}", section.tipo(), ex.getMessage());
+  /**
+   * Secciones + datos por sección desde la extracción documental persistida. Nombres de documento
+   * únicos (el cotejo indexa fuentes por nombre).
+   */
+  static SeccionesCotejo seccionesDesdeExtraccion(List<DocumentoExtraidoDTO> docs) {
+    List<DocSection> sections = new ArrayList<>();
+    List<Map<String, String>> datos = new ArrayList<>();
+    Set<String> usados = new LinkedHashSet<>();
+    int i = 0;
+    for (DocumentoExtraidoDTO doc : docs == null ? List.<DocumentoExtraidoDTO>of() : docs) {
+      i++;
+      if (doc == null) {
+        continue;
       }
+      String tipo = StringUtils.hasText(doc.tipoDocumento()) ? doc.tipoDocumento().trim() : "DOCUMENTO";
+      String base = firstNonBlank(doc.nombre(), doc.tipoDocumento(), doc.documentoId());
+      String nombre = base == null ? "Documento " + i : base;
+      int n = 2;
+      while (!usados.add(nombre)) {
+        nombre = (base == null ? "Documento " + i : base) + " (" + n++ + ")";
+      }
+      Map<String, String> campos = new LinkedHashMap<>();
+      if (doc.datosClave() != null) {
+        for (Map.Entry<String, String> e : doc.datosClave().entrySet()) {
+          incorporarCampo(campos, e.getKey(), e.getValue());
+        }
+      }
+      sections.add(new DocSection(nombre, tipo, ""));
+      datos.add(campos);
     }
-    return out;
+    return new SeccionesCotejo(sections, datos);
   }
 
   /**
    * Aplana mapas/listas anidados (p.ej. {@code linderos: {norte, sur}}) a claves string con valor
    * legible. Sin esto, {@code String.valueOf(Map)} produce textos inútiles o vacíos en el FE.
    */
-  static void aplanarDatos(String prefijo, Object valor, Map<String, String> out) {
+  public static void aplanarDatos(String prefijo, Object valor, Map<String, String> out) {
     if (valor == null) {
       return;
     }
@@ -1648,18 +1654,15 @@ public class OcrCotejoService {
     return StringUtils.hasText(tipo) ? tipo : ("Documento " + (index + 1));
   }
 
-  private static String rebuildFromResults(List<OcrFileResult> results) {
-    StringBuilder sb = new StringBuilder();
-    for (OcrFileResult r : results) {
-      if (r == null || !r.legible()) {
-        continue;
-      }
-      String tipo = StringUtils.hasText(r.tipoDocumento()) ? r.tipoDocumento() : "DOCUMENTO";
-      sb.append("=== DOCUMENTO: ").append(tipo).append(" ===\n");
-      sb.append(r.textoExtraido() == null ? "" : r.textoExtraido().trim());
-      sb.append("\n\n");
+  private static UUID parseUuid(String raw) {
+    if (!StringUtils.hasText(raw)) {
+      return null;
     }
-    return sb.toString().trim();
+    try {
+      return UUID.fromString(raw.trim());
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
   }
 
   private static String firstNonBlank(String... values) {
@@ -1700,6 +1703,8 @@ public class OcrCotejoService {
   }
 
   record DocSection(String documento, String tipo, String texto) {}
+
+  record SeccionesCotejo(List<DocSection> sections, List<Map<String, String>> datos) {}
 
   private record GrupoDef(String id, String label) {}
 

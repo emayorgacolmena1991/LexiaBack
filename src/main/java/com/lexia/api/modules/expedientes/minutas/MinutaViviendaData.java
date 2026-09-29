@@ -101,6 +101,10 @@ public class MinutaViviendaData {
   @JsonProperty("fecha_firma")
   private String fechaFirma = "";
 
+  /** Solo desde captura BIESS / ingreso manual; las plantillas actuales aún no tienen este tag. */
+  @JsonProperty("apoderado_biess")
+  private String apoderadoBiess = "";
+
   public String getNombreConyuge1() {
     return nombreConyuge1;
   }
@@ -333,6 +337,14 @@ public class MinutaViviendaData {
     this.fechaFirma = nullToEmpty(fechaFirma);
   }
 
+  public String getApoderadoBiess() {
+    return apoderadoBiess;
+  }
+
+  public void setApoderadoBiess(String apoderadoBiess) {
+    this.apoderadoBiess = nullToEmpty(apoderadoBiess);
+  }
+
   /**
    * Mapa listo para poi-tl (keys = tags del .docx). Valores vacíos → {@code nodata}.
    */
@@ -367,6 +379,7 @@ public class MinutaViviendaData {
     map.put("correo_deudor", blankToNodata(correoDeudor));
     map.put("ciudad_firma", blankToNodata(ciudadFirma));
     map.put("fecha_firma", blankToNodata(fechaFirma));
+    map.put("apoderado_biess", blankToNodata(apoderadoBiess));
     return map;
   }
 

@@ -22,6 +22,7 @@ import com.lexia.api.modules.expedientes.ecd.EcdDocumentReq;
 import com.lexia.api.modules.expedientes.ecd.EcdDocumentReqRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
+import com.lexia.api.modules.expedientes.documentos.IngestionMode;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import com.lexia.api.modules.expedientes.documentos.LegalDocumentRepository;
@@ -154,11 +155,15 @@ public class EjdValidationEvaluationService {
       return;
     }
 
+    boolean fisico = IngestionMode.from(legalCase.getIngestionMode()).isFisicoEscaneado();
     List<String> required = resolveRequiredDocumentCodes(legalCase);
     String scopeLabel =
         legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()
             ? legalCase.getProductCode()
             : legalCase.getOperationTypeCode();
+    if (fisico && (scopeLabel == null || scopeLabel.isBlank())) {
+      scopeLabel = IngestionMode.EXPEDIENTE_FISICO_ESCANEADO_LABEL.toLowerCase(Locale.ROOT);
+    }
 
     if (scopeLabel == null || scopeLabel.isBlank()) {
       validation.applyEvaluation(
@@ -207,6 +212,9 @@ public class EjdValidationEvaluationService {
   }
 
   private List<String> resolveRequiredDocumentCodes(LegalCase legalCase) {
+    if (IngestionMode.from(legalCase.getIngestionMode()).isFisicoEscaneado()) {
+      return List.of(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
+    }
     UUID tenantId = legalCase.getTenantId();
     if (legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
       String product = legalCase.getProductCode().trim().toUpperCase(Locale.ROOT);

@@ -7,10 +7,8 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Documento
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.PrevalidacionDocumentoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
-import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.ia.ocr.AzureOcrService;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -26,17 +24,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.lexia.api.modules.expedientes.tenant.TenantGovernanceService;
 
-/** Orquestador: Azure OCR → memoria borrador → LLM (gemini|claude) → prevalidación. */
+/** Orquestador de ingesta: Azure OCR por archivo. Sin llamada LLM. */
 @Service
 public class ProcesamientoDocumentalService {
 
   private static final Logger LOG = LoggerFactory.getLogger(ProcesamientoDocumentalService.class);
   private static final String ERROR_LECTURA = "No se pudo leer el documento.";
   private static final String ERROR_OCR_VACIO = "El documento no contiene texto legible.";
-  private static final String REVISAR_TIPO = "El tipo detectado no coincide con la clasificación.";
 
   private final AzureOcrService azureOcrService;
-  private final AnalisisDocumentoService analisisDocumentoService;
   private final CargaDocumentoService cargaDocumentoService;
   private final TenantGovernanceService governance;
   private final ObjectMapper objectMapper;
@@ -44,13 +40,11 @@ public class ProcesamientoDocumentalService {
 
   public ProcesamientoDocumentalService(
       AzureOcrService azureOcrService,
-      AnalisisDocumentoService analisisDocumentoService,
       CargaDocumentoService cargaDocumentoService,
       @Autowired(required = false) TenantGovernanceService governance,
       ObjectMapper objectMapper,
       @Qualifier("ocrExecutor") Executor ocrExecutor) {
     this.azureOcrService = azureOcrService;
-    this.analisisDocumentoService = analisisDocumentoService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.governance = governance;
     this.objectMapper = objectMapper;
@@ -143,7 +137,7 @@ public class ProcesamientoDocumentalService {
       LOG.info(
           "IA doc {}/{} id={} nombre={}", idx, total, doc.idDocumento(), nombre);
 
-      Evaluacion evaluacion = evaluarDocumento(idExpediente, doc, tipo, demo);
+      Evaluacion evaluacion = evaluarDocumento(doc, demo);
       textoOcr = evaluacion.textoOcr();
       ExtraccionDocumento extraccion = evaluacion.extraccion();
       String analisisJson = objectMapper.writeValueAsString(extraccion.datos());
@@ -184,8 +178,7 @@ public class ProcesamientoDocumentalService {
     }
   }
 
-  private Evaluacion evaluarDocumento(
-      String idExpediente, StoredDoc doc, String tipo, boolean demo) throws Exception {
+  private Evaluacion evaluarDocumento(StoredDoc doc, boolean demo) throws Exception {
     if (demo) {
       return new Evaluacion(
           "", new ExtraccionDocumento(DatosExtraidosDTO.empty(), "LEGIBLE", null, 0));
@@ -208,14 +201,14 @@ public class ProcesamientoDocumentalService {
     if (textoOcr == null) {
       textoOcr = "";
     }
-    if (ocrEjecutado && !StringUtils.hasText(textoOcr)) {
-      return new Evaluacion(textoOcr, ExtraccionDocumento.error(ERROR_OCR_VACIO));
+    if (!StringUtils.hasText(textoOcr)) {
+      return new Evaluacion(
+          textoOcr,
+          ExtraccionDocumento.error(ocrEjecutado ? ERROR_OCR_VACIO : "Azure OCR no configurado."));
     }
 
-    guardarMemoria(idExpediente, doc, textoOcr, null, "EN_PROCESO", null, null);
-
-    ExtraccionDocumento extraccion = analisisDocumentoService.extraerDatosClave(textoOcr, tipo);
-    return new Evaluacion(textoOcr, ajustarPorTipo(extraccion, tipo));
+    return new Evaluacion(
+        textoOcr, new ExtraccionDocumento(DatosExtraidosDTO.empty(), "LEGIBLE", null, 100));
   }
 
   private void guardarMemoria(
@@ -237,44 +230,6 @@ public class ProcesamientoDocumentalService {
             estado,
             motivo,
             confianza));
-  }
-
-  private static ExtraccionDocumento ajustarPorTipo(
-      ExtraccionDocumento extraccion, String tipoEsperado) {
-    if (extraccion == null || !"LEGIBLE".equals(extraccion.estado())) {
-      return extraccion;
-    }
-    String detectado = extraccion.datos() == null ? null : extraccion.datos().tipoDocumento();
-    if (tiposCoinciden(detectado, tipoEsperado)) {
-      return extraccion;
-    }
-    return new ExtraccionDocumento(
-        extraccion.datos(), "REVISAR", REVISAR_TIPO, extraccion.camposDetectados());
-  }
-
-  private static boolean tiposCoinciden(String detectado, String esperado) {
-    String encontrado = normalizarTipo(detectado);
-    String clasificado = normalizarTipo(esperado);
-    if (encontrado.isEmpty() || clasificado.isEmpty()) {
-      return true;
-    }
-    if (encontrado.contains(clasificado) || clasificado.contains(encontrado)) {
-      return true;
-    }
-    for (String token : clasificado.split(" ")) {
-      if (token.length() >= 4 && encontrado.contains(token)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static String normalizarTipo(String value) {
-    if (!StringUtils.hasText(value)) {
-      return "";
-    }
-    String sinAcentos = Normalizer.normalize(value, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
-    return sinAcentos.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", " ").trim();
   }
 
   private static String safeMsg(Exception e) {

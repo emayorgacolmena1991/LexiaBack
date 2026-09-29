@@ -45,7 +45,7 @@ public class CargaDocumentoController {
   }
 
   @PostMapping("/borrador")
-  @ResponseStatus(HttpStatus.CREATED)
+  @ResponseStatus(HttpStatus.OK)
   public BorradorResponse crearBorrador(@Valid @RequestBody CrearBorradorRequest request) {
     return cargaDocumentoService.crearBorrador(request);
   }

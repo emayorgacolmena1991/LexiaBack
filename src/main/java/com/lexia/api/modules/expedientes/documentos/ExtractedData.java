@@ -34,6 +34,19 @@ public class ExtractedData {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
+  public static ExtractedData create(
+      UUID tenantId, UUID caseId, String fieldLabel, String fieldValue, String fieldGroup) {
+    ExtractedData row = new ExtractedData();
+    row.id = UUID.randomUUID();
+    row.tenantId = tenantId;
+    row.caseId = caseId;
+    row.fieldLabel = fieldLabel;
+    row.fieldValue = fieldValue;
+    row.fieldGroup = fieldGroup;
+    row.createdAt = Instant.now();
+    return row;
+  }
+
   public UUID getId() {
     return id;
   }

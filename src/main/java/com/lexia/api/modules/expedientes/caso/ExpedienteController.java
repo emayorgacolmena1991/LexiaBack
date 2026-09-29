@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.caso;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.PromoverBorradorRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResolveGateRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.StageAdvanceRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.StageRevertRequest;
@@ -37,6 +38,7 @@ public class ExpedienteController {
   private final CaseGateResolutionService gateResolutionService;
   private final EjdConnectorDispatchService connectorDispatch;
   private final CaseExceptionResolutionService exceptionResolutionService;
+  private final BorradorPromocionService promocion;
 
   public ExpedienteController(
       DocumentExtractorService extractorService,
@@ -50,7 +52,8 @@ public class ExpedienteController {
       @org.springframework.beans.factory.annotation.Autowired(required = false)
           EjdConnectorDispatchService connectorDispatch,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
-          CaseExceptionResolutionService exceptionResolutionService) {
+          CaseExceptionResolutionService exceptionResolutionService,
+      BorradorPromocionService promocion) {
     this.extractorService = extractorService;
     this.caseService = caseService;
     this.workspaceService = workspaceService;
@@ -58,6 +61,7 @@ public class ExpedienteController {
     this.gateResolutionService = gateResolutionService;
     this.connectorDispatch = connectorDispatch;
     this.exceptionResolutionService = exceptionResolutionService;
+    this.promocion = promocion;
   }
 
   @PostMapping("/{id}/exceptions/{exceptionId}/resolve")
@@ -100,7 +104,7 @@ public class ExpedienteController {
   }
 
   @GetMapping("/{id}")
-  public ResponseEntity<CaseDetailItem> getCase(@PathVariable UUID id) {
+  public ResponseEntity<CaseDetailItem> getCase(@PathVariable String id) {
     if (caseService == null) {
       return ResponseEntity.notFound().build();
     }
@@ -145,6 +149,11 @@ public class ExpedienteController {
     }
     stageTransitionService.revert(id, request);
     return ResponseEntity.ok(workspaceService.getWorkspace(id));
+  }
+
+  @PostMapping("/promover-borrador")
+  public CaseDetailItem promoverBorrador(@Valid @RequestBody PromoverBorradorRequest request) {
+    return promocion.promover(request);
   }
 
   @PostMapping

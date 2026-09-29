@@ -11,10 +11,32 @@ public final class CargaDocumentoDtos {
   public record CrearBorradorRequest(
       @Size(max = 64) String idActo,
       @Size(max = 64) String productCode,
-      @Size(max = 64) String canton) {}
+      @Size(max = 64) String canton,
+      @Size(max = 32) String ingestionMode) {
 
+    public CrearBorradorRequest(String idActo, String productCode, String canton) {
+      this(idActo, productCode, canton, null);
+    }
+  }
+
+  /** `id` e `idExpediente` son el mismo UUID de PostgreSQL (contrato front/back). */
   public record BorradorResponse(
-      String idExpediente, String idActo, String estado, String productCode) {}
+      String id,
+      String idExpediente,
+      String idActo,
+      String estado,
+      String productCode,
+      String ingestionMode) {
+
+    public BorradorResponse(
+        String idExpediente, String idActo, String estado, String productCode, String ingestionMode) {
+      this(idExpediente, idExpediente, idActo, estado, productCode, ingestionMode);
+    }
+
+    public BorradorResponse(String idExpediente, String idActo, String estado, String productCode) {
+      this(idExpediente, idActo, estado, productCode, IngestionMode.DIGITAL_SEPARADO.name());
+    }
+  }
 
   public record TipoPermitidoDTO(String codigo, String nombre) {}
 

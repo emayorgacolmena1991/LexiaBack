@@ -18,17 +18,18 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Prevalida
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import java.io.IOException;
-import java.time.Year;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -42,6 +43,7 @@ import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 @Service
 public class CargaDocumentoService {
 
+  private static final Logger LOG = LoggerFactory.getLogger(CargaDocumentoService.class);
   private static final long MAX_BYTES = 25L * 1024 * 1024;
   private static final Set<String> ALLOWED_EXT =
       Set.of("pdf", "jpg", "jpeg", "png", "tiff", "tif");
@@ -50,18 +52,20 @@ public class CargaDocumentoService {
   private final ProcesamientoDocumentalService procesamientoDocumentalService;
   private final DocumentoTextoOcrRepository ocrRepository;
   private final ProductoBiessService productos;
+  private final ExpedienteBorradorStore borradores;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
-  private final AtomicInteger seq = new AtomicInteger(480);
 
   public CargaDocumentoService(
       ActoNotarialService actoNotarialService,
       @Lazy ProcesamientoDocumentalService procesamientoDocumentalService,
       DocumentoTextoOcrRepository ocrRepository,
-      ProductoBiessService productos) {
+      ProductoBiessService productos,
+      ExpedienteBorradorStore borradores) {
     this.actoNotarialService = actoNotarialService;
     this.procesamientoDocumentalService = procesamientoDocumentalService;
     this.ocrRepository = ocrRepository;
     this.productos = productos;
+    this.borradores = borradores;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
@@ -80,22 +84,35 @@ public class CargaDocumentoService {
     if (productCode == null && idActo == null) {
       throw ApiException.badRequest("Debes enviar productCode o idActo.");
     }
+    AuthPrincipal auth = AuthContext.require();
     if (productCode != null) {
-      productos.requireProducto(AuthContext.require().tenantId(), productCode);
+      productos.requireProducto(auth.tenantId(), productCode);
     } else {
       actoNotarialService.obtenerRequisitosPorActo(idActo);
     }
-    String id =
-        "EXP-"
-            + Year.now().getValue()
-            + "-"
-            + String.format(Locale.ROOT, "%05d", seq.incrementAndGet());
-    drafts.put(id, new DraftExpediente(id, idActo, productCode, canton));
-    return new BorradorResponse(id, idActo, "BORRADOR", productCode);
+    IngestionMode ingestionMode = IngestionMode.from(request.ingestionMode());
+    UUID generated =
+        borradores.insert(
+            auth.tenantId(),
+            idActo,
+            productCode,
+            canton,
+            ingestionMode.name(),
+            auth.userId());
+    String id = generated.toString();
+    drafts.put(id, new DraftExpediente(id, idActo, productCode, canton, ingestionMode));
+    LOG.info("Borrador persistido id={} tenant={}", id, auth.tenantId());
+    return new BorradorResponse(id, idActo, "BORRADOR", productCode, ingestionMode.name());
   }
 
   public List<TipoPermitidoDTO> tiposPermitidos(String idExpediente) {
     DraftExpediente draft = requireDraft(idExpediente);
+    if (draft.ingestionMode().isFisicoEscaneado()) {
+      return List.of(
+          new TipoPermitidoDTO(
+              IngestionMode.EXPEDIENTE_FISICO_ESCANEADO,
+              IngestionMode.EXPEDIENTE_FISICO_ESCANEADO_LABEL));
+    }
     if (StringUtils.hasText(draft.productCode())) {
       Map<String, TipoPermitidoDTO> byCode = new LinkedHashMap<>();
       for (DocumentoRequisitoItem item :
@@ -144,6 +161,10 @@ public class CargaDocumentoService {
     if (!ALLOWED_EXT.contains(ext)) {
       throw ApiException.badRequest("Formato no permitido. Usa PDF, JPG, PNG o TIFF.");
     }
+    boolean fisico = draft.ingestionMode().isFisicoEscaneado();
+    if (fisico && !"pdf".equals(ext)) {
+      throw ApiException.badRequest("En modo físico escaneado solo se admite un PDF.");
+    }
 
     byte[] bytes;
     try {
@@ -161,7 +182,7 @@ public class CargaDocumentoService {
             formatSize(file.getSize()),
             file.getContentType(),
             bytes,
-            null);
+            fisico ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO : null);
     draft.documentos().put(idDoc, stored);
     return stored.toDto();
   }
@@ -201,16 +222,25 @@ public class CargaDocumentoService {
     if (!ALLOWED_EXT.contains(ext)) {
       throw ApiException.badRequest("Formato no permitido. Usa PDF, JPG, PNG o TIFF.");
     }
+    boolean fisico = draft.ingestionMode().isFisicoEscaneado();
+    if (fisico && !"pdf".equals(ext)) {
+      throw ApiException.badRequest("En modo físico escaneado solo se admite un PDF.");
+    }
     byte[] bytes;
     try {
       bytes = file.getBytes();
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
-    String tipo =
-        StringUtils.hasText(tipoDocumento)
-            ? tipoDocumento.trim()
-            : existing.codigoTipoDocumento();
+    String tipo;
+    if (fisico) {
+      tipo = IngestionMode.EXPEDIENTE_FISICO_ESCANEADO;
+    } else {
+      tipo =
+          StringUtils.hasText(tipoDocumento)
+              ? tipoDocumento.trim()
+              : existing.codigoTipoDocumento();
+    }
     StoredDoc replaced =
         new StoredDoc(
             fileId,
@@ -231,6 +261,11 @@ public class CargaDocumentoService {
     StoredDoc doc = draft.documentos().get(fileId);
     if (doc == null) {
       throw ApiException.notFound("Documento no encontrado: " + fileId);
+    }
+    if (draft.ingestionMode().isFisicoEscaneado()) {
+      // El tipo compuesto es fijo en modo físico; se ignora cualquier clasificación externa.
+      draft.documentos().put(fileId, doc.withTipo(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO));
+      return;
     }
     draft.documentos().put(fileId, doc.withTipo(tipo.trim()));
   }
@@ -435,11 +470,51 @@ public class CargaDocumentoService {
   }
 
   private DraftExpediente requireDraft(String idExpediente) {
-    DraftExpediente draft = drafts.get(idExpediente);
-    if (draft == null) {
-      throw ApiException.notFound("Expediente borrador no encontrado: " + idExpediente);
+    if (!StringUtils.hasText(idExpediente)) {
+      throw missingDraft(idExpediente);
     }
-    return draft;
+    String key = idExpediente.trim();
+    DraftExpediente cached = drafts.get(key);
+    if (cached != null) {
+      return cached;
+    }
+    UUID id = parseUuid(key);
+    if (id == null) {
+      LOG.warn("Borrador rechazado: id no es UUID ({})", key);
+      throw missingDraft(key);
+    }
+    AuthPrincipal auth = AuthContext.get();
+    if (auth == null || auth.tenantId() == null) {
+      LOG.warn("Borrador {} rechazado: sesión sin tenant", id);
+      throw missingDraft(key);
+    }
+    Optional<ExpedienteBorrador> row = borradores.find(id, auth.tenantId());
+    if (row.isEmpty()) {
+      LOG.warn("Borrador {} no existe en app.expediente_borrador", id);
+      throw missingDraft(key);
+    }
+    ExpedienteBorrador persisted = row.get();
+    DraftExpediente hydrated =
+        new DraftExpediente(
+            persisted.getId().toString(),
+            persisted.getIdActo(),
+            persisted.getProductCode(),
+            persisted.getCanton(),
+            IngestionMode.from(persisted.getIngestionMode()));
+    DraftExpediente raced = drafts.putIfAbsent(persisted.getId().toString(), hydrated);
+    return raced != null ? raced : hydrated;
+  }
+
+  private static UUID parseUuid(String raw) {
+    try {
+      return UUID.fromString(raw);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+  }
+
+  private static ApiException missingDraft(String idExpediente) {
+    return ApiException.notFound("Expediente borrador no encontrado: " + idExpediente);
   }
 
   private static String extensionOf(String name) {
@@ -469,6 +544,7 @@ public class CargaDocumentoService {
     private final String idActo;
     private final String productCode;
     private final String canton;
+    private final IngestionMode ingestionMode;
     private final Map<String, StoredDoc> documentos =
         Collections.synchronizedMap(new LinkedHashMap<>());
     /** OCR+LLM solo en RAM hasta crear expediente. */
@@ -477,14 +553,24 @@ public class CargaDocumentoService {
     private volatile PrevalidacionState prevalidacion;
 
     DraftExpediente(String id, String idActo) {
-      this(id, idActo, null, null);
+      this(id, idActo, null, null, IngestionMode.DIGITAL_SEPARADO);
     }
 
-    DraftExpediente(String id, String idActo, String productCode, String canton) {
+    DraftExpediente(
+        String id,
+        String idActo,
+        String productCode,
+        String canton,
+        IngestionMode ingestionMode) {
       this.id = id;
       this.idActo = idActo;
       this.productCode = productCode;
       this.canton = canton;
+      this.ingestionMode = ingestionMode == null ? IngestionMode.DIGITAL_SEPARADO : ingestionMode;
+    }
+
+    IngestionMode ingestionMode() {
+      return ingestionMode;
     }
 
     String id() {

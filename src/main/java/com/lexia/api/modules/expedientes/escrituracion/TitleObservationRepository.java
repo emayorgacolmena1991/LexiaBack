@@ -8,4 +8,6 @@ public interface TitleObservationRepository extends JpaRepository<TitleObservati
 
   List<TitleObservation> findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(
       UUID titleStudyId, UUID tenantId);
+
+  void deleteByTitleStudyIdAndTenantId(UUID titleStudyId, UUID tenantId);
 }

@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import com.lexia.api.modules.expedientes.escrituracion.CollectionFile;
 import com.lexia.api.modules.expedientes.escrituracion.CollectionFileRepository;
+import com.lexia.api.modules.expedientes.documentos.IngestionMode;
 import com.lexia.api.modules.expedientes.proceso.GateDef;
 import com.lexia.api.modules.expedientes.proceso.GateDefRepository;
 import com.lexia.api.modules.expedientes.proceso.ProcessDefinition;
@@ -122,11 +123,7 @@ public class CaseBootstrapService {
       legalCase.setProductCode(request.productCode().trim().toUpperCase(Locale.ROOT));
     }
     if (request.ingestionMode() != null && !request.ingestionMode().isBlank()) {
-      String mode = request.ingestionMode().trim().toUpperCase(Locale.ROOT);
-      if ("FISICO_ESCANEDO".equals(mode)) {
-        mode = "FISICO_ESCANEADO";
-      }
-      legalCase.setIngestionMode(mode);
+      legalCase.setIngestionMode(IngestionMode.from(request.ingestionMode()).name());
     }
 
     if ("EJD".equals(legalCase.getCaseType())) {
