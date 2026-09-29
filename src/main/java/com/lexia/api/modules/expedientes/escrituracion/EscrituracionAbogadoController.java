@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.escrituracion;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoMinutaBorrador;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
@@ -70,6 +71,12 @@ public class EscrituracionAbogadoController {
   public ProductoDetalle detalleProducto(
       @PathVariable String code, @RequestParam(required = false) String canton) {
     return productos.detalle(code, canton);
+  }
+
+  /** Índice de etapa y paso del wizard para retomar el flujo. Acepta UUID o código LEX-…. */
+  @GetMapping("/expedientes/{id}/escrituracion/estado")
+  public EstadoEscrituracion estado(@PathVariable String id) {
+    return estado.estadoFlujo(id);
   }
 
   @GetMapping("/expedientes/{id}/escrituracion")

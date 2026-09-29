@@ -100,7 +100,7 @@ public class ExpedienteController {
   }
 
   @GetMapping("/{id}")
-  public ResponseEntity<CaseDetailItem> getCase(@PathVariable UUID id) {
+  public ResponseEntity<CaseDetailItem> getCase(@PathVariable String id) {
     if (caseService == null) {
       return ResponseEntity.notFound().build();
     }

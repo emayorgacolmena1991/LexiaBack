@@ -51,6 +51,23 @@ public final class EscrituracionDtos {
 
   public record DatosBiessMinutaResponse(MinutaItem minuta, DatosBiessMinuta datos) {}
 
+  /**
+   * Dónde retomar el wizard si el usuario sale del flujo.
+   * etapaIndex = orden del proceso (e2 estudio = 2, e4 minuta = 4).
+   * wizardStep = paso del wizard FE (1–5).
+   */
+  public record EstadoEscrituracion(
+      UUID id,
+      String codigo,
+      String estado,
+      String etapa,
+      String etapaCodigo,
+      int etapaIndex,
+      int wizardStep,
+      UUID escrituracionId,
+      DatosBiessMinuta datosBiess,
+      boolean hasDraft) {}
+
   /** Estado consolidado en BD para hidratar el FE al abrir o refrescar. */
   public record EstadoMinutaBorrador(
       UUID caseId,

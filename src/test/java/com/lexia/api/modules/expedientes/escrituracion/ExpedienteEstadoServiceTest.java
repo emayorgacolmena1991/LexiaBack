@@ -7,8 +7,10 @@ import static org.mockito.Mockito.when;
 
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
+import com.lexia.api.modules.expedientes.caso.CaseStageRepository;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoMinutaBorrador;
@@ -40,6 +42,8 @@ class ExpedienteEstadoServiceTest {
   @Mock private DatosBiessStore datosBiess;
   @Mock private DocumentosExtraidosStore documentos;
   @Mock private MinutaGenerationService minutas;
+  @Mock private CaseStageRepository caseStages;
+  @Mock private ProcessStageDefRepository stageDefs;
 
   @AfterEach
   void clearAuth() {
@@ -88,7 +92,9 @@ class ExpedienteEstadoServiceTest {
             extractedData,
             datosBiess,
             documentos,
-            minutas);
+            minutas,
+            caseStages,
+            stageDefs);
 
     EstadoMinutaBorrador estado = service.hidratar(caseId);
 
@@ -99,5 +105,13 @@ class ExpedienteEstadoServiceTest {
     assertTrue(estado.hasDraft());
     assertEquals(draft.getId(), estado.draftId());
     assertEquals("120000", estado.datosMinuta().getMontoPrestamo());
+  }
+
+  @Test
+  void wizardStepRetomaEstudioOMinuta() {
+    assertEquals(2, ExpedienteEstadoService.wizardStep("e1", 1, false, false, false));
+    assertEquals(3, ExpedienteEstadoService.wizardStep("e2", 2, false, false, false));
+    assertEquals(4, ExpedienteEstadoService.wizardStep("e2", 2, false, true, true));
+    assertEquals(5, ExpedienteEstadoService.wizardStep("e4", 4, true, true, true));
   }
 }

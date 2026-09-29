@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.caso;
 
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.util.List;
@@ -74,7 +75,12 @@ public final class ExpedienteDtos {
       String identification,
       String stage,
       String createdAtLabel,
-      String updatedAtLabel) {}
+      String updatedAtLabel,
+      UUID escrituracionId,
+      DatosBiessMinuta datosBiess,
+      boolean hasDraft,
+      int etapaIndex,
+      int wizardStep) {}
 
   public record ExpedienteExtraidoDTO(
       List<ArchivoEstadoDTO> archivosProcesados, DatosExtraidosDTO datosExtraidos) {}

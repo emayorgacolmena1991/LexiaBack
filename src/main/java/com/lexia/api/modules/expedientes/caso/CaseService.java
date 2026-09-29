@@ -26,7 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
+import com.lexia.api.modules.expedientes.escrituracion.ExpedienteEstadoService;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -46,6 +48,7 @@ public class CaseService {
   private final CaseStageRepository caseStages;
   private final ProcessStageDefRepository stageDefs;
   private final CaseBootstrapService bootstrap;
+  private final ExpedienteEstadoService expedienteEstado;
 
   public CaseService(
       LegalCaseRepository legalCases,
@@ -57,7 +60,8 @@ public class CaseService {
       CasePartyRepository caseParties,
       CaseStageRepository caseStages,
       ProcessStageDefRepository stageDefs,
-      CaseBootstrapService bootstrap) {
+      CaseBootstrapService bootstrap,
+      ExpedienteEstadoService expedienteEstado) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.tenantParameters = tenantParameters;
@@ -68,6 +72,7 @@ public class CaseService {
     this.caseStages = caseStages;
     this.stageDefs = stageDefs;
     this.bootstrap = bootstrap;
+    this.expedienteEstado = expedienteEstado;
   }
 
   @Transactional(readOnly = true)
@@ -81,14 +86,16 @@ public class CaseService {
 
   @Transactional(readOnly = true)
   public CaseDetailItem getCase(UUID caseId) {
+    return getCase(caseId.toString());
+  }
+
+  @Transactional(readOnly = true)
+  public CaseDetailItem getCase(String ref) {
     authorization.requirePermission("expedientes:caso:leer");
     UUID tenantId = AuthContext.require().tenantId();
-    LegalCase legalCase =
-        legalCases
-            .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
-            .orElseThrow(
-                () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
-    return toDetail(legalCase);
+    LegalCase legalCase = resolveCase(tenantId, ref);
+    EstadoEscrituracion estado = expedienteEstado.estadoFlujo(legalCase.getId());
+    return toDetail(legalCase, estado);
   }
 
   @Transactional
@@ -121,6 +128,25 @@ public class CaseService {
     return toDetail(created);
   }
 
+  private LegalCase resolveCase(UUID tenantId, String ref) {
+    if (ref == null || ref.isBlank()) {
+      throw new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado.");
+    }
+    String token = ref.trim();
+    try {
+      UUID id = UUID.fromString(token);
+      return legalCases
+          .findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId)
+          .orElseThrow(
+              () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    } catch (IllegalArgumentException ignored) {
+      return legalCases
+          .findByTenantIdAndCodeIgnoreCaseAndDeletedAtIsNull(tenantId, token)
+          .orElseThrow(
+              () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    }
+  }
+
   private CaseSummaryItem toSummary(LegalCase legalCase) {
     Responsible responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
     return new CaseSummaryItem(
@@ -148,7 +174,24 @@ public class CaseService {
             .orElse(null);
     String clientName = client != null ? client.getDisplayName() : null;
     String identification = client != null ? client.getIdentification() : null;
-    return toDetail(legalCase, clientName, identification, resolveCurrentStageLabel(legalCase, tenantId));
+    return toDetail(
+        legalCase, clientName, identification, resolveCurrentStageLabel(legalCase, tenantId), null);
+  }
+
+  private CaseDetailItem toDetail(LegalCase legalCase, EstadoEscrituracion estado) {
+    UUID tenantId = legalCase.getTenantId();
+    CaseParty client =
+        caseParties
+            .findFirstByCaseIdAndTenantIdAndKindAndDeletedAtIsNull(
+                legalCase.getId(), tenantId, "CLIENT")
+            .orElse(null);
+    String clientName = client != null ? client.getDisplayName() : null;
+    String identification = client != null ? client.getIdentification() : null;
+    String stage =
+        estado != null && estado.etapa() != null
+            ? estado.etapa()
+            : resolveCurrentStageLabel(legalCase, tenantId);
+    return toDetail(legalCase, clientName, identification, stage, estado);
   }
 
   private String resolveCurrentStageLabel(LegalCase legalCase, UUID tenantId) {
@@ -166,7 +209,11 @@ public class CaseService {
   }
 
   private CaseDetailItem toDetail(
-      LegalCase legalCase, String clientName, String identification, String stage) {
+      LegalCase legalCase,
+      String clientName,
+      String identification,
+      String stage,
+      EstadoEscrituracion estado) {
     Responsible responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
     return new CaseDetailItem(
         legalCase.getId(),
@@ -174,7 +221,7 @@ public class CaseService {
         legalCase.getVertical(),
         legalCase.getSubject(),
         legalCase.getCaseType(),
-        mapStatusLabel(legalCase.getStatus()),
+        estado != null ? estado.estado() : mapStatusLabel(legalCase.getStatus()),
         legalCase.getStatus(),
         responsible.name(),
         responsible.initials(),
@@ -185,7 +232,12 @@ public class CaseService {
         identification,
         stage,
         GRID_DATE.format(legalCase.getCreatedAt()),
-        GRID_DATE.format(legalCase.getUpdatedAt()));
+        GRID_DATE.format(legalCase.getUpdatedAt()),
+        estado == null ? null : estado.escrituracionId(),
+        estado == null ? DatosBiessMinuta.empty() : estado.datosBiess(),
+        estado != null && estado.hasDraft(),
+        estado == null ? 1 : estado.etapaIndex(),
+        estado == null ? 2 : estado.wizardStep());
   }
 
   private Responsible resolveResponsible(UUID membershipId) {

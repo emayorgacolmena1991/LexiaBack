@@ -13,6 +13,8 @@ public interface LegalCaseRepository extends JpaRepository<LegalCase, UUID> {
 
   Optional<LegalCase> findByIdAndTenantIdAndDeletedAtIsNull(UUID id, UUID tenantId);
 
+  Optional<LegalCase> findByTenantIdAndCodeIgnoreCaseAndDeletedAtIsNull(UUID tenantId, String code);
+
   boolean existsByTenantIdAndCodeAndDeletedAtIsNull(UUID tenantId, String code);
 
   long countByTenantIdAndCaseTypeAndDeletedAtIsNullAndProcessConfigVersionIsNot(
