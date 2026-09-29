@@ -6,8 +6,8 @@ spring:
     name: lexia-api
   servlet:
     multipart:
-      max-file-size: 25MB
-      max-request-size: 100MB
+      max-file-size: 100MB
+      max-request-size: 500MB
   datasource:
     url: jdbc:postgresql://${LEXIA_DB_HOST:51.79.11.21}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
     username: ${LEXIA_DB_USER:lexia_app}
@@ -32,6 +32,8 @@ spring:
 lexia:
   minutas:
     storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
+  coactivas:
+    storage-dir: ${LEXIA_COACTIVAS_DIR:./data/coactivas}
   prompts:
     PROMPT_COMPRAVENTA_BIESS: |
       Eres un abogado notarial experto procesando un expediente de escrituración BIESS en ${canton}.
