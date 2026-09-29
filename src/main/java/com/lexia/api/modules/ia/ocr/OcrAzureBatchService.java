@@ -278,6 +278,21 @@ public class OcrAzureBatchService {
             item.motivo(),
             item.scoreConfianza(),
             item.textoExtraido()));
+    int confianza =
+        (int)
+            Math.round(
+                item.scoreConfianza() <= 1 ? item.scoreConfianza() * 100 : item.scoreConfianza());
+    cargaDocumentoService.guardarResultadoOcr(
+        sessionId,
+        new com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO(
+            item.fileId(),
+            stored.nombreOriginal(),
+            item.tipoDocumento(),
+            item.textoExtraido(),
+            null,
+            item.legible() ? "LEGIBLE" : "REVISAR",
+            item.motivo(),
+            confianza));
     return item;
   }
 

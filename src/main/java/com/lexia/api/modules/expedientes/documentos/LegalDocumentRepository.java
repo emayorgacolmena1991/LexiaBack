@@ -8,4 +8,9 @@ public interface LegalDocumentRepository extends JpaRepository<LegalDocument, UU
 
   List<LegalDocument> findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
       UUID caseId, UUID tenantId);
+
+  List<LegalDocument> findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+      UUID caseId, UUID tenantId);
+
+  java.util.Optional<LegalDocument> findByIdAndTenantIdAndDeletedAtIsNull(UUID id, UUID tenantId);
 }

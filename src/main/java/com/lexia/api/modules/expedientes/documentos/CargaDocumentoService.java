@@ -53,6 +53,7 @@ public class CargaDocumentoService {
   private final DocumentoTextoOcrRepository ocrRepository;
   private final ProductoBiessService productos;
   private final ExpedienteBorradorStore borradores;
+  private final CaseDocumentoStore caseDocs;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
 
   public CargaDocumentoService(
@@ -60,12 +61,14 @@ public class CargaDocumentoService {
       @Lazy ProcesamientoDocumentalService procesamientoDocumentalService,
       DocumentoTextoOcrRepository ocrRepository,
       ProductoBiessService productos,
-      ExpedienteBorradorStore borradores) {
+      ExpedienteBorradorStore borradores,
+      CaseDocumentoStore caseDocs) {
     this.actoNotarialService = actoNotarialService;
     this.procesamientoDocumentalService = procesamientoDocumentalService;
     this.ocrRepository = ocrRepository;
     this.productos = productos;
     this.borradores = borradores;
+    this.caseDocs = caseDocs;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
@@ -106,17 +109,26 @@ public class CargaDocumentoService {
   }
 
   public List<TipoPermitidoDTO> tiposPermitidos(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return tiposDe(
+          official.productCode(), official.canton(), official.ingestionMode(), null);
+    }
     DraftExpediente draft = requireDraft(idExpediente);
-    if (draft.ingestionMode().isFisicoEscaneado()) {
+    return tiposDe(draft.productCode(), draft.canton(), draft.ingestionMode(), draft.idActo());
+  }
+
+  private List<TipoPermitidoDTO> tiposDe(
+      String productCode, String canton, IngestionMode ingestionMode, String idActo) {
+    if (ingestionMode.isFisicoEscaneado()) {
       return List.of(
           new TipoPermitidoDTO(
               IngestionMode.EXPEDIENTE_FISICO_ESCANEADO,
               IngestionMode.EXPEDIENTE_FISICO_ESCANEADO_LABEL));
     }
-    if (StringUtils.hasText(draft.productCode())) {
+    if (StringUtils.hasText(productCode)) {
       Map<String, TipoPermitidoDTO> byCode = new LinkedHashMap<>();
-      for (DocumentoRequisitoItem item :
-          productos.detalle(draft.productCode(), draft.canton()).requisitos()) {
+      for (DocumentoRequisitoItem item : productos.detalle(productCode, canton).requisitos()) {
         String code = item.documentTypeCode();
         if (!StringUtils.hasText(code) || byCode.containsKey(code)) {
           continue;
@@ -127,11 +139,10 @@ public class CargaDocumentoService {
       }
       return List.copyOf(byCode.values());
     }
-    if (!StringUtils.hasText(draft.idActo())) {
+    if (!StringUtils.hasText(idActo)) {
       return List.of();
     }
-    ActoNotarialRespuestaDTO requisitos =
-        actoNotarialService.obtenerRequisitosPorActo(draft.idActo());
+    ActoNotarialRespuestaDTO requisitos = actoNotarialService.obtenerRequisitosPorActo(idActo);
     List<DocumentoRequeridoDTO> docs =
         requisitos.documentos() == null ? List.of() : requisitos.documentos();
     return docs.stream()
@@ -140,11 +151,21 @@ public class CargaDocumentoService {
   }
 
   public List<DocumentoCargadoDTO> listarDocumentos(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return caseDocs.listar(official);
+    }
     DraftExpediente draft = requireDraft(idExpediente);
     return draft.documentos().values().stream().map(StoredDoc::toDto).toList();
   }
 
   public DocumentoCargadoDTO subir(String idExpediente, MultipartFile file) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      byte[] bytes = readBytes(file, official.ingestionMode());
+      String original = originalName(file);
+      return caseDocs.subir(official, original, file.getContentType(), bytes);
+    }
     DraftExpediente draft = requireDraft(idExpediente);
     if (draft.locked()) {
       throw ApiException.conflict("Los documentos ya están en procesamiento y no se pueden modificar.");
@@ -189,6 +210,10 @@ public class CargaDocumentoService {
 
   /** Lookup bytes del borrador (sessionId = idExpediente). */
   public StoredDoc requireStoredDoc(String sessionId, String fileId) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
+    if (official != null) {
+      return caseDocs.requireStoredDoc(official, fileId);
+    }
     DraftExpediente draft = requireDraft(sessionId);
     StoredDoc doc = draft.documentos().get(fileId);
     if (doc == null) {
@@ -203,6 +228,12 @@ public class CargaDocumentoService {
    */
   public StoredDoc reemplazarArchivoOcr(
       String sessionId, String fileId, MultipartFile file, String tipoDocumento) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
+    if (official != null) {
+      byte[] bytes = readBytes(file, official.ingestionMode());
+      return caseDocs.reemplazar(
+          official, fileId, originalName(file), file.getContentType(), bytes, tipoDocumento);
+    }
     DraftExpediente draft = requireDraft(sessionId);
     StoredDoc existing = draft.documentos().get(fileId);
     if (existing == null) {
@@ -257,6 +288,15 @@ public class CargaDocumentoService {
 
   /** Actualiza tipo sin validar catálogo (payload batch OCR). */
   public void actualizarTipoDocumentoLibre(String sessionId, String fileId, String tipo) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
+    if (official != null) {
+      String codigo =
+          official.ingestionMode().isFisicoEscaneado()
+              ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
+              : tipo.trim();
+      caseDocs.actualizarTipo(official, fileId, codigo);
+      return;
+    }
     DraftExpediente draft = requireDraft(sessionId);
     StoredDoc doc = draft.documentos().get(fileId);
     if (doc == null) {
@@ -272,6 +312,18 @@ public class CargaDocumentoService {
 
   public TipoActualizadoDTO actualizarTipo(
       String idExpediente, String idDocumento, ActualizarTipoRequest body) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      String codigo = body.codigoTipoDocumento().trim();
+      Set<String> permitidos =
+          tiposPermitidos(idExpediente).stream()
+              .map(TipoPermitidoDTO::codigo)
+              .collect(java.util.stream.Collectors.toSet());
+      if (!permitidos.isEmpty() && !permitidos.contains(codigo)) {
+        throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
+      }
+      return caseDocs.actualizarTipo(official, idDocumento, codigo);
+    }
     DraftExpediente draft = requireDraft(idExpediente);
     if (draft.locked()) {
       throw ApiException.conflict("Los documentos ya están en procesamiento y no se pueden modificar.");
@@ -294,6 +346,11 @@ public class CargaDocumentoService {
   }
 
   public void eliminar(String idExpediente, String idDocumento) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      caseDocs.eliminar(official, idDocumento);
+      return;
+    }
     DraftExpediente draft = requireDraft(idExpediente);
     if (draft.locked()) {
       throw ApiException.conflict("Los documentos ya están en procesamiento y no se pueden modificar.");
@@ -354,6 +411,10 @@ public class CargaDocumentoService {
   }
 
   public PrevalidacionDTO obtenerPrevalidacion(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return caseDocs.prevalidacion(official);
+    }
     DraftExpediente draft = requireDraft(idExpediente);
     PrevalidacionState state = draft.prevalidacion();
     if (state == null) {
@@ -384,11 +445,25 @@ public class CargaDocumentoService {
    * crear expediente vía {@link #persistirOcrAlCrearExpediente}.
    */
   public List<DocumentoOcrResultadoDTO> listarOcrResultados(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return caseDocs.listarOcr(official);
+    }
     DraftExpediente draft = requireDraft(idExpediente);
     return draft.documentos().keySet().stream()
         .map(idDoc -> draft.ocrResultados().get(idDoc))
         .filter(java.util.Objects::nonNull)
         .toList();
+  }
+
+  /** OCR durable si el id ya es expediente; si no, queda en RAM del borrador. */
+  public void guardarResultadoOcr(String idExpediente, DocumentoOcrResultadoDTO resultado) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      caseDocs.guardarOcr(official, resultado);
+      return;
+    }
+    guardarOcrEnMemoria(idExpediente, resultado);
   }
 
   /** Guarda resultado OCR+Gemini solo en RAM del borrador. */
@@ -515,6 +590,31 @@ public class CargaDocumentoService {
 
   private static ApiException missingDraft(String idExpediente) {
     return ApiException.notFound("Expediente borrador no encontrado: " + idExpediente);
+  }
+
+  private static byte[] readBytes(MultipartFile file, IngestionMode mode) {
+    if (file == null || file.isEmpty()) {
+      throw ApiException.badRequest("Archivo vacío.");
+    }
+    if (file.getSize() > MAX_BYTES) {
+      throw ApiException.badRequest("El archivo supera el máximo de 25 MB.");
+    }
+    String ext = extensionOf(originalName(file));
+    if (!ALLOWED_EXT.contains(ext)) {
+      throw ApiException.badRequest("Formato no permitido. Usa PDF, JPG, PNG o TIFF.");
+    }
+    if (mode.isFisicoEscaneado() && !"pdf".equals(ext)) {
+      throw ApiException.badRequest("En modo físico escaneado solo se admite un PDF.");
+    }
+    try {
+      return file.getBytes();
+    } catch (IOException e) {
+      throw ApiException.badRequest("No se pudo leer el archivo.");
+    }
+  }
+
+  private static String originalName(MultipartFile file) {
+    return StringUtils.hasText(file.getOriginalFilename()) ? file.getOriginalFilename() : "archivo";
   }
 
   private static String extensionOf(String name) {
