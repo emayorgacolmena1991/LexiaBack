@@ -1,7 +1,11 @@
 package com.lexia.api.modules.ia.ocr;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
+import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoFuente;
@@ -94,9 +98,16 @@ public class OcrCotejoService {
   private static final Map<String, Integer> MESES = meses();
 
   private final DocumentosExtraidosStore documentos;
+  private final ExpedienteBorradorStore borradores;
+  private final ObjectMapper objectMapper;
 
-  public OcrCotejoService(DocumentosExtraidosStore documentos) {
+  public OcrCotejoService(
+      DocumentosExtraidosStore documentos,
+      ExpedienteBorradorStore borradores,
+      ObjectMapper objectMapper) {
     this.documentos = documentos;
+    this.borradores = borradores;
+    this.objectMapper = objectMapper;
   }
 
   /**
@@ -117,7 +128,11 @@ public class OcrCotejoService {
       return empty(id);
     }
     UUID tenantId = AuthContext.require().tenantId();
-    SeccionesCotejo secciones = seccionesDesdeExtraccion(documentos.cargar(caso, tenantId));
+    List<DocumentoExtraidoDTO> docs = documentos.cargar(caso, tenantId);
+    if (docs.isEmpty()) {
+      docs = documentosBorrador(caso, tenantId);
+    }
+    SeccionesCotejo secciones = seccionesDesdeExtraccion(docs);
     if (secciones.sections().isEmpty()) {
       LOG.info("Cotejo sessionId={} caseId={}: sin extracción (ejecutar analizar-ia)", id, caso);
       return empty(id);
@@ -139,6 +154,26 @@ public class OcrCotejoService {
             observacionGeneral),
         porCampos.comparaciones(),
         porCampos.grupos());
+  }
+
+  private List<DocumentoExtraidoDTO> documentosBorrador(UUID caso, UUID tenantId) {
+    return borradores
+        .find(caso, tenantId)
+        .map(row -> row.getDatosExtraidos())
+        .filter(StringUtils::hasText)
+        .map(this::docsDesdeJson)
+        .orElse(List.of());
+  }
+
+  private List<DocumentoExtraidoDTO> docsDesdeJson(String json) {
+    try {
+      ProcesarExpedienteCompletoResult result =
+          objectMapper.readValue(json, ProcesarExpedienteCompletoResult.class);
+      return result.documentosExtraidos() == null ? List.of() : result.documentosExtraidos();
+    } catch (JsonProcessingException e) {
+      LOG.warn("Cotejo: datos_extraidos del borrador ilegible");
+      return List.of();
+    }
   }
 
   private CotejoResponse cotejarPorCampos(

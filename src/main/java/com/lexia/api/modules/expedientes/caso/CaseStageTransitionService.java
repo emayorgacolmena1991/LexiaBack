@@ -45,6 +45,7 @@ public class CaseStageTransitionService {
   private final SlaCalendarService slaCalendar;
   private final EjdGateEvaluationService gateEvaluation;
   private final EjdConnectorDispatchService connectorDispatch;
+  private final BorradorPromocionService promocion;
 
   public CaseStageTransitionService(
       LegalCaseRepository legalCases,
@@ -58,7 +59,8 @@ public class CaseStageTransitionService {
       TenantParameterService tenantParameters,
       SlaCalendarService slaCalendar,
       EjdGateEvaluationService gateEvaluation,
-      EjdConnectorDispatchService connectorDispatch) {
+      EjdConnectorDispatchService connectorDispatch,
+      BorradorPromocionService promocion) {
     this.legalCases = legalCases;
     this.caseStages = caseStages;
     this.stageDefs = stageDefs;
@@ -71,6 +73,7 @@ public class CaseStageTransitionService {
     this.slaCalendar = slaCalendar;
     this.gateEvaluation = gateEvaluation;
     this.connectorDispatch = connectorDispatch;
+    this.promocion = promocion;
   }
 
   @Transactional(readOnly = true)
@@ -175,6 +178,7 @@ public class CaseStageTransitionService {
   @Transactional
   public StageAdvanceResult advance(UUID caseId, StageAdvanceRequest request) {
     authorization.requirePermission("expedientes:caso:escribir");
+    caseId = promocion.asegurarExpediente(caseId);
     UUID tenantId = AuthContext.require().tenantId();
     UUID userId = AuthContext.require().userId();
     TransitionContext context = loadContext(caseId, tenantId);

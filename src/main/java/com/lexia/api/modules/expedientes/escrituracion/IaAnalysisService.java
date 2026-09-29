@@ -1,10 +1,14 @@
 package com.lexia.api.modules.expedientes.escrituracion;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorrador;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
@@ -17,6 +21,7 @@ import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Dictamen;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Inmueble;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Observacion;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Persona;
+import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.DocumentoExtraido;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
 import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto;
@@ -51,6 +56,7 @@ public class IaAnalysisService {
       Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$");
 
   private final LegalCaseRepository legalCases;
+  private final ExpedienteBorradorStore borradores;
   private final WritingFileRepository writingFiles;
   private final TitleStudyRepository titleStudies;
   private final TitleObservationRepository titleObservations;
@@ -60,9 +66,11 @@ public class IaAnalysisService {
   private final ExpedienteCompletoLlmService llm;
   private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
+  private final ObjectMapper objectMapper;
 
   public IaAnalysisService(
       LegalCaseRepository legalCases,
+      ExpedienteBorradorStore borradores,
       WritingFileRepository writingFiles,
       TitleStudyRepository titleStudies,
       TitleObservationRepository titleObservations,
@@ -71,8 +79,10 @@ public class IaAnalysisService {
       OcrSessionCacheService ocrCache,
       ExpedienteCompletoLlmService llm,
       DocumentosExtraidosStore documentos,
-      AuthorizationService authorization) {
+      AuthorizationService authorization,
+      ObjectMapper objectMapper) {
     this.legalCases = legalCases;
+    this.borradores = borradores;
     this.writingFiles = writingFiles;
     this.titleStudies = titleStudies;
     this.titleObservations = titleObservations;
@@ -82,6 +92,7 @@ public class IaAnalysisService {
     this.llm = llm;
     this.documentos = documentos;
     this.authorization = authorization;
+    this.objectMapper = objectMapper;
   }
 
   @Transactional
@@ -90,22 +101,37 @@ public class IaAnalysisService {
     authorization.requirePermission("expedientes:caso:escribir");
     UUID tenantId = AuthContext.require().tenantId();
 
-    LegalCase legalCase =
-        legalCases
-            .findByIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
-            .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    ExpedienteBorrador borrador = borradores.find(expedienteId, tenantId).orElse(null);
+    LegalCase legalCase = null;
+    if (borrador != null) {
+      LOG.info("analizar-ia usa borrador id={} tenant={}", expedienteId, tenantId);
+    } else {
+      legalCase =
+          legalCases
+              .findByIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
+              .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    }
 
     WritingFile writingFile =
-        writingFiles
-            .findByCaseIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
-            .orElse(null);
+        legalCase == null
+            ? null
+            : writingFiles
+                .findByCaseIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
+                .orElse(null);
 
-    String productCode = resolveProductCode(legalCase, writingFile);
+    String productCode =
+        legalCase != null ? resolveProductCode(legalCase, writingFile) : text(borrador.getProductCode());
     if (!StringUtils.hasText(productCode)) {
       throw ApiException.badRequest("El expediente no tiene un producto asignado.");
     }
 
     boolean force = request != null && Boolean.TRUE.equals(request.forceReanalysis());
+    if (!force && borrador != null) {
+      ProcesarExpedienteCompletoResult cachedDraft = readDraftStudy(borrador);
+      if (cachedDraft != null) {
+        return cachedDraft;
+      }
+    }
     if (!force && writingFile != null) {
       ProcesarExpedienteCompletoResult cached =
           loadCached(expedienteId, tenantId, writingFile, productCode);
@@ -114,8 +140,10 @@ public class IaAnalysisService {
       }
     }
 
-    String canton = resolveCanton(writingFile);
-    String ocrText = loadOcrMarcado(legalCase, request);
+    String canton = legalCase != null ? resolveCanton(writingFile) : cantonOf(borrador);
+    String ocrText =
+        loadOcrMarcado(
+            expedienteId, legalCase == null ? null : legalCase.getCode(), request);
     Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
@@ -125,12 +153,12 @@ public class IaAnalysisService {
               : "No se obtuvo resultado de análisis IA.");
     }
 
+    List<DocOcr> cabeceras = OcrExpedienteTexto.cabeceras(ocrText);
+    List<DocumentoExtraido> extraidosLlm = ext.payload().documentosExtraidos();
     List<DocumentoExtraidoDTO> documentosExtraidos =
-        documentos.guardar(
-            tenantId,
-            expedienteId,
-            ext.payload().documentosExtraidos(),
-            OcrExpedienteTexto.cabeceras(ocrText));
+        legalCase == null
+            ? documentos.proyectar(extraidosLlm, cabeceras)
+            : documentos.guardar(tenantId, expedienteId, extraidosLlm, cabeceras);
     ProcesarExpedienteCompletoResult response =
         new ProcesarExpedienteCompletoResult(
             expedienteId,
@@ -140,9 +168,13 @@ public class IaAnalysisService {
             ext.payload().datosExtraidos(),
             ext.payload().dictamen());
 
-    persistExtracted(tenantId, expedienteId, response.datosExtraidos());
+    if (legalCase != null) {
+      persistExtracted(tenantId, expedienteId, response.datosExtraidos());
+    }
     if (writingFile != null) {
       persistStudy(tenantId, writingFile, response.dictamen());
+    } else if (borrador != null) {
+      persistDraftStudy(borrador, response);
     } else {
       LOG.info(
           "analizar-ia id={} sin writing_file: dictamen no persistido en title_study",
@@ -157,6 +189,28 @@ public class IaAnalysisService {
         documentosExtraidos.size(),
         response.dictamen() == null ? null : response.dictamen().estado());
     return response;
+  }
+
+  private ProcesarExpedienteCompletoResult readDraftStudy(ExpedienteBorrador borrador) {
+    if (borrador == null || !StringUtils.hasText(borrador.getDatosExtraidos())) {
+      return null;
+    }
+    try {
+      return objectMapper.readValue(
+          borrador.getDatosExtraidos(), ProcesarExpedienteCompletoResult.class);
+    } catch (JsonProcessingException e) {
+      LOG.warn("analizar-ia borrador id={} datos_extraidos ilegible", borrador.getId());
+      return null;
+    }
+  }
+
+  private void persistDraftStudy(ExpedienteBorrador borrador, ProcesarExpedienteCompletoResult response) {
+    try {
+      borradores.guardarEstudio(
+          borrador.getId(), borrador.getTenantId(), objectMapper.writeValueAsString(response));
+    } catch (JsonProcessingException e) {
+      throw ApiException.badRequest("No se pudo guardar el estudio IA del borrador.");
+    }
   }
 
   private ProcesarExpedienteCompletoResult loadCached(
@@ -279,15 +333,15 @@ public class IaAnalysisService {
   /**
    * OCR por archivo (caché de sesión o {@code documento_texto_ocr}). No une binarios.
    */
-  String loadOcrMarcado(LegalCase legalCase, AnalysisRequestDTO request) {
+  String loadOcrMarcado(UUID expedienteId, String caseCode, AnalysisRequestDTO request) {
     List<String> candidates = new ArrayList<>();
     if (request != null && StringUtils.hasText(request.sessionId())) {
       candidates.add(request.sessionId().trim());
     }
-    if (StringUtils.hasText(legalCase.getCode())) {
-      candidates.add(legalCase.getCode().trim());
+    if (StringUtils.hasText(caseCode)) {
+      candidates.add(caseCode.trim());
     }
-    candidates.add(legalCase.getId().toString());
+    candidates.add(expedienteId.toString());
 
     String marcado = OcrExpedienteTexto.paraClaude(ocrCache, candidates);
     if (!StringUtils.hasText(marcado)) {
@@ -299,9 +353,9 @@ public class IaAnalysisService {
               + " sessionHint="
               + (request != null ? request.sessionId() : null)
               + " case="
-              + legalCase.getId());
+              + expedienteId);
     }
-    LOG.info("analizar-ia OCR caseId={} chars={}", legalCase.getId(), marcado.length());
+    LOG.info("analizar-ia OCR caseId={} chars={}", expedienteId, marcado.length());
     return marcado;
   }
 
@@ -357,6 +411,17 @@ public class IaAnalysisService {
       return writingFile.getProductCode().trim();
     }
     return null;
+  }
+
+  private static String text(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private static String cantonOf(ExpedienteBorrador borrador) {
+    if (borrador != null && StringUtils.hasText(borrador.getCanton())) {
+      return borrador.getCanton().trim();
+    }
+    return "GUAYAQUIL";
   }
 
   private static String resolveCanton(WritingFile writingFile) {

@@ -85,6 +85,39 @@ public class DocumentosExtraidosStore {
     return out;
   }
 
+  /** Misma proyección que {@link #guardar} sin escribir {@code extracted_data} (borrador sin legal_case). */
+  public List<DocumentoExtraidoDTO> proyectar(
+      List<DocumentoExtraido> docs, List<DocOcr> cabeceras) {
+    List<DocumentoExtraidoDTO> out = new ArrayList<>();
+    if (docs == null) {
+      return out;
+    }
+    Map<String, DocOcr> porId = new LinkedHashMap<>();
+    for (DocOcr c : cabeceras == null ? List.<DocOcr>of() : cabeceras) {
+      if (c != null && StringUtils.hasText(c.id())) {
+        porId.putIfAbsent(c.id().trim(), c);
+      }
+    }
+    int idx = 0;
+    for (DocumentoExtraido doc : docs) {
+      if (doc == null) {
+        continue;
+      }
+      DocOcr cab = cabecera(doc.documentoId(), idx, porId, cabeceras);
+      String id =
+          StringUtils.hasText(doc.documentoId())
+              ? doc.documentoId().trim()
+              : cab != null && StringUtils.hasText(cab.id()) ? cab.id().trim() : "doc-" + (idx + 1);
+      String tipo = firstText(doc.tipoDocumento(), cab == null ? null : cab.tipo(), "DOCUMENTO");
+      String nombre = cab == null ? null : cab.nombre();
+      Map<String, String> datos = new LinkedHashMap<>();
+      OcrCotejoService.aplanarDatos("", doc.datosClave(), datos);
+      out.add(new DocumentoExtraidoDTO(id, tipo, nombre, doc.resumen(), datos));
+      idx++;
+    }
+    return out;
+  }
+
   public List<DocumentoExtraidoDTO> cargar(UUID caseId, UUID tenantId) {
     Map<String, Acumulado> porPrefijo = new LinkedHashMap<>();
     for (ExtractedData row :

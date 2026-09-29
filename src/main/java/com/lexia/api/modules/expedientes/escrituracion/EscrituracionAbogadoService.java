@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.lexia.api.modules.expedientes.ejd.EjdValidationEvaluationService;
+import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
@@ -38,6 +39,7 @@ public class EscrituracionAbogadoService {
   private final ProductoBiessService productos;
   private final AuthorizationService authorization;
   private final EjdValidationEvaluationService validationEvaluation;
+  private final BorradorPromocionService promocion;
 
   public EscrituracionAbogadoService(
       LegalCaseRepository legalCases,
@@ -49,7 +51,8 @@ public class EscrituracionAbogadoService {
       ProductoBiessService productos,
       AuthorizationService authorization,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
-          EjdValidationEvaluationService validationEvaluation) {
+          EjdValidationEvaluationService validationEvaluation,
+      BorradorPromocionService promocion) {
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
     this.titleStudies = titleStudies;
@@ -59,6 +62,7 @@ public class EscrituracionAbogadoService {
     this.productos = productos;
     this.authorization = authorization;
     this.validationEvaluation = validationEvaluation;
+    this.promocion = promocion;
   }
 
   @Transactional(readOnly = true)
@@ -118,6 +122,7 @@ public class EscrituracionAbogadoService {
   public EstudioTituloResponse registrarEstudio(UUID caseId, EstudioTituloRequest request) {
     authorization.requirePermission("expedientes:caso:escribir");
     UUID tenantId = AuthContext.require().tenantId();
+    caseId = promocion.asegurarExpediente(caseId);
     requireCase(caseId, tenantId);
     WritingFile file =
         writingFiles

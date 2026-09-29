@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.caso;
 
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
@@ -9,6 +10,16 @@ import java.util.UUID;
 public final class ExpedienteDtos {
 
   private ExpedienteDtos() {}
+
+  public record PromoverBorradorRequest(
+      @NotNull UUID draftId,
+      @Size(max = 400) String subject,
+      @Size(max = 240) String clientName,
+      @Size(max = 64) String identification,
+      @Size(max = 160) String stage,
+      @Size(max = 16) String priority,
+      @Size(max = 240) String participants,
+      @Size(max = 64) String operationTypeCode) {}
 
   public record CreateCaseRequest(
       @NotBlank @Size(max = 400) String subject,

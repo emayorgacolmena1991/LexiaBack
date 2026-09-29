@@ -2,6 +2,7 @@ package com.lexia.api;
 
 import com.lexia.api.modules.actos.ActoNotarialService;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisService;
@@ -22,6 +23,8 @@ class LexiaApiApplicationTests {
 	@MockitoBean private ActoNotarialService actoNotarialService;
 
 	@MockitoBean private DocumentoTextoOcrRepository documentoTextoOcrRepository;
+
+	@MockitoBean private ExpedienteBorradorStore expedienteBorradorStore;
 
 	@MockitoBean private ProductoBiessService productoBiessService;
 

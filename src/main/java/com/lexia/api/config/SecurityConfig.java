@@ -105,6 +105,7 @@ public class SecurityConfig {
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset"),
                         // Flujo carga/tipificación + OCR + escrituración abogado: cookie + Bearer; CSRF rompe mutaciones.
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/promover-borrador"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/borrador"),
                         paths.matcher(
@@ -116,6 +117,7 @@ public class SecurityConfig {
                         paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{id}/escrituracion/minutas"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/stages/advance"),
                         paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{id}/escrituracion/analizar-ia"),

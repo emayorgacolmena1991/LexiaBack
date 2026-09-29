@@ -19,12 +19,19 @@ public final class CargaDocumentoDtos {
     }
   }
 
+  /** `id` e `idExpediente` son el mismo UUID de PostgreSQL (contrato front/back). */
   public record BorradorResponse(
+      String id,
       String idExpediente,
       String idActo,
       String estado,
       String productCode,
       String ingestionMode) {
+
+    public BorradorResponse(
+        String idExpediente, String idActo, String estado, String productCode, String ingestionMode) {
+      this(idExpediente, idExpediente, idActo, estado, productCode, ingestionMode);
+    }
 
     public BorradorResponse(String idExpediente, String idActo, String estado, String productCode) {
       this(idExpediente, idActo, estado, productCode, IngestionMode.DIGITAL_SEPARADO.name());

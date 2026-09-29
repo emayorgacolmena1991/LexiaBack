@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
@@ -57,6 +58,7 @@ public class MinutaGenerationService {
   private final DatosBiessStore datosBiess;
   private final ObjectMapper objectMapper;
   private final Path storageDir;
+  private final BorradorPromocionService promocion;
 
   public MinutaGenerationService(
       AuthorizationService authorization,
@@ -70,7 +72,8 @@ public class MinutaGenerationService {
       DocxMinutaRenderer renderer,
       DatosBiessStore datosBiess,
       ObjectMapper objectMapper,
-      @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir) {
+      @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir,
+      BorradorPromocionService promocion) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -83,11 +86,13 @@ public class MinutaGenerationService {
     this.datosBiess = datosBiess;
     this.objectMapper = objectMapper;
     this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
+    this.promocion = promocion;
   }
 
   @Transactional
   public MinutaItem generar(UUID caseId, CrearMinutaRequest request) {
     authorization.requirePermission("expedientes:caso:escribir");
+    caseId = promocion.asegurarExpediente(caseId);
     UUID tenantId = AuthContext.require().tenantId();
     LegalCase legalCase =
         legalCases
