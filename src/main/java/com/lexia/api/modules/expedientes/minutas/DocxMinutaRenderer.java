@@ -8,6 +8,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -37,8 +38,8 @@ public class DocxMinutaRenderer {
     try (InputStream in = resource.getInputStream();
         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
       XWPFTemplate template = XWPFTemplate.compile(in);
-      List<String> sinDato =
-          tagNames(template).stream().filter(tag -> !safe.containsKey(tag)).toList();
+      List<String> tags = tagNames(template);
+      List<String> sinDato = MinutaTagAliases.sinResolver(tags, safe.keySet());
       if (!sinDato.isEmpty()) {
         template.close();
         throw ApiException.badRequest(
@@ -47,7 +48,7 @@ public class DocxMinutaRenderer {
                 + " tiene placeholders sin dato asociado: "
                 + String.join(", ", sinDato.stream().map(t -> "{{" + t + "}}").toList()));
       }
-      template.render(safe);
+      template.render(MinutaTagAliases.valoresPorTag(tags, safe));
       template.write(out);
       template.close();
       byte[] bytes = out.toByteArray();
@@ -77,6 +78,16 @@ public class DocxMinutaRenderer {
     return render(descriptor, safe.toTemplateMap());
   }
 
+  /** Bytes de la plantilla sin renderizar (con sus tags {@code {{...}}}). */
+  public byte[] plantilla(MinutaTemplateDescriptor descriptor) {
+    try (InputStream in = resource(descriptor).getInputStream()) {
+      return in.readAllBytes();
+    } catch (java.io.IOException e) {
+      throw ApiException.badRequest(
+          "No se pudo leer la plantilla " + descriptor.classpathResource() + ": " + e.getMessage());
+    }
+  }
+
   /** Tags {@code {{...}}} presentes en la plantilla (cuerpo, encabezados y pies). */
   public List<String> tags(MinutaTemplateDescriptor descriptor) {
     return tagsPorPlantilla.computeIfAbsent(
@@ -94,17 +105,41 @@ public class DocxMinutaRenderer {
         });
   }
 
-  /** Tags de la plantilla que quedarían sin dato real (se renderizan como {@code nodata}). */
+  /**
+   * Campos canónicos usados por la plantilla (directo o vía alias) que quedarían sin dato real (se
+   * renderizan como {@code nodata}).
+   */
   public List<String> camposPendientes(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
     Map<String, Object> map = (data == null ? new MinutaViviendaData() : data).toTemplateMap();
-    List<String> pendientes = new ArrayList<>();
+    Set<String> pendientes = new LinkedHashSet<>();
     for (String tag : tags(descriptor)) {
-      if (MinutaViviendaData.isMissing(map.get(tag))) {
-        pendientes.add(tag);
+      String campo = MinutaTagAliases.canonico(tag);
+      if (MinutaViviendaData.isMissing(map.get(campo))) {
+        pendientes.add(campo);
       }
     }
-    return pendientes;
+    return List.copyOf(pendientes);
+  }
+
+  /** Valores por tag de la plantilla (canónicos y alias), tal como se renderizarían. */
+  public Map<String, Object> valoresPorTag(
+      MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
+    Map<String, Object> map = (data == null ? new MinutaViviendaData() : data).toTemplateMap();
+    return MinutaTagAliases.valoresPorTag(tags(descriptor), map);
+  }
+
+  /** Tags de la plantilla cuyo campo canónico está en {@code campos}. */
+  public List<String> tagsDeCampos(MinutaTemplateDescriptor descriptor, Collection<String> campos) {
+    return tags(descriptor).stream()
+        .filter(tag -> campos.contains(MinutaTagAliases.canonico(tag)))
+        .toList();
+  }
+
+  /** Tags de la plantilla sin campo canónico ni alias: impiden generarla. */
+  public List<String> tagsSinResolver(MinutaTemplateDescriptor descriptor) {
+    return MinutaTagAliases.sinResolver(
+        tags(descriptor), new MinutaViviendaData().toTemplateMap().keySet());
   }
 
   private static ClassPathResource resource(MinutaTemplateDescriptor descriptor) {

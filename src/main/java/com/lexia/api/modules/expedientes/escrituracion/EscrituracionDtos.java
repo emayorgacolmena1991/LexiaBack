@@ -71,6 +71,30 @@ public final class EscrituracionDtos {
   public record DatosBiessMinutaResponse(MinutaItem minuta, DatosBiessMinuta datos) {}
 
   /**
+   * Párrafo del DOCX guardado de la minuta, en orden de documento (cuerpo y celdas de tablas).
+   *
+   * @param index posición estable del párrafo; es la clave para editarlo.
+   * @param alineacion LEFT, CENTER, RIGHT, BOTH (justificado) o null si hereda del estilo.
+   * @param negrita todo el texto visible del párrafo está en negrita.
+   */
+  public record ParrafoMinuta(
+      int index,
+      String texto,
+      String estilo,
+      String alineacion,
+      boolean negrita,
+      boolean titulo,
+      boolean enTabla) {}
+
+  public record ContenidoMinutaResponse(
+      MinutaItem minuta, boolean editadoManualmente, List<ParrafoMinuta> parrafos) {}
+
+  public record ParrafoEditado(int index, String texto) {}
+
+  @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+  public record GuardarContenidoMinutaRequest(List<ParrafoEditado> parrafos) {}
+
+  /**
    * Dónde retomar el wizard si el usuario sale del flujo.
    * etapaIndex = orden del proceso (e2 estudio = 2, e4 minuta = 4).
    * wizardStep = paso del wizard FE (1–5).

@@ -1,12 +1,14 @@
 package com.lexia.api.modules.expedientes.escrituracion;
 
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ContenidoMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoMinutaBorrador;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarContenidoMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
@@ -170,5 +172,21 @@ public class EscrituracionAbogadoController {
       @PathVariable UUID minutaId,
       @RequestBody DatosBiessMinuta request) {
     return minutaGeneration.aplicarDatosBiess(id, minutaId, request);
+  }
+
+  /** Párrafos del DOCX guardado de la minuta (mismo archivo que la descarga). */
+  @GetMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/contenido")
+  public ContenidoMinutaResponse obtenerContenidoMinuta(
+      @PathVariable UUID id, @PathVariable UUID minutaId) {
+    return minutaGeneration.obtenerContenido(id, minutaId);
+  }
+
+  /** Guarda el texto editado por párrafo sobre el mismo DOCX. */
+  @PutMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/contenido")
+  public ContenidoMinutaResponse guardarContenidoMinuta(
+      @PathVariable UUID id,
+      @PathVariable UUID minutaId,
+      @RequestBody GuardarContenidoMinutaRequest request) {
+    return minutaGeneration.guardarContenido(id, minutaId, request);
   }
 }

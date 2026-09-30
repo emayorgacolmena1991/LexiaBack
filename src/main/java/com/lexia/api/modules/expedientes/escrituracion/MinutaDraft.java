@@ -40,6 +40,9 @@ public class MinutaDraft {
   @Column(columnDefinition = "jsonb")
   private String payload;
 
+  @Column(name = "edited_manually", nullable = false)
+  private boolean editedManually;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -96,6 +99,15 @@ public class MinutaDraft {
 
   public UUID getTenantId() {
     return tenantId;
+  }
+
+  public boolean isEditedManually() {
+    return editedManually;
+  }
+
+  public void markEditedManually() {
+    this.editedManually = true;
+    this.updatedAt = Instant.now();
   }
 
   public void markReady() {

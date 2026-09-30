@@ -25,9 +25,9 @@ class DocxMinutaRendererTest {
   private final MinutaTemplateCatalog catalog = new MinutaTemplateCatalog();
 
   @Test
-  void renderCompraventaConMapaVacio() {
+  void renderMinutaHipotecaConMapaVacio() {
     MinutaTemplateDescriptor descriptor =
-        catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS, "MINUTA_COMPRAVENTA");
+        catalog.require(MinutaTemplateCatalog.PRODUCT_SUSTITUCION_HIPOTECA, "MINUTA_HIPOTECA");
     byte[] bytes = renderer.renderVivienda(descriptor, new MinutaViviendaData());
     assertTrue(bytes.length > 500, "DOCX demasiado pequeño: " + bytes.length);
     assertTrue(bytes[0] == 'P' && bytes[1] == 'K');
@@ -36,7 +36,7 @@ class DocxMinutaRendererTest {
   @Test
   void renderMutuoConDatosVivienda() {
     MinutaTemplateDescriptor descriptor =
-        catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS, "CONTRATO_MUTUO");
+        catalog.require(MinutaTemplateCatalog.PRODUCT_SUSTITUCION_HIPOTECA, "CONTRATO_MUTUO");
     MinutaViviendaData data = new MinutaViviendaData();
     data.setNombreConyuge1("JUAN PEREZ");
     data.setCedulaConyuge1("0912345678");
@@ -71,15 +71,138 @@ class DocxMinutaRendererTest {
   }
 
   @Test
-  void todasLasPlantillasCarganYSusTagsTienenDato() {
-    var keys = new MinutaViviendaData().toTemplateMap().keySet();
-    for (MinutaTemplateDescriptor descriptor : catalog.all()) {
-      List<String> tags = renderer.tags(descriptor);
-      assertFalse(tags.isEmpty(), "Sin tags: " + descriptor.classpathResource());
-      for (String tag : tags) {
-        assertTrue(keys.contains(tag), descriptor.classpathResource() + " → {{" + tag + "}}");
-      }
+  void sustitucionUsaSusPlantillasYHipotecadaNoUsaLasDeSustitucion() {
+    String dir = "templates/escrituracion/SUSTITUCION DE HIPOTECA/";
+    assertEquals(
+        dir + "minuta_hipoteca.docx",
+        catalog.require("SUSTITUCION_HIPOTECA", "MINUTA_HIPOTECA").classpathResource());
+    assertEquals(
+        dir + "contrato_sustitucion_hipoteca.docx",
+        catalog.require("SUSTITUCION_HIPOTECA", "CONTRATO_MUTUO").classpathResource());
+
+    for (String kind : List.of("MINUTA_COMPRAVENTA", "CONTRATO_MUTUO")) {
+      String resource = catalog.require("VIV_HIPOTECADA_BIESS", kind).classpathResource();
+      assertTrue(resource.contains("/VIVIENDA HIPOTECADA BIESS/"), resource);
     }
+    ApiException e =
+        assertThrows(
+            ApiException.class, () -> catalog.require("VIV_TERMINADA_IND", "CONTRATO_MUTUO"));
+    assertTrue(e.getMessage().contains("aún no es generable"), e.getMessage());
+    for (MinutaTemplateDescriptor d : catalog.sinConectar()) {
+      assertFalse(d.classpathResource().startsWith(dir), d.classpathResource());
+    }
+  }
+
+  @Test
+  void viviendaHipotecadaRenderizaAmbasPlantillasSinPlaceholders() throws Exception {
+    for (String kind : List.of("MINUTA_COMPRAVENTA", "CONTRATO_MUTUO")) {
+      MinutaTemplateDescriptor descriptor =
+          catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS, kind);
+      String text = renderYLeer(descriptor, datosCompletos(), "hipotecada_" + kind + ".docx");
+      assertFalse(text.contains("{{"), kind + ": quedaron placeholders");
+      assertFalse(text.contains("nodata"), kind + ": quedaron datos sin resolver");
+    }
+  }
+
+  @Test
+  void todasLasPlantillasCarganYSusTagsTienenDato() {
+    for (MinutaTemplateDescriptor descriptor : catalog.all()) {
+      assertFalse(
+          renderer.tags(descriptor).isEmpty(), "Sin tags: " + descriptor.classpathResource());
+      assertEquals(
+          List.of(), renderer.tagsSinResolver(descriptor), descriptor.classpathResource());
+    }
+  }
+
+  @Test
+  void plantillasSinConectarCarganYReportanTagsSinResolver() {
+    for (MinutaTemplateDescriptor descriptor : catalog.sinConectar()) {
+      assertFalse(
+          renderer.tags(descriptor).isEmpty(), "Sin tags: " + descriptor.classpathResource());
+      System.out.println(
+          descriptor.productCode()
+              + " "
+              + descriptor.templateKind()
+              + " sin resolver: "
+              + renderer.tagsSinResolver(descriptor));
+    }
+  }
+
+  @Test
+  void aliasesApuntanACamposCanonicosYNoLosRedefinen() {
+    var campos = new MinutaViviendaData().toTemplateMap().keySet();
+    MinutaTagAliases.aliases()
+        .forEach(
+            (tag, campo) -> {
+              assertTrue(campos.contains(campo), tag + " → campo inexistente " + campo);
+              assertFalse(campos.contains(tag), "Alias redefine un campo canónico: " + tag);
+            });
+  }
+
+  @Test
+  void aliasResuelveValorDelCampoCanonico() {
+    MinutaViviendaData data = new MinutaViviendaData();
+    data.setNombreConyuge1("ANA");
+    data.setClaveCatastral("09-01-001");
+    data.setPlazoCredito("300");
+    data.setInstitucionFinancieraOriginal("BANCO X");
+    var valores =
+        MinutaTagAliases.valoresPorTag(
+            List.of(
+                "nombre_deudor_1",
+                "nombre_comprador",
+                "codigo_catastral",
+                "plazo_meses",
+                "banco_hipoteca_anterior",
+                "precio_venta_numeral"),
+            data.toTemplateMap());
+    assertEquals("ANA", valores.get("nombre_deudor_1"));
+    assertEquals("ANA", valores.get("nombre_comprador"));
+    assertEquals("09-01-001", valores.get("codigo_catastral"));
+    assertEquals("300", valores.get("plazo_meses"));
+    assertEquals("300 meses", valores.get("plazo_credito"));
+    assertEquals("BANCO X", valores.get("banco_hipoteca_anterior"));
+    assertEquals("nodata", valores.get("precio_venta_numeral"));
+  }
+
+  @Test
+  void contratoTerminadaSolidariaSeRenderizaSoloConAliases() throws Exception {
+    MinutaTemplateDescriptor descriptor =
+        catalog.sinConectar().stream()
+            .filter(
+                d ->
+                    d.productCode().equals(MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_SOLID)
+                        && d.templateKind().equals("CONTRATO_MUTUO"))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(List.of(), renderer.tagsSinResolver(descriptor));
+
+    MinutaViviendaData data = datosCompletos();
+    data.setPlazoCredito("300");
+    String text = renderYLeer(descriptor, data, "solidaria_contrato_mutuo.docx");
+
+    assertFalse(text.contains("{{"), "Quedaron placeholders");
+    assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
+    assertTrue(text.contains("V_nombre_conyuge_1"));
+    assertTrue(text.contains("V_cedula_conyuge_2"));
+    assertTrue(text.contains("V_nombre_afiliado"));
+    assertTrue(text.contains("Plazo 300 meses,"));
+    assertFalse(text.contains("meses meses"));
+  }
+
+  @Test
+  void camposPendientesReportaCampoCanonicoDeLosAliases() {
+    MinutaTemplateDescriptor descriptor =
+        catalog.sinConectar().stream()
+            .filter(d -> d.classpathResource().endsWith("contrato_vivienda_terminada.docx"))
+            .findFirst()
+            .orElseThrow();
+    MinutaViviendaData data = datosCompletos();
+    data.setNombreConyuge1("");
+    data.setPlazoCredito("");
+    assertEquals(
+        List.of("nombre_conyuge_1", "plazo_credito"),
+        renderer.camposPendientes(descriptor, data).stream().sorted().toList());
   }
 
   @Test

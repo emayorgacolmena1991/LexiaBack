@@ -194,6 +194,95 @@ public class MinutaViviendaData {
   @JsonProperty("notaria_antecedente")
   private String notariaAntecedente = "";
 
+  // --- Vivienda Hipotecada BIESS: sin captura aún, quedan como nodata / camposPendientes ---
+
+  @JsonProperty("representacion_sociedad_conyugal_vendedor")
+  private String representacionSociedadConyugalVendedor = "";
+
+  @JsonProperty("representacion_sociedad_conyugal_comprador")
+  private String representacionSociedadConyugalComprador = "";
+
+  @JsonProperty("celular_vendedor")
+  private String celularVendedor = "";
+
+  @JsonProperty("celular_comprador")
+  private String celularComprador = "";
+
+  @JsonProperty("canton_notario_adquisicion")
+  private String cantonNotarioAdquisicion = "";
+
+  @JsonProperty("nombre_adquirente_anterior")
+  private String nombreAdquirenteAnterior = "";
+
+  @JsonProperty("estado_civil_adquirente_anterior")
+  private String estadoCivilAdquirenteAnterior = "";
+
+  @JsonProperty("descripcion_inmueble_general")
+  private String descripcionInmuebleGeneral = "";
+
+  @JsonProperty("nombre_conjunto_edificio")
+  private String nombreConjuntoEdificio = "";
+
+  @JsonProperty("modo_propiedad_horizontal")
+  private String modoPropiedadHorizontal = "";
+
+  @JsonProperty("fecha_escritura_ph")
+  private String fechaEscrituraPh = "";
+
+  @JsonProperty("notario_ph")
+  private String notarioPh = "";
+
+  @JsonProperty("canton_notario_ph")
+  private String cantonNotarioPh = "";
+
+  @JsonProperty("canton_registro_ph")
+  private String cantonRegistroPh = "";
+
+  @JsonProperty("fecha_inscripcion_ph")
+  private String fechaInscripcionPh = "";
+
+  @JsonProperty("fecha_escritura_antecedente_tres")
+  private String fechaEscrituraAntecedenteTres = "";
+
+  @JsonProperty("notario_antecedente_tres")
+  private String notarioAntecedenteTres = "";
+
+  @JsonProperty("canton_notario_antecedente_tres")
+  private String cantonNotarioAntecedenteTres = "";
+
+  @JsonProperty("canton_registro_antecedente_tres")
+  private String cantonRegistroAntecedenteTres = "";
+
+  @JsonProperty("fecha_inscripcion_antecedente_tres")
+  private String fechaInscripcionAntecedenteTres = "";
+
+  @JsonProperty("linderos_generales_norte")
+  private String linderosGeneralesNorte = "";
+
+  @JsonProperty("linderos_generales_sur")
+  private String linderosGeneralesSur = "";
+
+  @JsonProperty("linderos_generales_este")
+  private String linderosGeneralesEste = "";
+
+  @JsonProperty("linderos_generales_oeste")
+  private String linderosGeneralesOeste = "";
+
+  @JsonProperty("superficie_general")
+  private String superficieGeneral = "";
+
+  @JsonProperty("detalles_linderos_especificos_completos")
+  private String detallesLinderosEspecificosCompletos = "";
+
+  @JsonProperty("detalle_forma_pago")
+  private String detalleFormaPago = "";
+
+  @JsonProperty("art_y_deudor_2")
+  private String artYDeudor2 = "";
+
+  @JsonProperty("calidad_afiliado")
+  private String calidadAfiliado = "";
+
   /** Etiquetas legibles para reportar campos faltantes. Orden = orden de {@link #toTemplateMap()}. */
   private static final Map<String, String> ETIQUETAS = new LinkedHashMap<>();
 
@@ -787,6 +876,41 @@ public class MinutaViviendaData {
     map.put("fecha_inscripcion_antecedente", blankToNodata(fechaInscripcionAntecedente));
     map.put("repertorio_antecedente", blankToNodata(repertorioAntecedente));
     map.put("notaria_antecedente", blankToNodata(notariaAntecedente));
+    map.put(
+        "representacion_sociedad_conyugal_vendedor",
+        blankToNodata(representacionSociedadConyugalVendedor));
+    map.put(
+        "representacion_sociedad_conyugal_comprador",
+        blankToNodata(representacionSociedadConyugalComprador));
+    map.put("celular_vendedor", blankToNodata(celularVendedor));
+    map.put("celular_comprador", blankToNodata(celularComprador));
+    map.put("canton_notario_adquisicion", blankToNodata(cantonNotarioAdquisicion));
+    map.put("nombre_adquirente_anterior", blankToNodata(nombreAdquirenteAnterior));
+    map.put("estado_civil_adquirente_anterior", blankToNodata(estadoCivilAdquirenteAnterior));
+    map.put("descripcion_inmueble_general", blankToNodata(descripcionInmuebleGeneral));
+    map.put("nombre_conjunto_edificio", blankToNodata(nombreConjuntoEdificio));
+    map.put("modo_propiedad_horizontal", blankToNodata(modoPropiedadHorizontal));
+    map.put("fecha_escritura_ph", blankToNodata(fechaEscrituraPh));
+    map.put("notario_ph", blankToNodata(notarioPh));
+    map.put("canton_notario_ph", blankToNodata(cantonNotarioPh));
+    map.put("canton_registro_ph", blankToNodata(cantonRegistroPh));
+    map.put("fecha_inscripcion_ph", blankToNodata(fechaInscripcionPh));
+    map.put("fecha_escritura_antecedente_tres", blankToNodata(fechaEscrituraAntecedenteTres));
+    map.put("notario_antecedente_tres", blankToNodata(notarioAntecedenteTres));
+    map.put("canton_notario_antecedente_tres", blankToNodata(cantonNotarioAntecedenteTres));
+    map.put("canton_registro_antecedente_tres", blankToNodata(cantonRegistroAntecedenteTres));
+    map.put("fecha_inscripcion_antecedente_tres", blankToNodata(fechaInscripcionAntecedenteTres));
+    map.put("linderos_generales_norte", blankToNodata(linderosGeneralesNorte));
+    map.put("linderos_generales_sur", blankToNodata(linderosGeneralesSur));
+    map.put("linderos_generales_este", blankToNodata(linderosGeneralesEste));
+    map.put("linderos_generales_oeste", blankToNodata(linderosGeneralesOeste));
+    map.put("superficie_general", blankToNodata(superficieGeneral));
+    map.put(
+        "detalles_linderos_especificos_completos",
+        blankToNodata(detallesLinderosEspecificosCompletos));
+    map.put("detalle_forma_pago", blankToNodata(detalleFormaPago));
+    map.put("art_y_deudor_2", blankToNodata(artYDeudor2));
+    map.put("calidad_afiliado", blankToNodata(calidadAfiliado));
     return map;
   }
 
