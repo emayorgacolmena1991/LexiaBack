@@ -42,12 +42,31 @@ public final class EscrituracionDtos {
   @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
   public record CrearMinutaRequest(String templateKind, String sessionId) {}
 
+  /**
+   * @param camposPendientes datos que quedaron sin valor en el documento generado (etiqueta legible
+   *     + tag); requieren ingreso manual.
+   */
   public record MinutaItem(
       java.util.UUID id,
       String templateKind,
       String productCode,
       String status,
-      boolean downloadable) {}
+      boolean downloadable,
+      List<String> camposPendientes) {
+
+    public MinutaItem {
+      camposPendientes = camposPendientes == null ? List.of() : List.copyOf(camposPendientes);
+    }
+
+    public MinutaItem(
+        java.util.UUID id,
+        String templateKind,
+        String productCode,
+        String status,
+        boolean downloadable) {
+      this(id, templateKind, productCode, status, downloadable, List.of());
+    }
+  }
 
   public record DatosBiessMinutaResponse(MinutaItem minuta, DatosBiessMinuta datos) {}
 

@@ -101,9 +101,146 @@ public class MinutaViviendaData {
   @JsonProperty("fecha_firma")
   private String fechaFirma = "";
 
-  /** Solo desde captura BIESS / ingreso manual; las plantillas actuales aún no tienen este tag. */
+  /** Captura BIESS / ingreso manual. Lo usan las plantillas de Vivienda Terminada Preferencial. */
   @JsonProperty("apoderado_biess")
   private String apoderadoBiess = "";
+
+  @JsonProperty("cedula_apoderado_biess")
+  private String cedulaApoderadoBiess = "";
+
+  // --- Parte vendedora (compraventa). Nombre/cédula/estado civil también en el consolidado IA ---
+
+  @JsonProperty("nombre_vendedor")
+  private String nombreVendedor = "";
+
+  @JsonProperty("cedula_vendedor")
+  private String cedulaVendedor = "";
+
+  @JsonProperty("estado_civil_vendedor")
+  private String estadoCivilVendedor = "";
+
+  @JsonProperty("nombre_conyuge_vendedor")
+  private String nombreConyugeVendedor = "";
+
+  @JsonProperty("cedula_conyuge_vendedor")
+  private String cedulaConyugeVendedor = "";
+
+  @JsonProperty("profesion_vendedor")
+  private String profesionVendedor = "";
+
+  @JsonProperty("direccion_vendedor")
+  private String direccionVendedor = "";
+
+  @JsonProperty("telefono_vendedor")
+  private String telefonoVendedor = "";
+
+  @JsonProperty("correo_vendedor")
+  private String correoVendedor = "";
+
+  // --- Inmueble (consolidado IA: inmueble.claveCatastral / inmueble.avaluo) ---
+
+  @JsonProperty("clave_catastral")
+  private String claveCatastral = "";
+
+  @JsonProperty("avaluo_inmueble")
+  private String avaluoInmueble = "";
+
+  // --- Precio y forma de pago de la compraventa ---
+
+  @JsonProperty("precio_compraventa_numero")
+  private String precioCompraventaNumero = "";
+
+  @JsonProperty("precio_compraventa_letras")
+  private String precioCompraventaLetras = "";
+
+  @JsonProperty("valor_entrada_numero")
+  private String valorEntradaNumero = "";
+
+  @JsonProperty("valor_entrada_letras")
+  private String valorEntradaLetras = "";
+
+  @JsonProperty("saldo_compraventa_numero")
+  private String saldoCompraventaNumero = "";
+
+  @JsonProperty("saldo_compraventa_letras")
+  private String saldoCompraventaLetras = "";
+
+  // --- Antecedente de dominio del vendedor ---
+
+  @JsonProperty("fecha_escritura_antecedente")
+  private String fechaEscrituraAntecedente = "";
+
+  @JsonProperty("fecha_inscripcion_antecedente")
+  private String fechaInscripcionAntecedente = "";
+
+  @JsonProperty("repertorio_antecedente")
+  private String repertorioAntecedente = "";
+
+  @JsonProperty("notaria_antecedente")
+  private String notariaAntecedente = "";
+
+  /** Etiquetas legibles para reportar campos faltantes. Orden = orden de {@link #toTemplateMap()}. */
+  private static final Map<String, String> ETIQUETAS = new LinkedHashMap<>();
+
+  static {
+    ETIQUETAS.put("nombre_conyuge_1", "Nombre del comprador / deudor");
+    ETIQUETAS.put("cedula_conyuge_1", "Cédula del comprador / deudor");
+    ETIQUETAS.put("nombre_conyuge_2", "Nombre del cónyuge del comprador");
+    ETIQUETAS.put("cedula_conyuge_2", "Cédula del cónyuge del comprador");
+    ETIQUETAS.put("profesion_conyuge_1", "Profesión del comprador");
+    ETIQUETAS.put("profesion_conyuge_2", "Profesión del cónyuge del comprador");
+    ETIQUETAS.put("canton_domicilio", "Cantón de domicilio del deudor");
+    ETIQUETAS.put("nombre_afiliado", "Nombre del afiliado BIESS");
+    ETIQUETAS.put("descripcion_inmuebles_antecedentes", "Descripción del inmueble (antecedentes)");
+    ETIQUETAS.put("descripcion_inmueble_hipoteca", "Descripción del inmueble hipotecado");
+    ETIQUETAS.put("parroquia_inmueble", "Parroquia del inmueble");
+    ETIQUETAS.put("canton_inmueble", "Cantón del inmueble");
+    ETIQUETAS.put("provincia_inmueble", "Provincia del inmueble");
+    ETIQUETAS.put("lindero_norte", "Lindero norte");
+    ETIQUETAS.put("lindero_sur", "Lindero sur");
+    ETIQUETAS.put("lindero_este", "Lindero este");
+    ETIQUETAS.put("lindero_oeste", "Lindero oeste");
+    ETIQUETAS.put("superficie_m2", "Superficie (m2)");
+    ETIQUETAS.put("estado_civil", "Estado civil del comprador");
+    ETIQUETAS.put("monto_prestamo", "Monto del préstamo");
+    ETIQUETAS.put("monto_prestamo_letras", "Monto del préstamo en letras");
+    ETIQUETAS.put("plazo_credito", "Plazo del crédito");
+    ETIQUETAS.put("tasa_interes_inicial", "Tasa de interés inicial");
+    ETIQUETAS.put("institucion_financiera_original", "Institución financiera original");
+    ETIQUETAS.put("direccion_deudor", "Dirección del deudor");
+    ETIQUETAS.put("telefono_deudor", "Teléfono del deudor");
+    ETIQUETAS.put("correo_deudor", "Correo del deudor");
+    ETIQUETAS.put("ciudad_firma", "Ciudad de firma");
+    ETIQUETAS.put("fecha_firma", "Fecha de firma");
+    ETIQUETAS.put("apoderado_biess", "Apoderado especial BIESS");
+    ETIQUETAS.put("cedula_apoderado_biess", "Cédula del apoderado BIESS");
+    ETIQUETAS.put("nombre_vendedor", "Nombre del vendedor");
+    ETIQUETAS.put("cedula_vendedor", "Cédula del vendedor");
+    ETIQUETAS.put("estado_civil_vendedor", "Estado civil del vendedor");
+    ETIQUETAS.put("nombre_conyuge_vendedor", "Nombre del cónyuge del vendedor");
+    ETIQUETAS.put("cedula_conyuge_vendedor", "Cédula del cónyuge del vendedor");
+    ETIQUETAS.put("profesion_vendedor", "Profesión del vendedor");
+    ETIQUETAS.put("direccion_vendedor", "Dirección del vendedor");
+    ETIQUETAS.put("telefono_vendedor", "Teléfono del vendedor");
+    ETIQUETAS.put("correo_vendedor", "Correo del vendedor");
+    ETIQUETAS.put("clave_catastral", "Clave catastral");
+    ETIQUETAS.put("avaluo_inmueble", "Avalúo del inmueble");
+    ETIQUETAS.put("precio_compraventa_numero", "Precio de compraventa (número)");
+    ETIQUETAS.put("precio_compraventa_letras", "Precio de compraventa (letras)");
+    ETIQUETAS.put("valor_entrada_numero", "Valor de entrada (número)");
+    ETIQUETAS.put("valor_entrada_letras", "Valor de entrada (letras)");
+    ETIQUETAS.put("saldo_compraventa_numero", "Saldo de compraventa (número)");
+    ETIQUETAS.put("saldo_compraventa_letras", "Saldo de compraventa (letras)");
+    ETIQUETAS.put("fecha_escritura_antecedente", "Fecha de la escritura antecedente");
+    ETIQUETAS.put("fecha_inscripcion_antecedente", "Fecha de inscripción del antecedente");
+    ETIQUETAS.put("repertorio_antecedente", "Repertorio del antecedente");
+    ETIQUETAS.put("notaria_antecedente", "Notaría del antecedente");
+  }
+
+  public static String etiqueta(String campo) {
+    String label = ETIQUETAS.get(campo);
+    return label == null ? campo : label + " (" + campo + ")";
+  }
 
   public String getNombreConyuge1() {
     return nombreConyuge1;
@@ -345,8 +482,191 @@ public class MinutaViviendaData {
     this.apoderadoBiess = nullToEmpty(apoderadoBiess);
   }
 
+  public String getCedulaApoderadoBiess() {
+    return cedulaApoderadoBiess;
+  }
+
+  public void setCedulaApoderadoBiess(String cedulaApoderadoBiess) {
+    this.cedulaApoderadoBiess = nullToEmpty(cedulaApoderadoBiess);
+  }
+
+  public String getNombreVendedor() {
+    return nombreVendedor;
+  }
+
+  public void setNombreVendedor(String nombreVendedor) {
+    this.nombreVendedor = nullToEmpty(nombreVendedor);
+  }
+
+  public String getCedulaVendedor() {
+    return cedulaVendedor;
+  }
+
+  public void setCedulaVendedor(String cedulaVendedor) {
+    this.cedulaVendedor = nullToEmpty(cedulaVendedor);
+  }
+
+  public String getEstadoCivilVendedor() {
+    return estadoCivilVendedor;
+  }
+
+  public void setEstadoCivilVendedor(String estadoCivilVendedor) {
+    this.estadoCivilVendedor = nullToEmpty(estadoCivilVendedor);
+  }
+
+  public String getNombreConyugeVendedor() {
+    return nombreConyugeVendedor;
+  }
+
+  public void setNombreConyugeVendedor(String nombreConyugeVendedor) {
+    this.nombreConyugeVendedor = nullToEmpty(nombreConyugeVendedor);
+  }
+
+  public String getCedulaConyugeVendedor() {
+    return cedulaConyugeVendedor;
+  }
+
+  public void setCedulaConyugeVendedor(String cedulaConyugeVendedor) {
+    this.cedulaConyugeVendedor = nullToEmpty(cedulaConyugeVendedor);
+  }
+
+  public String getProfesionVendedor() {
+    return profesionVendedor;
+  }
+
+  public void setProfesionVendedor(String profesionVendedor) {
+    this.profesionVendedor = nullToEmpty(profesionVendedor);
+  }
+
+  public String getDireccionVendedor() {
+    return direccionVendedor;
+  }
+
+  public void setDireccionVendedor(String direccionVendedor) {
+    this.direccionVendedor = nullToEmpty(direccionVendedor);
+  }
+
+  public String getTelefonoVendedor() {
+    return telefonoVendedor;
+  }
+
+  public void setTelefonoVendedor(String telefonoVendedor) {
+    this.telefonoVendedor = nullToEmpty(telefonoVendedor);
+  }
+
+  public String getCorreoVendedor() {
+    return correoVendedor;
+  }
+
+  public void setCorreoVendedor(String correoVendedor) {
+    this.correoVendedor = nullToEmpty(correoVendedor);
+  }
+
+  public String getClaveCatastral() {
+    return claveCatastral;
+  }
+
+  public void setClaveCatastral(String claveCatastral) {
+    this.claveCatastral = nullToEmpty(claveCatastral);
+  }
+
+  public String getAvaluoInmueble() {
+    return avaluoInmueble;
+  }
+
+  public void setAvaluoInmueble(String avaluoInmueble) {
+    this.avaluoInmueble = nullToEmpty(avaluoInmueble);
+  }
+
+  public String getPrecioCompraventaNumero() {
+    return precioCompraventaNumero;
+  }
+
+  public void setPrecioCompraventaNumero(String precioCompraventaNumero) {
+    this.precioCompraventaNumero = nullToEmpty(precioCompraventaNumero);
+  }
+
+  public String getPrecioCompraventaLetras() {
+    return precioCompraventaLetras;
+  }
+
+  public void setPrecioCompraventaLetras(String precioCompraventaLetras) {
+    this.precioCompraventaLetras = nullToEmpty(precioCompraventaLetras);
+  }
+
+  public String getValorEntradaNumero() {
+    return valorEntradaNumero;
+  }
+
+  public void setValorEntradaNumero(String valorEntradaNumero) {
+    this.valorEntradaNumero = nullToEmpty(valorEntradaNumero);
+  }
+
+  public String getValorEntradaLetras() {
+    return valorEntradaLetras;
+  }
+
+  public void setValorEntradaLetras(String valorEntradaLetras) {
+    this.valorEntradaLetras = nullToEmpty(valorEntradaLetras);
+  }
+
+  public String getSaldoCompraventaNumero() {
+    return saldoCompraventaNumero;
+  }
+
+  public void setSaldoCompraventaNumero(String saldoCompraventaNumero) {
+    this.saldoCompraventaNumero = nullToEmpty(saldoCompraventaNumero);
+  }
+
+  public String getSaldoCompraventaLetras() {
+    return saldoCompraventaLetras;
+  }
+
+  public void setSaldoCompraventaLetras(String saldoCompraventaLetras) {
+    this.saldoCompraventaLetras = nullToEmpty(saldoCompraventaLetras);
+  }
+
+  public String getFechaEscrituraAntecedente() {
+    return fechaEscrituraAntecedente;
+  }
+
+  public void setFechaEscrituraAntecedente(String fechaEscrituraAntecedente) {
+    this.fechaEscrituraAntecedente = nullToEmpty(fechaEscrituraAntecedente);
+  }
+
+  public String getFechaInscripcionAntecedente() {
+    return fechaInscripcionAntecedente;
+  }
+
+  public void setFechaInscripcionAntecedente(String fechaInscripcionAntecedente) {
+    this.fechaInscripcionAntecedente = nullToEmpty(fechaInscripcionAntecedente);
+  }
+
+  public String getRepertorioAntecedente() {
+    return repertorioAntecedente;
+  }
+
+  public void setRepertorioAntecedente(String repertorioAntecedente) {
+    this.repertorioAntecedente = nullToEmpty(repertorioAntecedente);
+  }
+
+  public String getNotariaAntecedente() {
+    return notariaAntecedente;
+  }
+
+  public void setNotariaAntecedente(String notariaAntecedente) {
+    this.notariaAntecedente = nullToEmpty(notariaAntecedente);
+  }
+
+  /** {@code true} si el valor está vacío o es el marcador de dato ausente. */
+  public static boolean isMissing(Object value) {
+    return value == null || NODATA.equals(blankToNodata(value.toString()));
+  }
+
   /**
-   * Mapa listo para poi-tl (keys = tags del .docx). Valores vacíos → {@code nodata}.
+   * Mapa listo para poi-tl (keys = tags del .docx). Valores vacíos → {@code nodata}. Las cifras y
+   * la tasa se limpian porque las plantillas ya traen "USD" y "%"; un plazo solo numérico se
+   * expresa en meses porque las plantillas no llevan la unidad.
    */
   public Map<String, Object> toTemplateMap() {
     Map<String, Object> map = new LinkedHashMap<>();
@@ -369,10 +689,10 @@ public class MinutaViviendaData {
     map.put("lindero_oeste", blankToNodata(linderoOeste));
     map.put("superficie_m2", blankToNodata(superficieM2));
     map.put("estado_civil", blankToNodata(estadoCivil));
-    map.put("monto_prestamo", blankToNodata(montoPrestamo));
+    map.put("monto_prestamo", blankToNodata(cifra(montoPrestamo)));
     map.put("monto_prestamo_letras", blankToNodata(montoPrestamoLetras));
-    map.put("plazo_credito", blankToNodata(plazoCredito));
-    map.put("tasa_interes_inicial", blankToNodata(tasaInteresInicial));
+    map.put("plazo_credito", blankToNodata(plazo(plazoCredito)));
+    map.put("tasa_interes_inicial", blankToNodata(tasa(tasaInteresInicial)));
     map.put("institucion_financiera_original", blankToNodata(institucionFinancieraOriginal));
     map.put("direccion_deudor", blankToNodata(direccionDeudor));
     map.put("telefono_deudor", blankToNodata(telefonoDeudor));
@@ -380,8 +700,32 @@ public class MinutaViviendaData {
     map.put("ciudad_firma", blankToNodata(ciudadFirma));
     map.put("fecha_firma", blankToNodata(fechaFirma));
     map.put("apoderado_biess", blankToNodata(apoderadoBiess));
+    map.put("cedula_apoderado_biess", blankToNodata(cedulaApoderadoBiess));
+    map.put("nombre_vendedor", blankToNodata(nombreVendedor));
+    map.put("cedula_vendedor", blankToNodata(cedulaVendedor));
+    map.put("estado_civil_vendedor", blankToNodata(estadoCivilVendedor));
+    map.put("nombre_conyuge_vendedor", blankToNodata(nombreConyugeVendedor));
+    map.put("cedula_conyuge_vendedor", blankToNodata(cedulaConyugeVendedor));
+    map.put("profesion_vendedor", blankToNodata(profesionVendedor));
+    map.put("direccion_vendedor", blankToNodata(direccionVendedor));
+    map.put("telefono_vendedor", blankToNodata(telefonoVendedor));
+    map.put("correo_vendedor", blankToNodata(correoVendedor));
+    map.put("clave_catastral", blankToNodata(claveCatastral));
+    map.put("avaluo_inmueble", blankToNodata(cifra(avaluoInmueble)));
+    map.put("precio_compraventa_numero", blankToNodata(cifra(precioCompraventaNumero)));
+    map.put("precio_compraventa_letras", blankToNodata(precioCompraventaLetras));
+    map.put("valor_entrada_numero", blankToNodata(cifra(valorEntradaNumero)));
+    map.put("valor_entrada_letras", blankToNodata(valorEntradaLetras));
+    map.put("saldo_compraventa_numero", blankToNodata(cifra(saldoCompraventaNumero)));
+    map.put("saldo_compraventa_letras", blankToNodata(saldoCompraventaLetras));
+    map.put("fecha_escritura_antecedente", blankToNodata(fechaEscrituraAntecedente));
+    map.put("fecha_inscripcion_antecedente", blankToNodata(fechaInscripcionAntecedente));
+    map.put("repertorio_antecedente", blankToNodata(repertorioAntecedente));
+    map.put("notaria_antecedente", blankToNodata(notariaAntecedente));
     return map;
   }
+
+  private static final String NODATA = "nodata";
 
   private static String nullToEmpty(String value) {
     return value == null ? "" : value.trim();
@@ -389,9 +733,25 @@ public class MinutaViviendaData {
 
   private static String blankToNodata(String value) {
     String t = nullToEmpty(value);
-    if (t.isEmpty() || "null".equalsIgnoreCase(t) || "n/a".equalsIgnoreCase(t)) {
-      return "nodata";
+    if (t.isEmpty()
+        || NODATA.equalsIgnoreCase(t)
+        || "null".equalsIgnoreCase(t)
+        || "n/a".equalsIgnoreCase(t)) {
+      return NODATA;
     }
     return t;
+  }
+
+  private static String cifra(String value) {
+    return nullToEmpty(value).replaceFirst("(?i)^(USD|US\\$|\\$)\\s*(\\$\\s*)?", "").trim();
+  }
+
+  private static String tasa(String value) {
+    return nullToEmpty(value).replaceFirst("\\s*%+$", "");
+  }
+
+  private static String plazo(String value) {
+    String t = nullToEmpty(value);
+    return t.matches("\\d+") ? t + " meses" : t;
   }
 }

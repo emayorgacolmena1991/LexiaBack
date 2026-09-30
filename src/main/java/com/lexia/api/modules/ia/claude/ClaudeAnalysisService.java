@@ -43,7 +43,6 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String CAPTURA_BIESS_TOOL_NAME = "registrar_datos_captura_biess";
   private static final int MAX_INTENTOS_CAPTURA_BIESS = 2;
   private static final int MAX_CHARS_CAPTURA = 20_000;
-  private static final int MAX_TOKENS = 4096;
   private static final int MAX_TOKENS_EXPEDIENTE = 8192;
   private static final int MAX_CHARS_OCR = 120_000;
   private static final int MAX_INTENTOS_POR_MODELO = 4;
@@ -319,7 +318,29 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       "telefono_deudor",
       "correo_deudor",
       "ciudad_firma",
-      "fecha_firma"
+      "fecha_firma",
+      "cedula_apoderado_biess",
+      "nombre_vendedor",
+      "cedula_vendedor",
+      "estado_civil_vendedor",
+      "nombre_conyuge_vendedor",
+      "cedula_conyuge_vendedor",
+      "profesion_vendedor",
+      "direccion_vendedor",
+      "telefono_vendedor",
+      "correo_vendedor",
+      "clave_catastral",
+      "avaluo_inmueble",
+      "precio_compraventa_numero",
+      "precio_compraventa_letras",
+      "valor_entrada_numero",
+      "valor_entrada_letras",
+      "saldo_compraventa_numero",
+      "saldo_compraventa_letras",
+      "fecha_escritura_antecedente",
+      "fecha_inscripcion_antecedente",
+      "repertorio_antecedente",
+      "notaria_antecedente"
     };
     ArrayNode required = schema.putArray("required");
     for (String field : fields) {
@@ -340,22 +361,33 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         Campos de identidad/inmueble (minuta) y de crédito/contacto (contrato de mutuo).
         REGLAS:
         1. Si un dato no está presente o es ilegible, usa exactamente la cadena nodata.
-        2. No inventes montos, tasas, plazos, cédulas ni nombres.
+        2. No inventes montos, tasas, plazos, cédulas ni nombres. No calcules valores.
         3. monto_prestamo: cifra en números (ej. 45000.00). monto_prestamo_letras: en palabras.
         4. institucion_financiera_original: banco acreedor anterior a cancelar (sustitución).
-        5. No agregues texto fuera de la herramienta.
+        5. nombre_conyuge_1 / nombre_conyuge_2: comprador(es) y deudor(es) del crédito.
+           nombre_vendedor / nombre_conyuge_vendedor: propietario(s) actual(es) que venden
+           (historia de dominio, certificado del Registro de la Propiedad, cédulas).
+        6. superficie_m2 y avaluo_inmueble: solo la cifra, sin unidad ni símbolo.
+        7. precio_compraventa_*, valor_entrada_*, saldo_compraventa_*: solo si constan en algún
+           documento (promesa de compraventa, carta de compra, etc.). *_numero en cifras
+           (ej. 45.000,00); *_letras en mayúsculas con centavos (ej. CUARENTA Y CINCO MIL CON
+           00/100).
+        8. *_antecedente: escritura por la que el vendedor adquirió el inmueble (fecha de
+           otorgamiento, notaría — ej. Notaría Trigésima del cantón Guayaquil —, fecha de
+           inscripción y número de repertorio en el Registro de la Propiedad).
+        9. No agregues texto fuera de la herramienta.
         """;
 
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
-    body.put("max_tokens", MAX_TOKENS);
+    body.put("max_tokens", MAX_TOKENS_EXPEDIENTE);
     body.put("system", system);
 
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", MINUTA_VIVIENDA_TOOL_NAME);
     tool.put(
         "description",
-        "Registra datos para minuta de hipoteca y contrato de mutuo (vivienda hipotecada BIESS).");
+        "Registra datos para minuta de compraventa/hipoteca y contrato de mutuo BIESS.");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", MINUTA_VIVIENDA_TOOL_NAME);
 

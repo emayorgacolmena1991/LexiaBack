@@ -7,6 +7,8 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.documentos.ExtractedData;
+import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
@@ -22,12 +24,17 @@ import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +63,7 @@ public class MinutaGenerationService {
   private final MinutaTemplateCatalog catalog;
   private final DocxMinutaRenderer renderer;
   private final DatosBiessStore datosBiess;
+  private final ExtractedDataRepository extractedData;
   private final ObjectMapper objectMapper;
   private final Path storageDir;
   private final BorradorPromocionService promocion;
@@ -71,6 +79,7 @@ public class MinutaGenerationService {
       MinutaTemplateCatalog catalog,
       DocxMinutaRenderer renderer,
       DatosBiessStore datosBiess,
+      ExtractedDataRepository extractedData,
       ObjectMapper objectMapper,
       @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir,
       BorradorPromocionService promocion) {
@@ -84,6 +93,7 @@ public class MinutaGenerationService {
     this.catalog = catalog;
     this.renderer = renderer;
     this.datosBiess = datosBiess;
+    this.extractedData = extractedData;
     this.objectMapper = objectMapper;
     this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
     this.promocion = promocion;
@@ -149,23 +159,30 @@ public class MinutaGenerationService {
               : "No se pudieron extraer datos para la minuta.");
     }
 
-    byte[] docx = renderer.renderVivienda(descriptor, extraccion.data());
+    MinutaViviendaData data = extraccion.data();
+    completarDesdeConsolidado(tenantId, caseId, data);
+    aplicarDatosBiessGuardados(tenantId, caseId, data);
+    validarObligatorios(descriptor, data);
+
+    byte[] docx = renderer.renderVivienda(descriptor, data);
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft, extraccion.data());
+    persistData(draft, data);
     draft.markReady(stored.toString());
     minutaDrafts.save(draft);
-    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(extraccion.data()));
+    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(data));
 
+    List<String> pendientes = pendientes(descriptor, data);
     LOG.info(
-        "Minuta generada case={} product={} kind={} draft={} bytes={}",
+        "Minuta generada case={} product={} kind={} draft={} bytes={} pendientes={}",
         caseId,
         product,
         kind,
         draft.getId(),
-        docx.length);
+        docx.length,
+        pendientes.size());
 
-    return toItem(draft);
+    return toItem(draft, pendientes);
   }
 
   @Transactional(readOnly = true)
@@ -173,8 +190,16 @@ public class MinutaGenerationService {
     authorization.requirePermission("expedientes:caso:leer");
     MinutaDraft draft = requireDraft(caseId, minutaId);
     MinutaViviendaData data = loadData(draft);
+    List<String> pendientes =
+        data == null
+            ? List.of()
+            : catalog
+                .find(draft.getProductCode(), draft.getTemplateKind())
+                .map(d -> pendientes(d, data))
+                .orElse(List.of());
     return new DatosBiessMinutaResponse(
-        toItem(draft), data == null ? DatosBiessMinuta.empty() : DatosBiessMinuta.from(data));
+        toItem(draft, pendientes),
+        data == null ? DatosBiessMinuta.empty() : DatosBiessMinuta.from(data));
   }
 
   /**
@@ -220,7 +245,8 @@ public class MinutaGenerationService {
         draft.getId(),
         draft.getTemplateKind(),
         docx.length);
-    return new DatosBiessMinutaResponse(toItem(draft), DatosBiessMinuta.from(data));
+    return new DatosBiessMinutaResponse(
+        toItem(draft, pendientes(descriptor, data)), DatosBiessMinuta.from(data));
   }
 
   @Transactional(readOnly = true)
@@ -253,15 +279,115 @@ public class MinutaGenerationService {
   }
 
   public static MinutaItem toItem(MinutaDraft draft) {
+    return toItem(draft, List.of());
+  }
+
+  private static MinutaItem toItem(MinutaDraft draft, List<String> camposPendientes) {
     return new MinutaItem(
         draft.getId(),
         draft.getTemplateKind(),
         draft.getProductCode(),
         draft.getStatus(),
-        StringUtils.hasText(draft.getStoragePath()));
+        StringUtils.hasText(draft.getStoragePath()),
+        camposPendientes);
   }
 
   public record DownloadedMinuta(String fileName, byte[] bytes) {}
+
+  private List<String> pendientes(MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
+    return renderer.camposPendientes(descriptor, data).stream()
+        .map(MinutaViviendaData::etiqueta)
+        .toList();
+  }
+
+  private static void validarObligatorios(
+      MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
+    var map = data.toTemplateMap();
+    List<String> faltantes =
+        descriptor.requiredFields().stream()
+            .filter(campo -> MinutaViviendaData.isMissing(map.get(campo)))
+            .map(MinutaViviendaData::etiqueta)
+            .toList();
+    if (!faltantes.isEmpty()) {
+      throw new ApiException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "MINUTA_DATOS_FALTANTES",
+          "No se generó el documento: faltan datos obligatorios en el expediente: "
+              + String.join("; ", faltantes)
+              + ".");
+    }
+  }
+
+  /**
+   * Respaldo con el consolidado del estudio IA ({@code extracted_data}): solo completa lo que la
+   * extracción de minuta dejó vacío.
+   */
+  private void completarDesdeConsolidado(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+    Map<String, String> consolidado = new HashMap<>();
+    for (ExtractedData row :
+        extractedData.findByCaseIdAndTenantIdOrderByFieldLabelAsc(caseId, tenantId)) {
+      if (row.getFieldLabel() != null && StringUtils.hasText(row.getFieldValue())) {
+        consolidado.put(row.getFieldLabel(), row.getFieldValue().trim());
+      }
+    }
+    if (consolidado.isEmpty()) {
+      return;
+    }
+    completar(data.getNombreConyuge1(), consolidado.get("comprador.nombres"), data::setNombreConyuge1);
+    completar(data.getCedulaConyuge1(), consolidado.get("comprador.cedula"), data::setCedulaConyuge1);
+    completar(data.getEstadoCivil(), consolidado.get("comprador.estadoCivil"), data::setEstadoCivil);
+    completar(data.getNombreVendedor(), consolidado.get("vendedor.nombres"), data::setNombreVendedor);
+    completar(data.getCedulaVendedor(), consolidado.get("vendedor.cedula"), data::setCedulaVendedor);
+    completar(
+        data.getEstadoCivilVendedor(),
+        consolidado.get("vendedor.estadoCivil"),
+        data::setEstadoCivilVendedor);
+    completar(
+        data.getClaveCatastral(), consolidado.get("inmueble.claveCatastral"), data::setClaveCatastral);
+    completar(
+        data.getAvaluoInmueble(),
+        montoConDecimales(consolidado.get("inmueble.avaluo")),
+        data::setAvaluoInmueble);
+  }
+
+  /** Captura BIESS ya guardada en el expediente (p. ej. al generar la minuta antes que el mutuo). */
+  private void aplicarDatosBiessGuardados(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+    DatosBiessMinuta guardados = datosBiess.cargar(caseId, tenantId);
+    if (guardados == null) {
+      return;
+    }
+    if (StringUtils.hasText(guardados.monto())
+        && !guardados.monto().equals(DatosBiessMinuta.from(data).monto())) {
+      data.setMontoPrestamo(guardados.monto());
+      data.setMontoPrestamoLetras("");
+    }
+    if (StringUtils.hasText(guardados.tasa())) {
+      data.setTasaInteresInicial(guardados.tasa());
+    }
+    if (StringUtils.hasText(guardados.plazo())) {
+      data.setPlazoCredito(guardados.plazo());
+    }
+    if (StringUtils.hasText(guardados.apoderado())) {
+      data.setApoderadoBiess(guardados.apoderado());
+    }
+  }
+
+  private static void completar(String actual, String candidato, Consumer<String> setter) {
+    if (MinutaViviendaData.isMissing(actual) && StringUtils.hasText(candidato)) {
+      setter.accept(candidato);
+    }
+  }
+
+  private static String montoConDecimales(String raw) {
+    if (!StringUtils.hasText(raw)) {
+      return raw;
+    }
+    try {
+      return new BigDecimal(raw.trim()).setScale(2, RoundingMode.HALF_UP).toPlainString();
+    } catch (NumberFormatException e) {
+      return raw.trim();
+    }
+  }
 
   private MinutaDraft requireDraft(UUID caseId, UUID minutaId) {
     UUID tenantId = AuthContext.require().tenantId();
