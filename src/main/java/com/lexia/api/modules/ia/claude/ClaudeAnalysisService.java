@@ -308,6 +308,11 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       "lindero_este",
       "lindero_oeste",
       "superficie_m2",
+      "area_solar",
+      "area_construccion",
+      "area_util",
+      "area_comun",
+      "alicuota",
       "estado_civil",
       "monto_prestamo",
       "monto_prestamo_letras",
@@ -367,7 +372,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         5. nombre_conyuge_1 / nombre_conyuge_2: comprador(es) y deudor(es) del crédito.
            nombre_vendedor / nombre_conyuge_vendedor: propietario(s) actual(es) que venden
            (historia de dominio, certificado del Registro de la Propiedad, cédulas).
-        6. superficie_m2 y avaluo_inmueble: solo la cifra, sin unidad ni símbolo.
+        6. superficie_m2 y avaluo_inmueble: solo la cifra, sin unidad ni símbolo. superficie_m2
+           es el ÁREA TOTAL. area_solar, area_construccion, area_util y area_comun: solo la
+           cifra en m2, sin unidad. alicuota: la cifra tal como consta (ej. 0,2500 o 25%).
         7. precio_compraventa_*, valor_entrada_*, saldo_compraventa_*: solo si constan en algún
            documento (promesa de compraventa, carta de compra, etc.). *_numero en cifras
            (ej. 45.000,00); *_letras en mayúsculas con centavos (ej. CUARENTA Y CINCO MIL CON

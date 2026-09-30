@@ -120,6 +120,21 @@ class DocxMinutaRendererTest {
   }
 
   @Test
+  void terrenoYViviendaRenderizaAmbasPlantillasSinMarcadores() throws Exception {
+    for (String kind : List.of("MINUTA_COMPRAVENTA", "CONTRATO_MUTUO")) {
+      MinutaTemplateDescriptor descriptor =
+          catalog.require(MinutaTemplateCatalog.PRODUCT_TERRENO_Y_VIVIENDA, kind);
+      String text = renderYLeer(descriptor, datosCompletos(), "terreno_" + kind + ".docx");
+
+      assertFalse(text.contains("{{"), kind + ": quedaron placeholders");
+      assertFalse(text.contains("nodata"), kind + ": quedaron datos sin resolver");
+      assertFalse(text.matches("(?s).*[Xx]{4,}.*"), kind + ": quedaron marcadores XXXX");
+      assertTrue(text.contains("V_apoderado_biess"), kind);
+      assertTrue(text.contains("V_nombre_conyuge_2"), kind);
+    }
+  }
+
+  @Test
   void camposPendientesListaSoloTagsDeLaPlantilla() {
     MinutaTemplateDescriptor descriptor =
         catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_PREF, "CONTRATO_MUTUO");

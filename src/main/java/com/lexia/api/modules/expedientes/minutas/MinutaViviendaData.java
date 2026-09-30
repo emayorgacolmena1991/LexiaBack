@@ -66,6 +66,21 @@ public class MinutaViviendaData {
   @JsonProperty("superficie_m2")
   private String superficieM2 = "";
 
+  @JsonProperty("area_solar")
+  private String areaSolar = "";
+
+  @JsonProperty("area_construccion")
+  private String areaConstruccion = "";
+
+  @JsonProperty("area_util")
+  private String areaUtil = "";
+
+  @JsonProperty("area_comun")
+  private String areaComun = "";
+
+  @JsonProperty("alicuota")
+  private String alicuota = "";
+
   // --- Contrato de mutuo / sustitución (tags adicionales) ---
 
   @JsonProperty("estado_civil")
@@ -201,6 +216,11 @@ public class MinutaViviendaData {
     ETIQUETAS.put("lindero_este", "Lindero este");
     ETIQUETAS.put("lindero_oeste", "Lindero oeste");
     ETIQUETAS.put("superficie_m2", "Superficie (m2)");
+    ETIQUETAS.put("area_solar", "Área de solar (m2)");
+    ETIQUETAS.put("area_construccion", "Área de construcción (m2)");
+    ETIQUETAS.put("area_util", "Área útil (m2)");
+    ETIQUETAS.put("area_comun", "Área común (m2)");
+    ETIQUETAS.put("alicuota", "Alícuota");
     ETIQUETAS.put("estado_civil", "Estado civil del comprador");
     ETIQUETAS.put("monto_prestamo", "Monto del préstamo");
     ETIQUETAS.put("monto_prestamo_letras", "Monto del préstamo en letras");
@@ -384,6 +404,46 @@ public class MinutaViviendaData {
 
   public void setSuperficieM2(String superficieM2) {
     this.superficieM2 = nullToEmpty(superficieM2);
+  }
+
+  public String getAreaSolar() {
+    return areaSolar;
+  }
+
+  public void setAreaSolar(String areaSolar) {
+    this.areaSolar = nullToEmpty(areaSolar);
+  }
+
+  public String getAreaConstruccion() {
+    return areaConstruccion;
+  }
+
+  public void setAreaConstruccion(String areaConstruccion) {
+    this.areaConstruccion = nullToEmpty(areaConstruccion);
+  }
+
+  public String getAreaUtil() {
+    return areaUtil;
+  }
+
+  public void setAreaUtil(String areaUtil) {
+    this.areaUtil = nullToEmpty(areaUtil);
+  }
+
+  public String getAreaComun() {
+    return areaComun;
+  }
+
+  public void setAreaComun(String areaComun) {
+    this.areaComun = nullToEmpty(areaComun);
+  }
+
+  public String getAlicuota() {
+    return alicuota;
+  }
+
+  public void setAlicuota(String alicuota) {
+    this.alicuota = nullToEmpty(alicuota);
   }
 
   public String getEstadoCivil() {
@@ -688,6 +748,11 @@ public class MinutaViviendaData {
     map.put("lindero_este", blankToNodata(linderoEste));
     map.put("lindero_oeste", blankToNodata(linderoOeste));
     map.put("superficie_m2", blankToNodata(superficieM2));
+    map.put("area_solar", blankToNodata(areaSolar));
+    map.put("area_construccion", blankToNodata(areaConstruccion));
+    map.put("area_util", blankToNodata(areaUtil));
+    map.put("area_comun", blankToNodata(areaComun));
+    map.put("alicuota", blankToNodata(alicuota));
     map.put("estado_civil", blankToNodata(estadoCivil));
     map.put("monto_prestamo", blankToNodata(cifra(montoPrestamo)));
     map.put("monto_prestamo_letras", blankToNodata(montoPrestamoLetras));

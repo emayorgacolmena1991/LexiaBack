@@ -8,14 +8,15 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * Catálogo de plantillas .docx por producto BIESS. Hoy: {@code VIV_HIPOTECADA_BIESS} y
- * {@code VIV_TERMINADA_PREF}.
+ * Catálogo de plantillas .docx por producto BIESS. Hoy: {@code VIV_HIPOTECADA_BIESS},
+ * {@code VIV_TERMINADA_PREF} y {@code TERRENO_Y_VIVIENDA}.
  */
 @Component
 public class MinutaTemplateCatalog {
 
   public static final String PRODUCT_VIV_HIPOTECADA_BIESS = "VIV_HIPOTECADA_BIESS";
   public static final String PRODUCT_VIV_TERMINADA_PREF = "VIV_TERMINADA_PREF";
+  public static final String PRODUCT_TERRENO_Y_VIVIENDA = "TERRENO_Y_VIVIENDA";
 
   private static final String DIR = "templates/escrituracion/";
 
@@ -30,6 +31,12 @@ public class MinutaTemplateCatalog {
 
   static final String TEMPLATE_PREF_CONTRATO_MUTUO =
       DIR + "VIVIENDA TERMINADA PREFERENCIAL/contrato_de_vivienda_terminada_y_terreno.docx";
+
+  static final String TEMPLATE_TERRENO_MINUTA_COMPRAVENTA =
+      DIR + "TERRENO TERMINADA INDIVIDUAL/minuta_compraventa_y_hipoteca_terreno.docx";
+
+  static final String TEMPLATE_TERRENO_CONTRATO_MUTUO =
+      DIR + "TERRENO TERMINADA INDIVIDUAL/contrato_de_vivienda_terminada_y_terreno.docx";
 
   private static final List<MinutaTemplateDescriptor> TEMPLATES =
       List.of(
@@ -60,6 +67,24 @@ public class MinutaTemplateCatalog {
               "CONTRATO_MUTUO",
               TEMPLATE_PREF_CONTRATO_MUTUO,
               "contrato_mutuo_vivienda_preferencial.docx",
+              List.of("nombre_conyuge_1", "cedula_conyuge_1")),
+          new MinutaTemplateDescriptor(
+              PRODUCT_TERRENO_Y_VIVIENDA,
+              "MINUTA_COMPRAVENTA",
+              TEMPLATE_TERRENO_MINUTA_COMPRAVENTA,
+              "minuta_compraventa_hipoteca_terreno.docx",
+              List.of(
+                  "nombre_conyuge_1",
+                  "cedula_conyuge_1",
+                  "nombre_vendedor",
+                  "cedula_vendedor",
+                  "descripcion_inmueble_hipoteca",
+                  "canton_inmueble")),
+          new MinutaTemplateDescriptor(
+              PRODUCT_TERRENO_Y_VIVIENDA,
+              "CONTRATO_MUTUO",
+              TEMPLATE_TERRENO_CONTRATO_MUTUO,
+              "contrato_mutuo_vivienda_terminada_y_terreno.docx",
               List.of("nombre_conyuge_1", "cedula_conyuge_1")));
 
   public Optional<MinutaTemplateDescriptor> find(String productCode, String templateKind) {
@@ -82,7 +107,8 @@ public class MinutaTemplateCatalog {
                         + productCode
                         + " plantilla="
                         + templateKind
-                        + ". Disponible: VIV_HIPOTECADA_BIESS y VIV_TERMINADA_PREF"
+                        + ". Disponible: VIV_HIPOTECADA_BIESS, VIV_TERMINADA_PREF y"
+                        + " TERRENO_Y_VIVIENDA"
                         + " (MINUTA_COMPRAVENTA, CONTRATO_MUTUO)."));
   }
 
