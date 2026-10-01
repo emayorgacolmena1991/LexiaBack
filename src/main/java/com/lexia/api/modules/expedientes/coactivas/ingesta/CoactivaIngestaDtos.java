@@ -72,7 +72,6 @@ public final class CoactivaIngestaDtos {
       LocalDate fechaActa,
       LocalDate fechaRecepcion,
       @Size(max = 200) String entregadoPor,
-      @Size(max = 200) String recibidoPor,
       String observaciones,
       @Valid List<ActaItemRequest> items,
       List<UUID> eliminarItemIds) {}

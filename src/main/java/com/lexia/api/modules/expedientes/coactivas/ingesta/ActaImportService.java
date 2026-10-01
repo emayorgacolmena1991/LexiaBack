@@ -21,6 +21,8 @@ import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.A
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaResumen;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ConfirmacionResponse;
 import com.lexia.api.modules.ia.ocr.AzureDocumentIntelligenceClient;
+import com.lexia.api.modules.identity.AppUser;
+import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.io.IOException;
 import java.time.LocalDate;
@@ -55,6 +57,7 @@ public class ActaImportService {
   private final CoactivaDelegadoService delegados;
   private final AzureDocumentIntelligenceClient azure;
   private final AuthorizationService authorization;
+  private final AppUserRepository users;
 
   public ActaImportService(
       CoactivaActaRepository actas,
@@ -63,7 +66,8 @@ public class ActaImportService {
       CoactivaExpedienteService expedienteService,
       CoactivaDelegadoService delegados,
       AzureDocumentIntelligenceClient azure,
-      AuthorizationService authorization) {
+      AuthorizationService authorization,
+      AppUserRepository users) {
     this.actas = actas;
     this.items = items;
     this.expedientes = expedientes;
@@ -71,6 +75,7 @@ public class ActaImportService {
     this.delegados = delegados;
     this.azure = azure;
     this.authorization = authorization;
+    this.users = users;
   }
 
   @Transactional(readOnly = true)
@@ -138,7 +143,7 @@ public class ActaImportService {
         fechaActa,
         LocalDate.now(),
         null,
-        null,
+        nombreUsuario(principal),
         null);
     actas.save(acta);
 
@@ -163,7 +168,7 @@ public class ActaImportService {
     AuthPrincipal principal = AuthContext.require();
     UUID tenantId = principal.tenantId();
     CoactivaActa acta = CoactivaActa.create(tenantId, normalizarTipo(request.tipo()), "MANUAL", principal.userId());
-    aplicarCabecera(tenantId, acta, request);
+    aplicarCabecera(principal, acta, request, nombreUsuario(principal));
     actas.save(acta);
     guardarItems(tenantId, acta, request.items());
     items.flush();
@@ -174,9 +179,10 @@ public class ActaImportService {
   @Transactional
   public ActaDetalle actualizar(UUID id, ActaRequest request) {
     authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
-    UUID tenantId = AuthContext.require().tenantId();
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
     CoactivaActa acta = requireBorrador(tenantId, id);
-    aplicarCabecera(tenantId, acta, request);
+    aplicarCabecera(principal, acta, request, acta.getRecibidoPor());
     if (request.eliminarItemIds() != null) {
       for (UUID itemId : request.eliminarItemIds()) {
         items.findByIdAndTenantId(itemId, tenantId)
@@ -241,17 +247,25 @@ public class ActaImportService {
   // Soporte
   // ---------------------------------------------------------------------------
 
-  private void aplicarCabecera(UUID tenantId, CoactivaActa acta, ActaRequest request) {
+  private void aplicarCabecera(
+      AuthPrincipal principal, CoactivaActa acta, ActaRequest request, String recibidoPor) {
     acta.setCabecera(
         CoactivaTexto.blankToNull(request.titulo()),
         request.oficinaCodigo() == null
             ? acta.getOficinaCodigo()
-            : delegados.resolverCodigoOficina(tenantId, request.oficinaCodigo()),
+            : delegados.resolverCodigoOficina(principal.tenantId(), request.oficinaCodigo()),
         request.fechaActa(),
         request.fechaRecepcion() == null ? LocalDate.now() : request.fechaRecepcion(),
         CoactivaTexto.blankToNull(request.entregadoPor()),
-        CoactivaTexto.blankToNull(request.recibidoPor()),
+        recibidoPor,
         CoactivaTexto.blankToNull(request.observaciones()));
+  }
+
+  private String nombreUsuario(AuthPrincipal principal) {
+    return users.findById(principal.userId())
+        .map(AppUser::getDisplayName)
+        .map(nombre -> CoactivaTexto.truncate(CoactivaTexto.blankToNull(nombre), 200))
+        .orElse(null);
   }
 
   private void guardarItems(UUID tenantId, CoactivaActa acta, List<ActaItemRequest> requests) {
