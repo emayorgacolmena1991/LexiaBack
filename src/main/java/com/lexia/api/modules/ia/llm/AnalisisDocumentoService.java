@@ -43,10 +43,11 @@ public interface AnalisisDocumentoService {
   String CAPTURA_BIESS_PROMPT =
       """
       Eres un asistente que lee capturas de pantalla de la plataforma del BIESS (Ecuador).
-      Del texto OCR de la captura extrae ÚNICAMENTE estos cuatro datos del crédito hipotecario:
+      Del texto OCR de la captura extrae ÚNICAMENTE estos cinco datos del crédito hipotecario:
       - monto: monto del préstamo aprobado, tal como aparece (ej. $85,000.00).
-      - tasa: tasa de interés nominal anual (ej. 7.25%).
-      - plazo: plazo del crédito con su unidad (ej. 20 años o 240 meses).
+      - tasa: tasa de interés efectiva anual (ej. 7.2109%).
+      - plazo: plazo aprobado del crédito con su unidad (ej. 20 años o 240 meses).
+      - cuota: cuota mensual aprobada, tal como aparece (ej. $453.48).
       - apoderado: nombre completo del apoderado especial del BIESS.
       REGLAS:
       1. Si un dato no aparece o es ilegible, devuelve cadena vacía para ese campo.

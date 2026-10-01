@@ -98,6 +98,10 @@ public class MinutaViviendaData {
   @JsonProperty("tasa_interes_inicial")
   private String tasaInteresInicial = "";
 
+  /** Cuota mensual aprobada por el BIESS (captura / ingreso manual). */
+  @JsonProperty("cuota_credito")
+  private String cuotaCredito = "";
+
   @JsonProperty("institucion_financiera_original")
   private String institucionFinancieraOriginal = "";
 
@@ -315,6 +319,7 @@ public class MinutaViviendaData {
     ETIQUETAS.put("monto_prestamo_letras", "Monto del préstamo en letras");
     ETIQUETAS.put("plazo_credito", "Plazo del crédito");
     ETIQUETAS.put("tasa_interes_inicial", "Tasa de interés inicial");
+    ETIQUETAS.put("cuota_credito", "Cuota mensual del crédito");
     ETIQUETAS.put("institucion_financiera_original", "Institución financiera original");
     ETIQUETAS.put("direccion_deudor", "Dirección del deudor");
     ETIQUETAS.put("telefono_deudor", "Teléfono del deudor");
@@ -573,6 +578,14 @@ public class MinutaViviendaData {
 
   public void setTasaInteresInicial(String tasaInteresInicial) {
     this.tasaInteresInicial = nullToEmpty(tasaInteresInicial);
+  }
+
+  public String getCuotaCredito() {
+    return cuotaCredito;
+  }
+
+  public void setCuotaCredito(String cuotaCredito) {
+    this.cuotaCredito = nullToEmpty(cuotaCredito);
   }
 
   public String getInstitucionFinancieraOriginal() {
@@ -847,6 +860,7 @@ public class MinutaViviendaData {
     map.put("monto_prestamo_letras", blankToNodata(montoPrestamoLetras));
     map.put("plazo_credito", blankToNodata(plazo(plazoCredito)));
     map.put("tasa_interes_inicial", blankToNodata(tasa(tasaInteresInicial)));
+    map.put("cuota_credito", blankToNodata(cifra(cuotaCredito)));
     map.put("institucion_financiera_original", blankToNodata(institucionFinancieraOriginal));
     map.put("direccion_deudor", blankToNodata(direccionDeudor));
     map.put("telefono_deudor", blankToNodata(telefonoDeudor));

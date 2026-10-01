@@ -95,6 +95,37 @@ public final class EscrituracionDtos {
   public record GuardarContenidoMinutaRequest(List<ParrafoEditado> parrafos) {}
 
   /**
+   * "Guardar" del editor: párrafos editados + datos del panel "Datos manuales desde BIESS". Ambos
+   * opcionales; con {@code datosBiess == null} no se tocan los campos del crédito.
+   */
+  @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+  public record GuardarMinutaRequest(List<ParrafoEditado> parrafos, DatosBiessMinuta datosBiess) {}
+
+  /**
+   * Resultado de "Generar borrador": DOCX renderizado desde la plantilla (sin LLM sobre el texto
+   * legal) ya convertido a párrafos para el editor web.
+   *
+   * @param status estado del borrador ({@code DRAFT_GENERATED} cuando el archivo existe).
+   * @param editorContent párrafos del DOCX guardado; es lo único que debe cargar el editor.
+   * @param downloadUrl ruta relativa del binario; sirve el mismo archivo que {@code editorContent}.
+   */
+  public record BorradorGeneradoResponse(
+      UUID minutaId,
+      String status,
+      MinutaItem minuta,
+      boolean editadoManualmente,
+      List<ParrafoMinuta> editorContent,
+      DatosBiessMinuta datosBiess,
+      String downloadUrl) {}
+
+  public record MinutaGuardadaResponse(
+      MinutaItem minuta,
+      boolean editadoManualmente,
+      List<ParrafoMinuta> parrafos,
+      DatosBiessMinuta datosBiess,
+      String downloadUrl) {}
+
+  /**
    * Dónde retomar el wizard si el usuario sale del flujo.
    * etapaIndex = orden del proceso (e2 estudio = 2, e4 minuta = 4).
    * wizardStep = paso del wizard FE (1–5).

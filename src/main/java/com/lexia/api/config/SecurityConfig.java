@@ -117,6 +117,15 @@ public class SecurityConfig {
                         paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{id}/escrituracion/minutas"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/minutas/{tipoMinuta}/generar-borrador"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/captura-biess"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/extract-biess-screenshot"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/stages/advance"),
                         paths.matcher(
                             HttpMethod.POST,
@@ -170,6 +179,7 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/productos-biess/**"),
                         paths.matcher("/api/v1/expedientes"),
                         paths.matcher("/api/v1/expedientes/**"),
+                        paths.matcher("/api/v1/minutas/**"),
                         paths.matcher("/api/v1/escrituracion"),
                         paths.matcher("/api/v1/ia/**"),
                         paths.matcher("/api/v1/ocr/**"),

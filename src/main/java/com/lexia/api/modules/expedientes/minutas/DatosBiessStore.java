@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Captura BIESS (monto, tasa, plazo, apoderado) en {@code extracted_data}, grupo {@value #GRUPO},
+ * Captura BIESS (monto, tasa, plazo, cuota, apoderado) en {@code extracted_data}, grupo {@value #GRUPO},
  * ligada al expediente. Sobrevive a F5 y al cambio de etapa.
  */
 @Component
@@ -21,6 +21,7 @@ public class DatosBiessStore {
   private static final String MONTO = "biess.monto";
   private static final String TASA = "biess.tasa";
   private static final String PLAZO = "biess.plazo";
+  private static final String CUOTA = "biess.cuota";
   private static final String APODERADO = "biess.apoderado";
 
   private final ExtractedDataRepository extractedData;
@@ -36,6 +37,7 @@ public class DatosBiessStore {
     save(tenantId, caseId, MONTO, d.monto());
     save(tenantId, caseId, TASA, d.tasa());
     save(tenantId, caseId, PLAZO, d.plazo());
+    save(tenantId, caseId, CUOTA, d.cuota());
     save(tenantId, caseId, APODERADO, d.apoderado());
   }
 
@@ -54,7 +56,11 @@ public class DatosBiessStore {
       return null;
     }
     return new DatosBiessMinuta(
-        values.get(MONTO), values.get(TASA), values.get(PLAZO), values.get(APODERADO));
+        values.get(MONTO),
+        values.get(TASA),
+        values.get(PLAZO),
+        values.get(CUOTA),
+        values.get(APODERADO));
   }
 
   private void save(UUID tenantId, UUID caseId, String label, String valor) {

@@ -34,16 +34,31 @@ class DatosBiessStoreTest {
     UUID tenant = UUID.randomUUID();
     UUID caseId = UUID.randomUUID();
 
-    store.guardar(tenant, caseId, new DatosBiessMinuta("120000", "5.99", "240", "ANDRE"));
+    store.guardar(tenant, caseId, new DatosBiessMinuta("120000", "5.99", "240", "453.48", "ANDRE"));
 
     verify(extractedData)
         .deleteByCaseIdAndTenantIdAndFieldGroupIn(caseId, tenant, Set.of(DatosBiessStore.GRUPO));
     ArgumentCaptor<ExtractedData> captor = ArgumentCaptor.forClass(ExtractedData.class);
-    verify(extractedData, org.mockito.Mockito.times(4)).save(captor.capture());
+    verify(extractedData, org.mockito.Mockito.times(5)).save(captor.capture());
     assertEquals("120000", valor(captor, "biess.monto"));
     assertEquals("5.99", valor(captor, "biess.tasa"));
     assertEquals("240", valor(captor, "biess.plazo"));
+    assertEquals("453.48", valor(captor, "biess.cuota"));
     assertEquals("ANDRE", valor(captor, "biess.apoderado"));
+  }
+
+  @Test
+  void capturaLegadaSinCuotaSigueCargando() {
+    UUID tenant = UUID.randomUUID();
+    UUID caseId = UUID.randomUUID();
+    when(extractedData.findByCaseIdAndTenantIdAndFieldGroupOrderByFieldLabelAsc(
+            caseId, tenant, DatosBiessStore.GRUPO))
+        .thenReturn(List.of(ExtractedData.create(tenant, caseId, "biess.monto", "120000", "biess")));
+
+    DatosBiessMinuta datos = store.cargar(caseId, tenant);
+
+    assertEquals("120000", datos.monto());
+    assertEquals("", datos.cuota());
   }
 
   @Test

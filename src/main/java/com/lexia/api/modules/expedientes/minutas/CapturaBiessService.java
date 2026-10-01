@@ -18,9 +18,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Lee una captura de la plataforma BIESS (Azure OCR → LLM) y devuelve monto, tasa, plazo y
- * apoderado. La captura no es un documento del expediente: no entra al cotejo ni a la caché OCR.
- * Los cuatro campos sí se guardan en {@code extracted_data} (grupo {@code biess}) del expediente.
+ * Lee una captura de la plataforma BIESS (Azure OCR → LLM en modo JSON/tool) y devuelve monto,
+ * tasa, plazo, cuota y apoderado. La captura no es un documento del expediente: no entra al cotejo
+ * ni a la caché OCR. Los cinco campos sí se guardan en {@code extracted_data} (grupo {@code biess}).
  */
 @Service
 public class CapturaBiessService {

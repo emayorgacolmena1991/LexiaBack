@@ -260,7 +260,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     schema.put("type", "object");
     ObjectNode props = schema.putObject("properties");
     ArrayNode required = schema.putArray("required");
-    for (String field : new String[] {"monto", "tasa", "plazo", "apoderado"}) {
+    for (String field : new String[] {"monto", "tasa", "plazo", "cuota", "apoderado"}) {
       props
           .putObject(field)
           .put("type", "string")
@@ -274,7 +274,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     body.put("system", CAPTURA_BIESS_PROMPT);
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", CAPTURA_BIESS_TOOL_NAME);
-    tool.put("description", "Registra monto, tasa, plazo y apoderado de la captura BIESS.");
+    tool.put("description", "Registra monto, tasa, plazo, cuota y apoderado de la captura BIESS.");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", CAPTURA_BIESS_TOOL_NAME);
     ObjectNode msg = body.putArray("messages").addObject();

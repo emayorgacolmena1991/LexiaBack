@@ -110,13 +110,12 @@ public class MinutaDraft {
     this.updatedAt = Instant.now();
   }
 
-  public void markReady() {
-    this.status = "READY";
+  /** El DOCX ya existe en almacenamiento: el editor y la descarga pueden consumirlo. */
+  public void markGenerated(String storagePath) {
+    this.storagePath = storagePath;
+    this.status = STATUS_DRAFT_GENERATED;
     this.updatedAt = Instant.now();
   }
 
-  public void markReady(String storagePath) {
-    this.storagePath = storagePath;
-    markReady();
-  }
+  public static final String STATUS_DRAFT_GENERATED = "DRAFT_GENERATED";
 }

@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.escrituracion;
 
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.BorradorGeneradoResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ContenidoMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
@@ -9,6 +10,8 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoM
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarContenidoMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaGuardadaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
@@ -130,10 +133,47 @@ public class EscrituracionAbogadoController {
                 id, request == null ? new CrearMinutaRequest(null, null) : request));
   }
 
+  /**
+   * TICKET-BE-503 [B]: genera el borrador (sustitución de tags en la plantilla .docx, sin LLM
+   * sobre el texto legal) y devuelve el contenido listo para el editor + URL de descarga.
+   */
+  @PostMapping("/expedientes/{id}/minutas/{tipoMinuta}/generar-borrador")
+  public ResponseEntity<BorradorGeneradoResponse> generarBorrador(
+      @PathVariable UUID id,
+      @PathVariable String tipoMinuta,
+      @RequestBody(required = false) CrearMinutaRequest request) {
+    return ResponseEntity.status(HttpStatus.CREATED)
+        .body(minutaGeneration.generarBorrador(id, tipoMinuta, request));
+  }
+
   @GetMapping("/expedientes/{id}/escrituracion/minutas/{minutaId}/download")
   public ResponseEntity<byte[]> descargarMinuta(
       @PathVariable UUID id, @PathVariable UUID minutaId) {
-    var file = minutaGeneration.descargar(id, minutaId);
+    return docx(minutaGeneration.descargar(id, minutaId));
+  }
+
+  /** TICKET-BE-503 [C]: descarga por id de minuta; sirve el binario guardado (generado o editado). */
+  @GetMapping("/minutas/{minutaId}/download")
+  public ResponseEntity<byte[]> descargarMinutaPorId(@PathVariable UUID minutaId) {
+    return docx(minutaGeneration.descargarPorMinuta(minutaId));
+  }
+
+  /** TICKET-BE-503 [C]: "Guardar" del editor (texto + datos BIESS) regenerando el binario. */
+  @PutMapping("/minutas/{minutaId}")
+  public MinutaGuardadaResponse guardarMinutaPorId(
+      @PathVariable UUID minutaId, @RequestBody(required = false) GuardarMinutaRequest request) {
+    return minutaGeneration.guardarPorMinuta(minutaId, request);
+  }
+
+  @PutMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}")
+  public MinutaGuardadaResponse guardarMinuta(
+      @PathVariable UUID id,
+      @PathVariable UUID minutaId,
+      @RequestBody(required = false) GuardarMinutaRequest request) {
+    return minutaGeneration.guardar(id, minutaId, request);
+  }
+
+  private static ResponseEntity<byte[]> docx(MinutaGenerationService.DownloadedMinuta file) {
     return ResponseEntity.ok()
         .header(
             HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.fileName() + "\"")
@@ -151,9 +191,15 @@ public class EscrituracionAbogadoController {
     return estado.hidratar(id);
   }
 
-  /** Captura BIESS: persiste monto, tasa, plazo y apoderado en extracted_data del expediente. */
+  /**
+   * TICKET-BE-503 [A]: captura BIESS (JPG/PNG/PDF) → monto, tasa, plazo, cuota y apoderado;
+   * se persisten en extracted_data (grupo biess) del expediente.
+   */
   @PostMapping(
-      value = "/expedientes/{id}/escrituracion/captura-biess",
+      value = {
+        "/expedientes/{id}/escrituracion/captura-biess",
+        "/expedientes/{id}/extract-biess-screenshot"
+      },
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public DatosBiessMinuta extraerCapturaBiess(
       @PathVariable UUID id, @RequestParam("file") MultipartFile file) {

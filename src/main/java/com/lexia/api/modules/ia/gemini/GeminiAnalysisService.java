@@ -157,7 +157,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             Part.fromText(
                 CAPTURA_BIESS_PROMPT
                     + "\nResponde ÚNICAMENTE con JSON: "
-                    + "{\"monto\": \"\", \"tasa\": \"\", \"plazo\": \"\", \"apoderado\": \"\"}"),
+                    + "{\"monto\": \"\", \"tasa\": \"\", \"plazo\": \"\", \"cuota\": \"\", \"apoderado\": \"\"}"),
             Part.fromText(
                 "<captura_biess_ocr>\n" + truncate(texto, 20_000) + "\n</captura_biess_ocr>"));
     GenerateContentConfig config =

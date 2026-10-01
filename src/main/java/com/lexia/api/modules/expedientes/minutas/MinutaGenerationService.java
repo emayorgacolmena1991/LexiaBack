@@ -9,10 +9,13 @@ import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.BorradorGeneradoResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ContenidoMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarContenidoMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaGuardadaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ParrafoEditado;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraft;
@@ -82,6 +85,7 @@ public class MinutaGenerationService {
           "monto_prestamo_letras",
           "tasa_interes_inicial",
           "plazo_credito",
+          "cuota_credito",
           "apoderado_biess");
 
   public MinutaGenerationService(
@@ -172,7 +176,7 @@ public class MinutaGenerationService {
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
     persistData(draft, data);
-    draft.markReady(stored.toString());
+    draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
     datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(data));
 
@@ -226,29 +230,10 @@ public class MinutaGenerationService {
       data = extraerDatosLegacy(caseId);
     }
 
-    Map<String, Object> antes = renderer.valoresPorTag(descriptor, data);
-    String montoAnterior = DatosBiessMinuta.from(data).monto();
-    data.setMontoPrestamo(biess.monto());
-    data.setTasaInteresInicial(biess.tasa());
-    data.setPlazoCredito(biess.plazo());
-    data.setApoderadoBiess(biess.apoderado());
-    if (!montoAnterior.equals(biess.monto())) {
-      // Evita un monto en letras que ya no coincide con la cifra; queda como dato pendiente.
-      data.setMontoPrestamoLetras("");
-    }
-
-    byte[] docx =
-        draft.isEditedManually()
-            ? contenido.actualizarValores(
-                leerDocx(draft),
-                renderer.plantilla(descriptor),
-                antes,
-                renderer.valoresPorTag(descriptor, data),
-                renderer.tagsDeCampos(descriptor, TAGS_BIESS))
-            : renderer.renderVivienda(descriptor, data);
+    byte[] docx = aplicarBiess(draft, descriptor, data, biess, leerDocx(draft));
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
     persistData(draft, data);
-    draft.markReady(stored.toString());
+    draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
     datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
 
@@ -261,6 +246,140 @@ public class MinutaGenerationService {
         docx.length);
     return new DatosBiessMinutaResponse(
         toItem(draft, pendientes(descriptor, data)), DatosBiessMinuta.from(data));
+  }
+
+  /**
+   * Sustituye en el documento los campos BIESS: re-render completo desde la plantilla si el DOCX
+   * no tiene ediciones manuales; si las tiene, solo se parchean los tags afectados sobre
+   * {@code docxActual} para no perder el texto editado.
+   */
+  private byte[] aplicarBiess(
+      MinutaDraft draft,
+      MinutaTemplateDescriptor descriptor,
+      MinutaViviendaData data,
+      DatosBiessMinuta biess,
+      byte[] docxActual) {
+    Map<String, Object> antes = renderer.valoresPorTag(descriptor, data);
+    String montoAnterior = DatosBiessMinuta.from(data).monto();
+    data.setMontoPrestamo(biess.monto());
+    data.setTasaInteresInicial(biess.tasa());
+    data.setPlazoCredito(biess.plazo());
+    data.setCuotaCredito(biess.cuota());
+    data.setApoderadoBiess(biess.apoderado());
+    if (!montoAnterior.equals(biess.monto())) {
+      // Evita un monto en letras que ya no coincide con la cifra; queda como dato pendiente.
+      data.setMontoPrestamoLetras("");
+    }
+    return draft.isEditedManually()
+        ? contenido.actualizarValores(
+            docxActual,
+            renderer.plantilla(descriptor),
+            antes,
+            renderer.valoresPorTag(descriptor, data),
+            renderer.tagsDeCampos(descriptor, TAGS_BIESS))
+        : renderer.renderVivienda(descriptor, data);
+  }
+
+  /**
+   * Pipeline "Generar borrador": render determinístico (sin LLM sobre el texto legal) y payload
+   * listo para el editor web: párrafos del DOCX + URL de descarga.
+   */
+  @Transactional
+  public BorradorGeneradoResponse generarBorrador(
+      UUID caseId, String tipoMinuta, CrearMinutaRequest request) {
+    String sessionId = request == null ? null : request.sessionId();
+    MinutaItem item = generar(caseId, new CrearMinutaRequest(tipoMinuta, sessionId));
+    MinutaDraft draft =
+        minutaDrafts.findById(item.id()).orElseThrow(() -> ApiException.notFound("Minuta no encontrada."));
+    byte[] docx = leerDocx(draft);
+    return new BorradorGeneradoResponse(
+        draft.getId(),
+        draft.getStatus(),
+        item,
+        draft.isEditedManually(),
+        contenido.leer(docx),
+        DatosBiessMinuta.from(loadData(draft)),
+        downloadUrl(draft.getId()));
+  }
+
+  /**
+   * "Guardar" del editor: texto editado por párrafo + datos BIESS del panel lateral en una sola
+   * operación; el DOCX resultante es el que sirve la descarga.
+   */
+  @Transactional
+  public MinutaGuardadaResponse guardar(UUID caseId, UUID minutaId, GuardarMinutaRequest request) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    MinutaDraft draft = requireDraft(caseId, minutaId);
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(draft.getProductCode(), draft.getTemplateKind());
+    List<ParrafoEditado> cambios =
+        request == null || request.parrafos() == null ? List.of() : request.parrafos();
+
+    byte[] docx = leerDocx(draft);
+    if (!cambios.isEmpty()) {
+      docx = contenido.editar(docx, cambios);
+      draft.markEditedManually();
+    }
+
+    MinutaViviendaData data = loadData(draft);
+    if (data == null) {
+      LOG.info("Minuta {} sin datos persistidos; se reconstruyen desde el expediente", draft.getId());
+      data = extraerDatosLegacy(caseId);
+    }
+    DatosBiessMinuta biess = request == null ? null : request.datosBiess();
+    boolean biessCambia = biess != null && !biess.equals(DatosBiessMinuta.from(data));
+    if (biessCambia) {
+      docx = aplicarBiess(draft, descriptor, data, biess, docx);
+    }
+
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+    if (biessCambia) {
+      datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
+    }
+    LOG.info(
+        "Minuta guardada case={} draft={} parrafos={} biess={} bytes={}",
+        caseId,
+        draft.getId(),
+        cambios.size(),
+        biessCambia,
+        docx.length);
+    return new MinutaGuardadaResponse(
+        toItem(draft, pendientes(descriptor, data)),
+        draft.isEditedManually(),
+        contenido.leer(docx),
+        DatosBiessMinuta.from(data),
+        downloadUrl(draft.getId()));
+  }
+
+  /** Descarga por id de minuta (sin expediente en la ruta); resuelve el expediente desde el draft. */
+  @Transactional(readOnly = true)
+  public DownloadedMinuta descargarPorMinuta(UUID minutaId) {
+    return descargar(caseIdDe(minutaId), minutaId);
+  }
+
+  @Transactional
+  public MinutaGuardadaResponse guardarPorMinuta(UUID minutaId, GuardarMinutaRequest request) {
+    return guardar(caseIdDe(minutaId), minutaId, request);
+  }
+
+  private UUID caseIdDe(UUID minutaId) {
+    UUID tenantId = AuthContext.require().tenantId();
+    MinutaDraft draft =
+        minutaDrafts
+            .findById(minutaId)
+            .filter(m -> tenantId.equals(m.getTenantId()))
+            .orElseThrow(() -> ApiException.notFound("Minuta no encontrada."));
+    return writingFiles
+        .findById(draft.getWritingFileId())
+        .map(WritingFile::getCaseId)
+        .orElseThrow(() -> ApiException.notFound("Escrituración no encontrada."));
+  }
+
+  public static String downloadUrl(UUID minutaId) {
+    return "/api/v1/minutas/" + minutaId + "/download";
   }
 
   /** Párrafos del DOCX guardado: el mismo archivo que devuelve la descarga. */
@@ -289,7 +408,7 @@ public class MinutaGenerationService {
     if (!cambios.isEmpty()) {
       draft.markEditedManually();
     }
-    draft.markReady(stored.toString());
+    draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
     LOG.info(
         "Contenido de minuta guardado case={} draft={} parrafos={} bytes={}",
@@ -494,6 +613,9 @@ public class MinutaGenerationService {
     }
     if (StringUtils.hasText(guardados.plazo())) {
       data.setPlazoCredito(guardados.plazo());
+    }
+    if (StringUtils.hasText(guardados.cuota())) {
+      data.setCuotaCredito(guardados.cuota());
     }
     if (StringUtils.hasText(guardados.apoderado())) {
       data.setApoderadoBiess(guardados.apoderado());
