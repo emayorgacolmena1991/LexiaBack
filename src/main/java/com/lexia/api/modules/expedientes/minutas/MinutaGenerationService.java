@@ -18,6 +18,9 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.Guardar
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaGuardadaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ParrafoEditado;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.PreviewMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.VariablesMinutaResponse;
+import com.lexia.api.modules.expedientes.minutas.ExpedienteVariablesService.VariablesConsolidadas;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraft;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraftRepository;
 import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
@@ -74,6 +77,8 @@ public class MinutaGenerationService {
   private final Path storageDir;
   private final BorradorPromocionService promocion;
   private final MinutaDocxContenido contenido;
+  private final ExpedienteVariablesService variablesService;
+  private final DocxPdfConverter pdf;
 
   /**
    * Campos canónicos que cambia la captura BIESS / ingreso manual; lo único que se toca en un DOCX
@@ -103,7 +108,9 @@ public class MinutaGenerationService {
       ObjectMapper objectMapper,
       @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir,
       BorradorPromocionService promocion,
-      MinutaDocxContenido contenido) {
+      MinutaDocxContenido contenido,
+      ExpedienteVariablesService variablesService,
+      DocxPdfConverter pdf) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -119,6 +126,201 @@ public class MinutaGenerationService {
     this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
     this.promocion = promocion;
     this.contenido = contenido;
+    this.variablesService = variablesService;
+    this.pdf = pdf;
+  }
+
+  // --- TICKET-INT-102: flujo data-driven (variables JSON → poi-tl → PDF de previsualización) ---
+
+  /**
+   * JSON unificado del acto para el panel de variables. Solo lectura: con borrador usa su payload +
+   * BIESS guardado + overrides; sin borrador, el consolidado del expediente + BIESS (sin LLM).
+   */
+  @Transactional(readOnly = true)
+  public VariablesMinutaResponse variables(UUID caseId, String tipoMinuta) {
+    authorization.requirePermission("expedientes:caso:leer");
+    UUID tenantId = AuthContext.require().tenantId();
+    LegalCase legalCase = requireCase(caseId, tenantId);
+    WritingFile file =
+        writingFiles.findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId).orElse(null);
+    String product = productoDe(file, legalCase);
+    String kind = normalizarKind(tipoMinuta);
+    MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
+    MinutaDraft draft = file == null ? null : ultimoDraft(file, tenantId, kind);
+
+    Map<String, String> overrides =
+        draft == null ? Map.of() : variablesService.leerOverrides(draft.getOverrides());
+    MinutaViviendaData base = draft == null ? null : loadData(draft);
+    if (base == null) {
+      base = new MinutaViviendaData();
+      completarDesdeConsolidado(tenantId, caseId, base);
+    }
+    MinutaViviendaData data =
+        variablesService.fusionar(base, datosBiess.cargar(caseId, tenantId), overrides);
+    return respuestaVariables(draft, descriptor, variablesService.consolidar(descriptor, data));
+  }
+
+  /**
+   * Aplica los overrides del panel, persiste el JSON final en el borrador (creándolo si no existe),
+   * re-renderiza el .docx con poi-tl y devuelve el PDF de previsualización. El .docx que sirve la
+   * descarga es exactamente el que se convirtió a PDF.
+   */
+  @Transactional
+  public PreviewMinuta previsualizar(UUID caseId, String tipoMinuta, PreviewMinutaRequest request) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    caseId = promocion.asegurarExpediente(caseId);
+    UUID tenantId = AuthContext.require().tenantId();
+    LegalCase legalCase = requireCase(caseId, tenantId);
+    WritingFile file = requireWritingFile(caseId, tenantId);
+    String product = productoDe(file, legalCase);
+    if (!StringUtils.hasText(product)) {
+      throw new AuthException(
+          HttpStatus.CONFLICT, "NO_PRODUCT", "El expediente no tiene producto BIESS.");
+    }
+    String kind = normalizarKind(tipoMinuta);
+    MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
+
+    MinutaDraft draft = ultimoDraft(file, tenantId, kind);
+    MinutaViviendaData base = draft == null ? null : loadData(draft);
+    if (draft == null) {
+      base = datosBase(tenantId, caseId, legalCase, null, product, kind);
+      draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
+    } else if (base == null) {
+      LOG.info("Minuta {} sin datos persistidos; se reconstruyen desde el expediente", draft.getId());
+      base = datosBase(tenantId, caseId, legalCase, null, product, kind);
+    }
+
+    Map<String, String> overrides = variablesService.leerOverrides(draft.getOverrides());
+    overrides.putAll(
+        variablesService.normalizarOverrides(descriptor, request == null ? null : request.variables()));
+    DatosBiessMinuta biessGuardado = datosBiess.cargar(caseId, tenantId);
+    MinutaViviendaData data = variablesService.fusionar(base, biessGuardado, overrides);
+
+    byte[] docx = renderizarDataDriven(draft, descriptor, base, data);
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.setOverrides(variablesService.escribirOverrides(overrides));
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+    datosBiess.guardar(tenantId, caseId, biessDesde(data, biessGuardado));
+
+    VariablesConsolidadas consolidadas = variablesService.consolidar(descriptor, data);
+    byte[] pdfBytes = pdf.toPdf(docx);
+    LOG.info(
+        "Preview minuta case={} draft={} kind={} overrides={} pendientes={} pdfBytes={}",
+        caseId,
+        draft.getId(),
+        kind,
+        overrides.size(),
+        consolidadas.variablesPendientes().size(),
+        pdfBytes.length);
+    return new PreviewMinuta(
+        draft.getId(), pdfBytes, respuestaVariables(draft, descriptor, consolidadas));
+  }
+
+  public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
+
+  /**
+   * Render desde la plantilla con el JSON final; si el DOCX trae ediciones manuales (flujo
+   * anterior) solo se parchean los tags cuyo valor cambió para no perder ese texto.
+   */
+  private byte[] renderizarDataDriven(
+      MinutaDraft draft,
+      MinutaTemplateDescriptor descriptor,
+      MinutaViviendaData antes,
+      MinutaViviendaData despues) {
+    if (!draft.isEditedManually() || !StringUtils.hasText(draft.getStoragePath())) {
+      return renderer.renderVivienda(descriptor, despues);
+    }
+    Map<String, Object> mapaAntes = antes.toTemplateMap();
+    Map<String, Object> mapaDespues = despues.toTemplateMap();
+    List<String> cambiados =
+        mapaDespues.keySet().stream()
+            .filter(c -> !String.valueOf(mapaAntes.get(c)).equals(String.valueOf(mapaDespues.get(c))))
+            .toList();
+    if (cambiados.isEmpty()) {
+      return leerDocx(draft);
+    }
+    return contenido.actualizarValores(
+        leerDocx(draft),
+        renderer.plantilla(descriptor),
+        renderer.valoresPorTag(descriptor, antes),
+        renderer.valoresPorTag(descriptor, despues),
+        renderer.tagsDeCampos(descriptor, cambiados));
+  }
+
+  private VariablesMinutaResponse respuestaVariables(
+      MinutaDraft draft, MinutaTemplateDescriptor descriptor, VariablesConsolidadas c) {
+    return new VariablesMinutaResponse(
+        draft == null ? null : draft.getId(),
+        descriptor.templateKind(),
+        descriptor.productCode(),
+        draft == null ? null : draft.getStatus(),
+        draft != null && draft.isEditedManually(),
+        c.variables(),
+        c.variablesPendientes(),
+        c.etiquetas(),
+        c.completo(),
+        draft == null || !StringUtils.hasText(draft.getStoragePath())
+            ? null
+            : downloadUrl(draft.getId()));
+  }
+
+  /** Datos del crédito del JSON final, conservando las cifras BIESS que no viven en la minuta. */
+  private static DatosBiessMinuta biessDesde(MinutaViviendaData data, DatosBiessMinuta previo) {
+    DatosBiessMinuta actual = DatosBiessMinuta.from(data);
+    if (previo == null) {
+      return actual;
+    }
+    return new DatosBiessMinuta(
+        actual.monto(),
+        actual.tasa(),
+        actual.plazo(),
+        actual.cuota(),
+        previo.valorReposicion(),
+        previo.porcentajeValorFinanciado(),
+        actual.apoderado());
+  }
+
+  private MinutaDraft ultimoDraft(WritingFile file, UUID tenantId, String kind) {
+    MinutaDraft ultimo = null;
+    for (MinutaDraft d :
+        minutaDrafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(file.getId(), tenantId)) {
+      if (kind.equalsIgnoreCase(d.getTemplateKind())) {
+        ultimo = d;
+      }
+    }
+    return ultimo;
+  }
+
+  private static String normalizarKind(String tipoMinuta) {
+    return StringUtils.hasText(tipoMinuta)
+        ? tipoMinuta.trim().toUpperCase(Locale.ROOT)
+        : "MINUTA_COMPRAVENTA";
+  }
+
+  private static String productoDe(WritingFile file, LegalCase legalCase) {
+    if (file != null && StringUtils.hasText(file.getProductCode())) {
+      return file.getProductCode().trim();
+    }
+    return legalCase.getProductCode() == null ? "" : legalCase.getProductCode().trim();
+  }
+
+  private LegalCase requireCase(UUID caseId, UUID tenantId) {
+    return legalCases
+        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
+        .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+  }
+
+  private WritingFile requireWritingFile(UUID caseId, UUID tenantId) {
+    return writingFiles
+        .findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
+        .orElseThrow(
+            () ->
+                new AuthException(
+                    HttpStatus.CONFLICT,
+                    "NO_WRITING_FILE",
+                    "Configura el producto BIESS antes de previsualizar la minuta."));
   }
 
   @Transactional
@@ -169,7 +371,13 @@ public class MinutaGenerationService {
 
     MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
     MinutaViviendaData data =
-        datosBase(tenantId, caseId, legalCase, request == null ? null : request.sessionId());
+        datosBase(
+            tenantId,
+            caseId,
+            legalCase,
+            request == null ? null : request.sessionId(),
+            product,
+            kind);
     validarCriticos(descriptor, data, caseId);
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
@@ -529,14 +737,20 @@ public class MinutaGenerationService {
    * enriquecimiento; el consolidado del expediente y la captura BIESS guardada completan el resto.
    */
   private MinutaViviendaData datosBase(
-      UUID tenantId, UUID caseId, LegalCase legalCase, String sessionIdHint) {
-    MinutaViviendaData data = extraerConIa(legalCase, sessionIdHint);
+      UUID tenantId,
+      UUID caseId,
+      LegalCase legalCase,
+      String sessionIdHint,
+      String productCode,
+      String templateKind) {
+    MinutaViviendaData data = extraerConIa(legalCase, sessionIdHint, productCode, templateKind);
     completarDesdeConsolidado(tenantId, caseId, data);
     aplicarDatosBiessGuardados(tenantId, caseId, data);
     return data;
   }
 
-  private MinutaViviendaData extraerConIa(LegalCase legalCase, String sessionIdHint) {
+  private MinutaViviendaData extraerConIa(
+      LegalCase legalCase, String sessionIdHint, String productCode, String templateKind) {
     if (!analisis.isConfigured()) {
       LOG.info("Minuta case={}: LLM no configurado, se usa solo el expediente", legalCase.getId());
       return new MinutaViviendaData();
@@ -547,7 +761,8 @@ public class MinutaGenerationService {
       return new MinutaViviendaData();
     }
     try {
-      ExtraccionMinutaVivienda extraccion = analisis.extraerMinutaVivienda(ocr);
+      ExtraccionMinutaVivienda extraccion =
+          analisis.extraerMinutaVivienda(ocr, productCode, templateKind);
       if (extraccion == null || "ERROR".equals(extraccion.estado()) || extraccion.data() == null) {
         LOG.warn(
             "Minuta case={}: extracción IA no disponible ({}); se usa solo el expediente",
@@ -663,7 +878,7 @@ public class MinutaGenerationService {
         legalCases
             .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
             .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
-    return datosBase(tenantId, caseId, legalCase, null);
+    return datosBase(tenantId, caseId, legalCase, null, legalCase.getProductCode(), null);
   }
 
   private Path dataPath(UUID draftId) {

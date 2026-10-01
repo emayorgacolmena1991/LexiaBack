@@ -80,6 +80,24 @@
 			<artifactId>poi-tl</artifactId>
 			<version>1.12.2</version>
 		</dependency>
+		<!-- TICKET-INT-102 [B]: previsualización .docx → .pdf en Java puro (fallback sin LibreOffice). -->
+		<!-- xdocreport necesita los esquemas OOXML completos (FontsDocument, etc.), no el -lite de poi-tl. -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml-full</artifactId>
+			<version>5.2.2</version>
+		</dependency>
+		<dependency>
+			<groupId>fr.opensagres.xdocreport</groupId>
+			<artifactId>fr.opensagres.poi.xwpf.converter.pdf</artifactId>
+			<version>2.0.4</version>
+			<exclusions>
+				<exclusion>
+					<groupId>org.apache.poi</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

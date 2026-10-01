@@ -13,6 +13,8 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.Guardar
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaGuardadaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.PreviewMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.VariablesMinutaResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
@@ -144,6 +146,39 @@ public class EscrituracionAbogadoController {
       @RequestBody(required = false) CrearMinutaRequest request) {
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(minutaGeneration.generarBorrador(id, tipoMinuta, request));
+  }
+
+  /**
+   * TICKET-INT-102 [C.1]: JSON unificado (LLM + BIESS + overrides) con las variables pendientes
+   * del acto. Solo lectura.
+   */
+  @GetMapping("/expedientes/{id}/minutas/{tipoMinuta}/variables")
+  public VariablesMinutaResponse variablesMinuta(
+      @PathVariable UUID id, @PathVariable String tipoMinuta) {
+    return minutaGeneration.variables(id, tipoMinuta);
+  }
+
+  /**
+   * TICKET-INT-102 [C.2]: aplica las variables del panel, re-renderiza el .docx con poi-tl y
+   * devuelve el PDF de vista previa. El .docx descargable queda idéntico a lo previsualizado.
+   */
+  @PostMapping(
+      value = "/expedientes/{id}/minutas/{tipoMinuta}/preview",
+      produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> previewMinuta(
+      @PathVariable UUID id,
+      @PathVariable String tipoMinuta,
+      @RequestBody(required = false) PreviewMinutaRequest request) {
+    MinutaGenerationService.PreviewMinuta preview =
+        minutaGeneration.previsualizar(id, tipoMinuta, request);
+    return ResponseEntity.ok()
+        .header("X-Minuta-Id", preview.minutaId().toString())
+        .header(
+            "X-Variables-Pendientes",
+            String.valueOf(preview.variables().variablesPendientes().size()))
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"minuta-preview.pdf\"")
+        .contentType(MediaType.APPLICATION_PDF)
+        .body(preview.pdf());
   }
 
   @GetMapping("/expedientes/{id}/escrituracion/minutas/{minutaId}/download")

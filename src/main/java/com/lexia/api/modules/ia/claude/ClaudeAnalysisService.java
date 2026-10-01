@@ -5,8 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
-import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
+import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
@@ -67,17 +68,20 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private final String apiKey;
   private final List<String> modelos;
   private final ObjectMapper objectMapper;
+  private final ActoVariableCatalog actos;
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
   public ClaudeAnalysisService(
       @Value("${anthropic.api.key:}") String apiKey,
       @Value("${anthropic.models:claude-sonnet-5,claude-haiku-4-5-20251001}") String modelos,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      ActoVariableCatalog actos) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.modelos =
         Arrays.stream(modelos.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     this.objectMapper = objectMapper;
+    this.actos = actos;
   }
 
   @Override
@@ -157,7 +161,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
-  public ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
+  public ExtraccionMinutaVivienda extraerMinutaVivienda(
+      String ocrConsolidado, String productCode, String templateKind) {
     String texto = ocrConsolidado == null ? "" : ocrConsolidado;
     if (!StringUtils.hasText(texto.trim())) {
       return ExtraccionMinutaVivienda.error("Sin texto OCR consolidado para minuta.");
@@ -175,7 +180,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
               modelo,
               intento,
               MAX_INTENTOS_POR_MODELO);
-          HttpResponse<String> res = enviar(construirBodyMinutaVivienda(modelo, texto));
+          HttpResponse<String> res =
+              enviar(construirBodyMinutaVivienda(modelo, texto, productCode, templateKind));
           int status = res.statusCode();
           if (status == 200) {
             JsonNode root = objectMapper.readTree(res.body());
@@ -183,9 +189,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
               return ExtraccionMinutaVivienda.error(
                   "Respuesta truncada (max_tokens) al extraer minuta.");
             }
-            MinutaViviendaData data = leerToolUse(root, MinutaViviendaData.class);
-            if (data != null) {
-              return ExtraccionMinutaVivienda.ok(data);
+            JsonNode input = leerToolInput(root);
+            if (input != null) {
+              return ExtraccionMinutaVivienda.ok(MinutaVariableBinder.bind(input, objectMapper));
             }
             ultimoDiagnostico = "modelo=" + modelo + " sin tool_use minuta válido";
           } else if (status == 429 || status >= 500) {
@@ -260,21 +266,36 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     schema.put("type", "object");
     ObjectNode props = schema.putObject("properties");
     ArrayNode required = schema.putArray("required");
-    for (String field : new String[] {"monto", "tasa", "plazo", "cuota", "apoderado"}) {
+    for (String field :
+        new String[] {
+          "monto_aprobado",
+          "plazo_aprobado",
+          "cuota_aprobada",
+          "tasa_efectiva",
+          "valor_reposicion",
+          "porcentaje_valor_financiado"
+        }) {
       props
           .putObject(field)
-          .put("type", "string")
-          .put("description", "Valor de " + field + " tal como aparece; cadena vacía si no está.");
-      required.add(field);
+          .put("type", "number")
+          .put("description", "Cifra de " + field + ". Omite el campo si no consta.");
     }
+    props
+        .putObject("apoderado")
+        .put("type", "string")
+        .put("description", "Nombre del apoderado especial del BIESS, o cadena vacía.");
+    required.add("apoderado");
 
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
     body.put("max_tokens", 512);
-    body.put("system", CAPTURA_BIESS_PROMPT);
+    body.put("system", actos.visionPrompt());
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", CAPTURA_BIESS_TOOL_NAME);
-    tool.put("description", "Registra monto, tasa, plazo, cuota y apoderado de la captura BIESS.");
+    tool.put(
+        "description",
+        "Registra las cifras de DATOS APROBADOS PARA DESEMBOLSO (monto, plazo, cuota, tasa,"
+            + " valor de reposición, porcentaje financiado) y el apoderado BIESS.");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", CAPTURA_BIESS_TOOL_NAME);
     ObjectNode msg = body.putArray("messages").addObject();
@@ -285,116 +306,34 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     return objectMapper.writeValueAsString(body);
   }
 
-  private String construirBodyMinutaVivienda(String modelo, String texto) throws IOException {
+  private String construirBodyMinutaVivienda(
+      String modelo, String texto, String productCode, String templateKind) throws IOException {
+    ActoVariableCatalog.ActoVariableSchema schemaActo = actos.resolve(productCode, templateKind);
     ObjectNode schema = objectMapper.createObjectNode();
     schema.put("type", "object");
     ObjectNode props = schema.putObject("properties");
-    String[] fields = {
-      "nombre_conyuge_1",
-      "cedula_conyuge_1",
-      "nombre_conyuge_2",
-      "cedula_conyuge_2",
-      "profesion_conyuge_1",
-      "profesion_conyuge_2",
-      "canton_domicilio",
-      "nombre_afiliado",
-      "descripcion_inmuebles_antecedentes",
-      "descripcion_inmueble_hipoteca",
-      "parroquia_inmueble",
-      "canton_inmueble",
-      "provincia_inmueble",
-      "lindero_norte",
-      "lindero_sur",
-      "lindero_este",
-      "lindero_oeste",
-      "superficie_m2",
-      "area_solar",
-      "area_construccion",
-      "area_util",
-      "area_comun",
-      "alicuota",
-      "estado_civil",
-      "monto_prestamo",
-      "monto_prestamo_letras",
-      "plazo_credito",
-      "tasa_interes_inicial",
-      "institucion_financiera_original",
-      "direccion_deudor",
-      "telefono_deudor",
-      "correo_deudor",
-      "ciudad_firma",
-      "fecha_firma",
-      "cedula_apoderado_biess",
-      "nombre_vendedor",
-      "cedula_vendedor",
-      "estado_civil_vendedor",
-      "nombre_conyuge_vendedor",
-      "cedula_conyuge_vendedor",
-      "profesion_vendedor",
-      "direccion_vendedor",
-      "telefono_vendedor",
-      "correo_vendedor",
-      "clave_catastral",
-      "avaluo_inmueble",
-      "precio_compraventa_numero",
-      "precio_compraventa_letras",
-      "valor_entrada_numero",
-      "valor_entrada_letras",
-      "saldo_compraventa_numero",
-      "saldo_compraventa_letras",
-      "fecha_escritura_antecedente",
-      "fecha_inscripcion_antecedente",
-      "repertorio_antecedente",
-      "notaria_antecedente"
-    };
-    ArrayNode required = schema.putArray("required");
-    for (String field : fields) {
-      ObjectNode prop = props.putObject(field);
-      prop.put("type", "string");
-      prop.put(
-          "description",
-          "Valor del campo "
-              + field
-              + ". Si no aparece en el OCR, usa exactamente nodata.");
-      required.add(field);
+    props.putObject("acto").put("type", "string").put("description", "Código del acto, sin cambiarlo.");
+    ObjectNode variables = props.putObject("variables");
+    variables.put("type", "object");
+    ObjectNode varProps = variables.putObject("properties");
+    ArrayNode requiredVars = variables.putArray("required");
+    for (String field : schemaActo.campos()) {
+      varProps
+          .putObject(field)
+          .put("type", "string")
+          .put("description", "Valor en el OCR. Cadena vacía si no consta. No redactes cláusulas.");
+      requiredVars.add(field);
     }
-
-    String system =
-        """
-        Eres un asistente legal experto en minutas y contratos de mutuo hipotecario BIESS (Ecuador).
-        Analiza el texto OCR del expediente y extrae exactamente los campos de la herramienta.
-        Campos de identidad/inmueble (minuta) y de crédito/contacto (contrato de mutuo).
-        REGLAS:
-        1. Si un dato no está presente o es ilegible, usa exactamente la cadena nodata.
-        2. No inventes montos, tasas, plazos, cédulas ni nombres. No calcules valores.
-        3. monto_prestamo: cifra en números (ej. 45000.00). monto_prestamo_letras: en palabras.
-        4. institucion_financiera_original: banco acreedor anterior a cancelar (sustitución).
-        5. nombre_conyuge_1 / nombre_conyuge_2: comprador(es) y deudor(es) del crédito.
-           nombre_vendedor / nombre_conyuge_vendedor: propietario(s) actual(es) que venden
-           (historia de dominio, certificado del Registro de la Propiedad, cédulas).
-        6. superficie_m2 y avaluo_inmueble: solo la cifra, sin unidad ni símbolo. superficie_m2
-           es el ÁREA TOTAL. area_solar, area_construccion, area_util y area_comun: solo la
-           cifra en m2, sin unidad. alicuota: la cifra tal como consta (ej. 0,2500 o 25%).
-        7. precio_compraventa_*, valor_entrada_*, saldo_compraventa_*: solo si constan en algún
-           documento (promesa de compraventa, carta de compra, etc.). *_numero en cifras
-           (ej. 45.000,00); *_letras en mayúsculas con centavos (ej. CUARENTA Y CINCO MIL CON
-           00/100).
-        8. *_antecedente: escritura por la que el vendedor adquirió el inmueble (fecha de
-           otorgamiento, notaría — ej. Notaría Trigésima del cantón Guayaquil —, fecha de
-           inscripción y número de repertorio en el Registro de la Propiedad).
-        9. No agregues texto fuera de la herramienta.
-        """;
+    schema.putArray("required").add("acto").add("variables");
 
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
     body.put("max_tokens", MAX_TOKENS_EXPEDIENTE);
-    body.put("system", system);
+    body.put("system", actos.systemPrompt(productCode, templateKind));
 
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", MINUTA_VIVIENDA_TOOL_NAME);
-    tool.put(
-        "description",
-        "Registra datos para minuta de compraventa/hipoteca y contrato de mutuo BIESS.");
+    tool.put("description", "Registra solo las variables del acto " + schemaActo.codigo() + ".");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", MINUTA_VIVIENDA_TOOL_NAME);
 
@@ -402,11 +341,25 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     msg.put("role", "user");
     msg.put(
         "content",
-        "Extrae los datos de minuta/contrato de mutuo del siguiente expediente OCR.\n\n<expediente_ocr>\n"
+        "Extrae variables del acto "
+            + schemaActo.codigo()
+            + ". No redactes el documento.\n\n<expediente_ocr>\n"
             + truncate(texto, MAX_CHARS_OCR)
             + "\n</expediente_ocr>");
 
     return objectMapper.writeValueAsString(body);
+  }
+
+  private JsonNode leerToolInput(JsonNode root) {
+    for (JsonNode block : root.path("content")) {
+      if ("tool_use".equals(block.path("type").asText())) {
+        JsonNode input = block.path("input");
+        if (input.isObject()) {
+          return input;
+        }
+      }
+    }
+    return null;
   }
 
   private HttpResponse<String> enviar(String body) throws IOException, InterruptedException {

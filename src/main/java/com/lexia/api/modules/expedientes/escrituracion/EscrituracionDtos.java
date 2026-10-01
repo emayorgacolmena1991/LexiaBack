@@ -126,6 +126,30 @@ public final class EscrituracionDtos {
       String downloadUrl) {}
 
   /**
+   * TICKET-INT-102 [C.1]: JSON unificado de la minuta (LLM + BIESS + overrides manuales).
+   *
+   * @param minutaId borrador al que pertenecen; {@code null} si aún no se generó ninguno.
+   * @param variables tag canónico → valor ("" si falta) de todas las variables del acto.
+   * @param variablesPendientes tags que la plantilla usa y siguen sin valor ({@code nodata}).
+   * @param etiquetas tag → etiqueta legible para el formulario.
+   */
+  public record VariablesMinutaResponse(
+      UUID minutaId,
+      String templateKind,
+      String productCode,
+      String status,
+      boolean editadoManualmente,
+      java.util.Map<String, String> variables,
+      List<String> variablesPendientes,
+      java.util.Map<String, String> etiquetas,
+      boolean completo,
+      String downloadUrl) {}
+
+  /** TICKET-INT-102 [C.2]: variables corregidas/llenadas en el panel; solo las que cambian. */
+  @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+  public record PreviewMinutaRequest(java.util.Map<String, Object> variables) {}
+
+  /**
    * Dónde retomar el wizard si el usuario sale del flujo.
    * etapaIndex = orden del proceso (e2 estudio = 2, e4 minuta = 4).
    * wizardStep = paso del wizard FE (1–5).

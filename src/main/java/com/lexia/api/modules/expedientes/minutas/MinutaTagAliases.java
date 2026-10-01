@@ -15,7 +15,7 @@ import java.util.function.UnaryOperator;
  * de propiedad horizontal, antecedentes múltiples, celular vs. teléfono cuando la plantilla pide
  * ambos) no se aliasan: siguen siendo tags sin resolver hasta que exista su campo canónico.
  */
-final class MinutaTagAliases {
+public final class MinutaTagAliases {
 
   private record Alias(String campo, UnaryOperator<String> formato) {}
 
@@ -106,8 +106,13 @@ final class MinutaTagAliases {
     alias("notaria_antecedente", "notario_adquisicion");
 
     // Precio y crédito.
-    alias("precio_compraventa_numero", "precio_venta_numeral");
-    alias("precio_compraventa_letras", "precio_venta_literal");
+    alias("precio_compraventa_numero", "precio_venta_numeral", "precio_num");
+    alias("precio_compraventa_letras", "precio_venta_literal", "precio_letras");
+    alias("valor_entrada_numero", "cuota_inicial_num");
+    alias("valor_entrada_letras", "cuota_inicial_letras");
+    alias("saldo_compraventa_numero", "saldo_credito_num");
+    alias("saldo_compraventa_letras", "saldo_credito_letras");
+    alias("apoderado_biess", "nombre_representante_biess");
     alias("monto_prestamo", "monto_prestamo_numero", "monto_prestamo_numeral");
     alias("monto_prestamo_letras", "monto_prestamo_literal");
     // La plantilla ya escribe "{{plazo_meses}} meses".
@@ -130,7 +135,7 @@ final class MinutaTagAliases {
   }
 
   /** Campo canónico del tag; el propio tag si no es un alias. */
-  static String canonico(String tag) {
+  public static String canonico(String tag) {
     Alias alias = ALIASES.get(tag);
     return alias == null ? tag : alias.campo();
   }

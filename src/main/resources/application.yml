@@ -32,11 +32,33 @@ spring:
 lexia:
   minutas:
     storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
+    # Opcional: ejecutable de LibreOffice (soffice) para la vista previa PDF con máxima fidelidad.
+    # Vacío → conversión Java pura (xdocreport).
+    soffice-path: ${LEXIA_SOFFICE_PATH:}
   coactivas:
     storage-dir: ${LEXIA_COACTIVAS_DIR:./data/coactivas}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
   prompts:
+    PROMPT_EXTRACCION_ACTO: |
+      Eres un asistente legal experto en escrituración e hipotecas. Tu única función es
+      analizar el texto extraído del expediente y extraer exactamente las variables requeridas
+      para el acto jurídico '${tipoActo}'. No inventes datos. Si una variable no se encuentra
+      en el texto, asígnale el valor null. No redactes cláusulas, minutas ni contratos:
+      el documento lo arma la plantilla .docx. Responde ÚNICAMENTE en formato JSON válido
+      {"acto":"${tipoActo}","variables":{...}} sin markdown ni texto adicional.
+    PROMPT_BIESS_VISION: |
+      Analiza la captura de pantalla del sistema BIESS provista. Localiza la sección
+      "DATOS APROBADOS PARA DESEMBOLSO" y extrae numéricamente los siguientes campos.
+      Devuelve ÚNICAMENTE el objeto JSON sin bloques de código ni texto adicional:
+      - monto_aprobado (number)
+      - plazo_aprobado (number, en meses)
+      - cuota_aprobada (number)
+      - tasa_efectiva (number)
+      - valor_reposicion (number)
+      - porcentaje_valor_financiado (number)
+      - apoderado (string, nombre del apoderado especial del BIESS, o null)
+      Si un campo no aparece, usa null. No inventes ni calcules valores.
     PROMPT_COMPRAVENTA_BIESS: |
       Eres un abogado notarial experto procesando un expediente de escrituración BIESS en ${canton}.
       Analiza el conjunto de textos OCR del expediente provistos en <expediente_ocr>.

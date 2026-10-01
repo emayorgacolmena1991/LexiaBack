@@ -22,37 +22,28 @@ public interface AnalisisDocumentoService {
   }
 
   /**
-   * Extracción estructurada para minuta vivienda hipotecada (tool use JSON estricto).
-   * Default: no soportado.
+   * Extracción JSON estricta de las variables del acto. Sin producto/plantilla usa el esquema
+   * amplio. Default: no soportado.
    */
   default ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
+    return extraerMinutaVivienda(ocrConsolidado, null, null);
+  }
+
+  default ExtraccionMinutaVivienda extraerMinutaVivienda(
+      String ocrConsolidado, String productCode, String templateKind) {
     return ExtraccionMinutaVivienda.error(
         "Extracción de minuta vivienda no disponible para este proveedor LLM.");
   }
 
   /**
-   * Captura de pantalla de la plataforma BIESS (fuente externa al expediente): solo monto, tasa,
-   * plazo y apoderado. Default: no soportado.
+   * Captura de pantalla BIESS ("DATOS APROBADOS PARA DESEMBOLSO"): monto, plazo, cuota, tasa,
+   * valor de reposición, porcentaje financiado y apoderado. Prompt: {@code PROMPT_BIESS_VISION}.
+   * Default: no soportado.
    */
   default ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     return ExtraccionCapturaBiess.error(
         "Extracción de captura BIESS no disponible para este proveedor LLM.");
   }
-
-  /** Prompt compartido por los proveedores para la captura BIESS. */
-  String CAPTURA_BIESS_PROMPT =
-      """
-      Eres un asistente que lee capturas de pantalla de la plataforma del BIESS (Ecuador).
-      Del texto OCR de la captura extrae ÚNICAMENTE estos cinco datos del crédito hipotecario:
-      - monto: monto del préstamo aprobado, tal como aparece (ej. $85,000.00).
-      - tasa: tasa de interés efectiva anual (ej. 7.2109%).
-      - plazo: plazo aprobado del crédito con su unidad (ej. 20 años o 240 meses).
-      - cuota: cuota mensual aprobada, tal como aparece (ej. $453.48).
-      - apoderado: nombre completo del apoderado especial del BIESS.
-      REGLAS:
-      1. Si un dato no aparece o es ilegible, devuelve cadena vacía para ese campo.
-      2. No inventes ni calcules valores. No extraigas otros campos.
-      """;
 
   record ExtraccionCapturaBiess(DatosBiessMinuta data, String estado, String motivo) {
 

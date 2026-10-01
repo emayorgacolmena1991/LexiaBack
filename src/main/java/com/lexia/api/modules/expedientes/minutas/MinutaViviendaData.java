@@ -356,6 +356,16 @@ public class MinutaViviendaData {
     return label == null ? campo : label + " (" + campo + ")";
   }
 
+  /** Etiqueta legible sin el tag; si no está catalogada se humaniza el snake_case. */
+  public static String etiquetaCorta(String campo) {
+    String label = ETIQUETAS.get(campo);
+    if (label != null) {
+      return label;
+    }
+    String texto = (campo == null ? "" : campo).replace('_', ' ').trim();
+    return texto.isEmpty() ? "" : Character.toUpperCase(texto.charAt(0)) + texto.substring(1);
+  }
+
   public String getNombreConyuge1() {
     return nombreConyuge1;
   }

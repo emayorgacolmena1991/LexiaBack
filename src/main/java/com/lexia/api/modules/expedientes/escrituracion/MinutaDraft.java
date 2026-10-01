@@ -40,6 +40,11 @@ public class MinutaDraft {
   @Column(columnDefinition = "jsonb")
   private String payload;
 
+  /** TICKET-INT-102: overrides manuales (tag canónico → valor); mandan sobre LLM y BIESS. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  private String overrides;
+
   @Column(name = "edited_manually", nullable = false)
   private boolean editedManually;
 
@@ -94,6 +99,15 @@ public class MinutaDraft {
 
   public void setPayload(String payload) {
     this.payload = payload;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getOverrides() {
+    return overrides;
+  }
+
+  public void setOverrides(String overrides) {
+    this.overrides = overrides;
     this.updatedAt = Instant.now();
   }
 

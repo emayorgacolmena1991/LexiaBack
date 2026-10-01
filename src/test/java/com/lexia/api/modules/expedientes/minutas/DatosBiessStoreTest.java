@@ -34,16 +34,21 @@ class DatosBiessStoreTest {
     UUID tenant = UUID.randomUUID();
     UUID caseId = UUID.randomUUID();
 
-    store.guardar(tenant, caseId, new DatosBiessMinuta("120000", "5.99", "240", "453.48", "ANDRE"));
+    store.guardar(
+        tenant,
+        caseId,
+        new DatosBiessMinuta("120000", "5.99", "240", "453.48", "150000", "80", "ANDRE"));
 
     verify(extractedData)
         .deleteByCaseIdAndTenantIdAndFieldGroupIn(caseId, tenant, Set.of(DatosBiessStore.GRUPO));
     ArgumentCaptor<ExtractedData> captor = ArgumentCaptor.forClass(ExtractedData.class);
-    verify(extractedData, org.mockito.Mockito.times(5)).save(captor.capture());
+    verify(extractedData, org.mockito.Mockito.times(7)).save(captor.capture());
     assertEquals("120000", valor(captor, "biess.monto"));
     assertEquals("5.99", valor(captor, "biess.tasa"));
     assertEquals("240", valor(captor, "biess.plazo"));
     assertEquals("453.48", valor(captor, "biess.cuota"));
+    assertEquals("150000", valor(captor, "biess.valor_reposicion"));
+    assertEquals("80", valor(captor, "biess.porcentaje_valor_financiado"));
     assertEquals("ANDRE", valor(captor, "biess.apoderado"));
   }
 
@@ -59,6 +64,8 @@ class DatosBiessStoreTest {
 
     assertEquals("120000", datos.monto());
     assertEquals("", datos.cuota());
+    assertEquals("", datos.valorReposicion());
+    assertEquals("", datos.porcentajeValorFinanciado());
   }
 
   @Test
