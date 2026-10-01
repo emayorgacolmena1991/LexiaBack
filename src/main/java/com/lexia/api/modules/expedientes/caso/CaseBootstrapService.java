@@ -1,6 +1,8 @@
 package com.lexia.api.modules.expedientes.caso;
 
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
+import com.lexia.api.modules.identity.AuditEvent;
+import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.tenancy.TenantParameterService;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -42,6 +44,7 @@ public class CaseBootstrapService {
   private final SlaCalendarService slaCalendar;
   private final CollectionFileRepository collectionFiles;
   private final WritingFileRepository writingFiles;
+  private final AuditEventRepository auditEvents;
 
   public CaseBootstrapService(
       ProcessDefinitionRepository processDefinitions,
@@ -57,7 +60,8 @@ public class CaseBootstrapService {
       TenantParameterService tenantParameters,
       SlaCalendarService slaCalendar,
       CollectionFileRepository collectionFiles,
-      WritingFileRepository writingFiles) {
+      WritingFileRepository writingFiles,
+      AuditEventRepository auditEvents) {
     this.processDefinitions = processDefinitions;
     this.stageDefs = stageDefs;
     this.caseStages = caseStages;
@@ -72,6 +76,7 @@ public class CaseBootstrapService {
     this.slaCalendar = slaCalendar;
     this.collectionFiles = collectionFiles;
     this.writingFiles = writingFiles;
+    this.auditEvents = auditEvents;
   }
 
   public void bootstrap(LegalCase legalCase, CreateCaseRequest request, UUID tenantId, UUID userId) {
@@ -232,11 +237,14 @@ public class CaseBootstrapService {
         CaseAction.create(
             tenantId,
             caseId,
-            "Expediente creado",
-            "CASE_CREATED",
+            "Creación de expediente",
+            "EXPEDIENTE_CREADO",
             "COMPLETED",
             userId,
             Instant.now()));
+    auditEvents.save(
+        AuditEvent.of(
+            tenantId, userId, "EXPEDIENTE_CREADO", "legal_case", caseId, "OK", null, null));
   }
 
   private static String blankToNull(String value) {

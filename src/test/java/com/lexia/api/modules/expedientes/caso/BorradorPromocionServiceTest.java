@@ -34,6 +34,7 @@ class BorradorPromocionServiceTest {
   @Mock private ExpedienteBorradorStore borradores;
   @Mock private LegalCaseRepository legalCases;
   @Mock private ObjectProvider<CaseService> caseServices;
+  @Mock private ObjectProvider<ExpedienteSeguimientoService> seguimiento;
   @Mock private CaseService caseService;
 
   private BorradorPromocionService service;
@@ -41,7 +42,7 @@ class BorradorPromocionServiceTest {
   @BeforeEach
   void setUp() {
     AuthContext.set(new AuthPrincipal(USER, UUID.randomUUID(), TENANT, UUID.randomUUID()));
-    service = new BorradorPromocionService(borradores, legalCases, caseServices);
+    service = new BorradorPromocionService(borradores, legalCases, caseServices, seguimiento);
   }
 
   @AfterEach

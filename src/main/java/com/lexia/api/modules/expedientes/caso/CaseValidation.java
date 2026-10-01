@@ -89,6 +89,10 @@ public class CaseValidation {
     return ruleVersion;
   }
 
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+
   public void applyEvaluation(String result, String evidence, String ruleVersion) {
     this.result = result;
     this.evidence = evidence;

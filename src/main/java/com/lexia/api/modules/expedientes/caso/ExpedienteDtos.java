@@ -4,6 +4,7 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -53,6 +54,35 @@ public final class ExpedienteDtos {
 
   public record ConnectorInvokeResult(
       String connectorCode, String callStatus, UUID integrationCallId, String message) {}
+
+  /** Bandeja de escrituración. `content` vacío cuando el tenant no tiene expedientes. */
+  public record EscrituracionBandejaItem(
+      UUID id,
+      String codigo,
+      String clienteOperacion,
+      String etapa,
+      String estado,
+      String atencion,
+      String responsable,
+      String iniciales,
+      String vencimiento) {}
+
+  public record EscrituracionBandejaPage(
+      List<EscrituracionBandejaItem> content,
+      long totalElements,
+      int totalPages,
+      int number,
+      int size) {
+
+    public EscrituracionBandejaPage {
+      content = content == null ? List.of() : List.copyOf(content);
+    }
+
+    public static EscrituracionBandejaPage empty(int page, int size) {
+      int safeSize = size <= 0 ? 20 : size;
+      return new EscrituracionBandejaPage(List.of(), 0, 0, Math.max(page, 0), safeSize);
+    }
+  }
 
   public record CaseSummaryItem(
       UUID id,
@@ -135,4 +165,21 @@ public final class ExpedienteDtos {
           motivo == null ? "No se pudo validar el expediente." : motivo, "RECHAZADO");
     }
   }
+
+  public record ValidacionItem(
+      UUID id, String label, String kind, String result, String evidence, Instant createdAt) {}
+
+  public record ExcepcionItem(
+      UUID id,
+      String title,
+      String severity,
+      String status,
+      String detail,
+      String evidence,
+      Instant createdAt) {}
+
+  public record ActuacionItem(
+      UUID id, String titulo, String tipo, String estado, String actor, Instant fecha) {}
+
+  public record AuditoriaItem(UUID id, String evento, String actor, String resultado, Instant fecha) {}
 }

@@ -13,12 +13,14 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActua
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
 import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
+import com.lexia.api.modules.expedientes.caso.ExpedienteSeguimientoService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -36,6 +38,7 @@ public class CaseDocumentoStore {
   private final DocumentVersionRepository versions;
   private final DocumentoTextoOcrRepository ocrRows;
   private final ExpedienteDocumentoStorage storage;
+  private final ObjectProvider<ExpedienteSeguimientoService> seguimiento;
 
   public CaseDocumentoStore(
       LegalCaseRepository legalCases,
@@ -43,13 +46,15 @@ public class CaseDocumentoStore {
       LegalDocumentRepository documents,
       DocumentVersionRepository versions,
       DocumentoTextoOcrRepository ocrRows,
-      ExpedienteDocumentoStorage storage) {
+      ExpedienteDocumentoStorage storage,
+      ObjectProvider<ExpedienteSeguimientoService> seguimiento) {
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
     this.documents = documents;
     this.versions = versions;
     this.ocrRows = ocrRows;
     this.storage = storage;
+    this.seguimiento = seguimiento;
   }
 
   public CaseFileContext context(String rawId) {
@@ -117,6 +122,8 @@ public class CaseDocumentoStore {
     versions.save(
         DocumentVersion.upload(
             ctx.tenantId(), doc.getId(), 1, mime, stored.sha256(), stored.path()));
+    seguimiento.ifAvailable(
+        service -> service.documentoSubido(ctx.caseId(), ctx.tenantId(), original));
     return new DocumentoCargadoDTO(doc.getId().toString(), original, formatSize(bytes.length), tipo);
   }
 

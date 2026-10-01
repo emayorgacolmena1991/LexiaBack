@@ -7,4 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface CaseActionRepository extends JpaRepository<CaseAction, UUID> {
 
   List<CaseAction> findByCaseIdAndTenantIdOrderByCreatedAtDesc(UUID caseId, UUID tenantId);
+
+  boolean existsByCaseIdAndTenantIdAndActionType(UUID caseId, UUID tenantId, String actionType);
 }

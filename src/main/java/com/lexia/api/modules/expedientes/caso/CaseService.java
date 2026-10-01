@@ -6,20 +6,30 @@ import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
 import com.lexia.api.modules.identity.AppUser;
 import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import com.lexia.api.modules.identity.Membership;
 import com.lexia.api.modules.identity.MembershipRepository;
 import com.lexia.api.modules.tenancy.TenantParameterService;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -73,6 +83,54 @@ public class CaseService {
     this.stageDefs = stageDefs;
     this.bootstrap = bootstrap;
     this.expedienteEstado = expedienteEstado;
+  }
+
+  @Transactional(readOnly = true)
+  public EscrituracionBandejaPage bandeja(String search, String estado, int page, int size) {
+    authorization.requirePermission("expedientes:caso:leer");
+    UUID tenantId = AuthContext.require().tenantId();
+    int safeSize = Math.min(Math.max(size <= 0 ? 20 : size, 1), 100);
+    int safePage = Math.max(page, 0);
+    String statusCode = normalizeStatusFilter(estado);
+    String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+
+    Specification<LegalCase> spec =
+        (root, query, cb) -> {
+          List<Predicate> predicates = new ArrayList<>();
+          predicates.add(cb.equal(root.get("tenantId"), tenantId));
+          predicates.add(cb.isNull(root.get("deletedAt")));
+          predicates.add(cb.equal(root.get("caseType"), "EJD"));
+          if (statusCode != null) {
+            predicates.add(cb.equal(cb.upper(root.get("status")), statusCode));
+          }
+          if (!term.isEmpty()) {
+            String like = "%" + term + "%";
+            Subquery<UUID> clients = query.subquery(UUID.class);
+            Root<CaseParty> party = clients.from(CaseParty.class);
+            clients
+                .select(party.get("caseId"))
+                .where(
+                    cb.equal(party.get("caseId"), root.get("id")),
+                    cb.equal(party.get("tenantId"), tenantId),
+                    cb.isNull(party.get("deletedAt")),
+                    cb.like(cb.lower(party.get("displayName")), like));
+            predicates.add(
+                cb.or(
+                    cb.like(cb.lower(root.get("code")), like),
+                    cb.like(cb.lower(root.get("subject")), like),
+                    cb.like(cb.lower(cb.coalesce(root.get("operationTypeCode"), "")), like),
+                    cb.exists(clients)));
+          }
+          return cb.and(predicates.toArray(Predicate[]::new));
+        };
+
+    Page<LegalCase> result =
+        legalCases.findAll(
+            spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
+    List<EscrituracionBandejaItem> content =
+        result.getContent().stream().map(row -> toBandeja(row, tenantId)).toList();
+    return new EscrituracionBandejaPage(
+        content, result.getTotalElements(), result.getTotalPages(), result.getNumber(), result.getSize());
   }
 
   @Transactional(readOnly = true)
@@ -145,6 +203,49 @@ public class CaseService {
           .orElseThrow(
               () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
     }
+  }
+
+  private EscrituracionBandejaItem toBandeja(LegalCase legalCase, UUID tenantId) {
+    CaseParty client =
+        caseParties
+            .findFirstByCaseIdAndTenantIdAndKindAndDeletedAtIsNull(
+                legalCase.getId(), tenantId, "CLIENT")
+            .orElse(null);
+    String cliente = client != null ? client.getDisplayName() : legalCase.getSubject();
+    String operacion = legalCase.getOperationTypeCode();
+    String clienteOperacion =
+        operacion == null || operacion.isBlank() ? cliente : cliente + " · " + operacion.trim();
+    String etapa = resolveCurrentStageLabel(legalCase, tenantId);
+    Responsible responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
+    return new EscrituracionBandejaItem(
+        legalCase.getId(),
+        legalCase.getCode(),
+        clienteOperacion,
+        etapa == null ? "—" : etapa,
+        mapStatusLabel(legalCase.getStatus()),
+        atencion(legalCase),
+        responsible.name(),
+        responsible.initials(),
+        legalCase.getSlaDueAt() == null ? "—" : GRID_DATE.format(legalCase.getSlaDueAt()));
+  }
+
+  private static String atencion(LegalCase legalCase) {
+    Instant due = legalCase.getSlaDueAt();
+    if (due != null && !due.isAfter(Instant.now())) {
+      return "Vencida";
+    }
+    return mapPriorityLabel(legalCase.getPriority());
+  }
+
+  private static String normalizeStatusFilter(String estado) {
+    if (estado == null || estado.isBlank()) {
+      return null;
+    }
+    return switch (estado.trim().toLowerCase(Locale.ROOT)) {
+      case "en trámite", "en tramite", "draft" -> "DRAFT";
+      case "cerrado", "closed" -> "CLOSED";
+      default -> estado.trim().toUpperCase(Locale.ROOT);
+    };
   }
 
   private CaseSummaryItem toSummary(LegalCase legalCase) {

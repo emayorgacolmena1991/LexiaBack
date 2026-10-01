@@ -1,7 +1,11 @@
 package com.lexia.api.modules.expedientes.caso;
 
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ActuacionItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.AuditoriaItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
-import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ExcepcionItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ValidacionItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.PromoverBorradorRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResolveGateRequest;
@@ -39,6 +43,7 @@ public class ExpedienteController {
   private final EjdConnectorDispatchService connectorDispatch;
   private final CaseExceptionResolutionService exceptionResolutionService;
   private final BorradorPromocionService promocion;
+  private final ExpedienteSeguimientoService seguimiento;
 
   public ExpedienteController(
       DocumentExtractorService extractorService,
@@ -53,7 +58,9 @@ public class ExpedienteController {
           EjdConnectorDispatchService connectorDispatch,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
           CaseExceptionResolutionService exceptionResolutionService,
-      BorradorPromocionService promocion) {
+      BorradorPromocionService promocion,
+      @org.springframework.beans.factory.annotation.Autowired(required = false)
+          ExpedienteSeguimientoService seguimiento) {
     this.extractorService = extractorService;
     this.caseService = caseService;
     this.workspaceService = workspaceService;
@@ -62,6 +69,7 @@ public class ExpedienteController {
     this.connectorDispatch = connectorDispatch;
     this.exceptionResolutionService = exceptionResolutionService;
     this.promocion = promocion;
+    this.seguimiento = seguimiento;
   }
 
   @PostMapping("/{id}/exceptions/{exceptionId}/resolve")
@@ -95,12 +103,45 @@ public class ExpedienteController {
     return ResponseEntity.ok(extractorService.extraerInformacion(archivos));
   }
 
+  @GetMapping("/escrituracion")
+  public EscrituracionBandejaPage listarEscrituracion(
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(required = false) String search,
+      @RequestParam(required = false) String estado) {
+    return listCases(page, size, search, estado);
+  }
+
+  @GetMapping("/{id}/validaciones")
+  public List<ValidacionItem> validaciones(@PathVariable UUID id) {
+    return seguimiento == null ? List.of() : seguimiento.validaciones(id);
+  }
+
+  @GetMapping("/{id}/excepciones")
+  public List<ExcepcionItem> excepciones(@PathVariable UUID id) {
+    return seguimiento == null ? List.of() : seguimiento.excepciones(id);
+  }
+
+  @GetMapping("/{id}/actuaciones")
+  public List<ActuacionItem> actuaciones(@PathVariable UUID id) {
+    return seguimiento == null ? List.of() : seguimiento.actuaciones(id);
+  }
+
+  @GetMapping("/{id}/auditoria")
+  public List<AuditoriaItem> auditoria(@PathVariable UUID id) {
+    return seguimiento == null ? List.of() : seguimiento.auditoria(id);
+  }
+
   @GetMapping
-  public List<CaseSummaryItem> listCases() {
+  public EscrituracionBandejaPage listCases(
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(required = false) String search,
+      @RequestParam(required = false) String estado) {
     if (caseService == null) {
-      return List.of();
+      return EscrituracionBandejaPage.empty(page, size);
     }
-    return caseService.listCases();
+    return caseService.bandeja(search, estado, page, size);
   }
 
   @GetMapping("/{id}")
