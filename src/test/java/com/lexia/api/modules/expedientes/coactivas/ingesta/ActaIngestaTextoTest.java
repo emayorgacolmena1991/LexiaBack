@@ -40,6 +40,53 @@ class ActaIngestaTextoTest {
   }
 
   @Test
+  void oficinaDeFilaNoUsaLaUecNiElZonal() {
+    List<List<String>> grid =
+        List.of(
+            List.of(
+                "#",
+                "ZONAL",
+                "OFICINA",
+                "UEC",
+                "OPERACIÓN",
+                "NÚMERO DE JUICIO",
+                "AÑO",
+                "DEUDOR PRINCIPAL",
+                "CÉDULA DEUDOR",
+                "ETAPA PROCESAL",
+                "No. DE FOJAS"),
+            List.of(
+                "4",
+                "PORTOVIEJO",
+                "BAHIA",
+                "PORTOVIEJO",
+                "690192476",
+                "069-2019-00168",
+                "2019",
+                "SOLORZANO ALCIVAR KELVIN TEOVALDO",
+                "1111843146",
+                "MEDIDAS CAUTELARES",
+                "61"),
+            List.of(
+                "17",
+                "PORTOVIEJO",
+                "CALCETA",
+                "PORTOVIEJO",
+                "730335841",
+                "073-2022-00015",
+                "2022",
+                "TOMALA ZAMBRANO FREDDY ROBERTO",
+                "0905602215",
+                "MEDIDAS CAUTELARES",
+                "68"));
+    Resultado resultado = ActaTableParser.interpretar(List.of(grid));
+    assertEquals("PORTOVIEJO", resultado.uec());
+    assertEquals("BAHIA", resultado.filas().get(0).oficina());
+    assertEquals("069-2019-00168", resultado.filas().get(0).juicio());
+    assertEquals("CALCETA", resultado.filas().get(1).oficina());
+  }
+
+  @Test
   void resuelveOficinaPorNombreNormalizadoYNoInventaCodigos() {
     UUID tenant = UUID.randomUUID();
     List<CoactivaOficina> catalogo =

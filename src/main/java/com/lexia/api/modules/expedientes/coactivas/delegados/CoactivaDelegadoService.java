@@ -13,6 +13,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -110,6 +111,7 @@ public class CoactivaDelegadoService {
     authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
     UUID tenantId = AuthContext.require().tenantId();
     String codigo = normalizarCodigoOficina(request.codigo());
+    rechazarNombreDeDelegado(tenantId, codigo, request.nombre());
     int sort = request.sortOrder() == null ? 99 : request.sortOrder();
     boolean activo = request.activo() == null || request.activo();
     CoactivaOficina oficina =
@@ -301,6 +303,21 @@ public class CoactivaDelegadoService {
         CoactivaTexto.blankToNull(request.email()),
         request.activo() == null || request.activo(),
         userId);
+  }
+
+  private void rechazarNombreDeDelegado(UUID tenantId, String codigo, String nombre) {
+    String clave = CoactivaTexto.claveNombre(nombre);
+    String[] tokens = clave.split(" ");
+    if (tokens.length < 2 || clave.contains(CoactivaTexto.claveNombre(codigo))) {
+      return;
+    }
+    boolean esDelegado =
+        delegados.findByTenantIdAndDeletedAtIsNullOrderByNombreAsc(tenantId).stream()
+            .map(d -> CoactivaTexto.claveNombre(d.getNombre()))
+            .anyMatch(dn -> Arrays.stream(tokens).allMatch(t -> t.length() >= 3 && dn.contains(t)));
+    if (esDelegado) {
+      throw ApiException.badRequest("El nombre de la oficina no puede ser el de un delegado.");
+    }
   }
 
   private static String normalizarCodigoOficina(String codigo) {

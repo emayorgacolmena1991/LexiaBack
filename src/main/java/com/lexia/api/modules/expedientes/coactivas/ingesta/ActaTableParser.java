@@ -9,7 +9,10 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.EnumSet;
+import java.util.Set;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
@@ -28,6 +31,7 @@ public final class ActaTableParser {
   private static final int HEADER_SCAN_ROWS = 10;
 
   enum Campo {
+    ZONAL,
     UEC,
     OFICINA,
     OPERACION,
@@ -187,6 +191,19 @@ public final class ActaTableParser {
         }
         FilaActa fila = mapear(row, cabecera, numero);
         if (fila != null) {
+          String oficina = distinguirOficina(row, cabecera, fila.oficina(), uecFila);
+          if (!Objects.equals(oficina, fila.oficina())) {
+            fila =
+                new FilaActa(
+                    fila.fila(),
+                    oficina,
+                    fila.operacion(),
+                    fila.juicio(),
+                    fila.deudor(),
+                    fila.cedula(),
+                    fila.etapa(),
+                    fila.fojas());
+          }
           filas.add(fila);
           numero++;
         }
@@ -235,10 +252,14 @@ public final class ActaTableParser {
       return Optional.of(Campo.FOJAS);
     }
     String compacto = h.replace(" ", "");
+    if (h.contains("ZONAL") || h.equals("ZONA")) {
+      return Optional.of(Campo.ZONAL);
+    }
     if (compacto.equals("UEC") || h.contains("UNIDAD EJECUTORA")) {
       return Optional.of(Campo.UEC);
     }
-    if (h.contains("OFICINA") || h.contains("AGENCIA") || h.contains("SUCURSAL")) {
+    if (!h.contains("ZONAL")
+        && (h.contains("OFICINA") || h.contains("AGENCIA") || h.contains("SUCURSAL"))) {
       return Optional.of(Campo.OFICINA);
     }
     if (h.contains("DEUDOR") || h.contains("NOMBRE") || h.contains("CLIENTE") || h.contains("TITULAR")
@@ -299,6 +320,58 @@ public final class ActaTableParser {
       filas.add(new FilaActa(numero++, null, null, juicio.get(), CoactivaTexto.sanitizarDeudor(deudor), cedula, null, null));
     }
     return filas;
+  }
+
+  /**
+   * La columna OFICINA es la agencia (Bahía, Calceta). ZONAL y UEC suelen repetir Portoviejo; si el
+   * OCR las deja bajo el encabezado de oficina, se busca en la fila otra localidad distinta.
+   */
+  static String distinguirOficina(
+      List<String> row, Map<Campo, Integer> cabecera, String oficina, String uec) {
+    String zonal = celda(row, cabecera.get(Campo.ZONAL));
+    if (oficina != null && !misma(oficina, uec) && !misma(oficina, zonal)) {
+      return oficina;
+    }
+    Set<Campo> usadas =
+        EnumSet.of(
+            Campo.ZONAL,
+            Campo.UEC,
+            Campo.OFICINA,
+            Campo.OPERACION,
+            Campo.JUICIO,
+            Campo.ANIO,
+            Campo.DEUDOR,
+            Campo.CEDULA,
+            Campo.ETAPA,
+            Campo.FOJAS);
+    for (int i = 0; i < row.size(); i++) {
+      if (usada(cabecera, usadas, i)) {
+        continue;
+      }
+      String cell = CoactivaTexto.blankToNull(row.get(i));
+      if (cell == null || !cell.matches("[A-Za-zÁÉÍÓÚÜáéíóúüÑñ]{4,16}")) {
+        continue;
+      }
+      if (misma(cell, uec) || misma(cell, zonal) || misma(cell, oficina)) {
+        continue;
+      }
+      return cell;
+    }
+    return oficina;
+  }
+
+  private static boolean usada(Map<Campo, Integer> cabecera, Set<Campo> campos, int index) {
+    for (Campo campo : campos) {
+      Integer col = cabecera.get(campo);
+      if (col != null && col == index) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean misma(String a, String b) {
+    return a != null && b != null && CoactivaTexto.claveNombre(a).equals(CoactivaTexto.claveNombre(b));
   }
 
   private static String celda(List<String> row, Integer index) {
