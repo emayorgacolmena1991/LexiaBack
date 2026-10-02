@@ -8,6 +8,7 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaEtapa;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteRepository;
@@ -136,7 +137,8 @@ public class ActaImportService {
 
     ActaTableParser.Resultado resultado = ActaTableParser.interpretar(tablas);
     CoactivaActa acta = CoactivaActa.create(tenantId, normalizarTipo(tipo), fuente, principal.userId());
-    String oficina = delegados.resolverCodigoOficina(tenantId, oficinaCodigo);
+    String uecFuente = resultado.uec() != null ? resultado.uec() : oficinaCodigo;
+    String oficina = delegados.resolverCodigoOficina(tenantId, uecFuente);
     acta.setCabecera(
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(titulo) == null ? file.getOriginalFilename() : titulo, 240),
         oficina,
@@ -145,6 +147,7 @@ public class ActaImportService {
         null,
         nombreUsuario(principal),
         null);
+    acta.setUecNombre(CoactivaTexto.truncate(CoactivaTexto.nombrePropio(resultado.uec()), 120));
     actas.save(acta);
 
     CoactivaArchivo archivo = expedienteService.guardarArchivo(principal, file, CoactivaArchivo.ACTA);
@@ -217,21 +220,7 @@ public class ActaImportService {
     for (CoactivaActaItem item : lista) {
       switch (item.getEstadoMatch()) {
         case CoactivaActaItem.PENDIENTE -> {
-          CoactivaExpediente expediente =
-              expedienteService.crearInterno(
-                  principal,
-                  new NuevoExpediente(
-                      item.getNroJuicio(),
-                      item.getNroOperacion(),
-                      item.getOficinaCodigo() != null ? item.getOficinaCodigo() : acta.getOficinaCodigo(),
-                      null,
-                      item.getDeudorNombre(),
-                      item.getDeudorCedula(),
-                      item.getEtapaReportada(),
-                      item.getFojas(),
-                      acta.getId(),
-                      "ACTA"));
-          item.setResultado(CoactivaActaItem.VINCULADO, expediente.getId(), item.getErrores());
+          crearDesdeItem(principal, acta, item);
           creados++;
         }
         case CoactivaActaItem.DUPLICADO -> duplicados++;
@@ -241,6 +230,48 @@ public class ActaImportService {
     }
     acta.confirmar(principal.userId());
     return new ConfirmacionResponse(id, creados, duplicados, omitidos, detalle(tenantId, acta, List.of()));
+  }
+
+  /**
+   * Crea expedientes solo de filas en estado Lista ({@code PENDIENTE}). IDs en otro estado
+   * responden 400 y no escriben.
+   */
+  @Transactional
+  public ConfirmacionResponse generar(UUID id, List<UUID> itemIds) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    CoactivaActa acta = requireBorrador(tenantId, id);
+    revalidar(tenantId, acta);
+    List<CoactivaActaItem> lista = items.findByTenantIdAndActaIdOrderByFilaAsc(tenantId, id);
+    List<CoactivaActaItem> objetivo = seleccionarLista(lista, itemIds);
+    int creados = 0;
+    for (CoactivaActaItem item : objetivo) {
+      crearDesdeItem(principal, acta, item);
+      creados++;
+    }
+    boolean cerrable =
+        lista.stream()
+            .allMatch(
+                i ->
+                    CoactivaActaItem.VINCULADO.equals(i.getEstadoMatch())
+                        || CoactivaActaItem.DUPLICADO.equals(i.getEstadoMatch())
+                        || CoactivaActaItem.OMITIDO.equals(i.getEstadoMatch()));
+    if (cerrable) {
+      acta.confirmar(principal.userId());
+    }
+    int duplicados = (int) lista.stream().filter(i -> CoactivaActaItem.DUPLICADO.equals(i.getEstadoMatch())).count();
+    int omitidos = (int) lista.stream().filter(i -> CoactivaActaItem.OMITIDO.equals(i.getEstadoMatch())).count();
+    return new ConfirmacionResponse(id, creados, duplicados, omitidos, detalle(tenantId, acta, List.of()));
+  }
+
+  @Transactional
+  public ActaDetalle actualizarHeader(UUID id, UUID delegadoId) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    UUID tenantId = AuthContext.require().tenantId();
+    CoactivaActa acta = requireBorrador(tenantId, id);
+    aplicarDelegado(tenantId, acta, delegadoId, true);
+    return detalle(tenantId, acta, List.of());
   }
 
   // ---------------------------------------------------------------------------
@@ -259,6 +290,64 @@ public class ActaImportService {
         CoactivaTexto.blankToNull(request.entregadoPor()),
         recibidoPor,
         CoactivaTexto.blankToNull(request.observaciones()));
+    aplicarDelegado(principal.tenantId(), acta, request.delegadoId(), false);
+  }
+
+  private void aplicarDelegado(UUID tenantId, CoactivaActa acta, UUID delegadoId, boolean cascade) {
+    if (delegadoId != null) {
+      CoactivaDelegado delegado = delegados.require(tenantId, delegadoId);
+      if (!delegado.isActivo()) {
+        throw ApiException.badRequest("El delegado no está activo.");
+      }
+    }
+    acta.setDelegadoId(delegadoId);
+    if (!cascade) {
+      return;
+    }
+    for (CoactivaActaItem item : items.findByTenantIdAndActaIdOrderByFilaAsc(tenantId, acta.getId())) {
+      if (!CoactivaActaItem.VINCULADO.equals(item.getEstadoMatch())) {
+        item.setDelegadoId(delegadoId);
+      }
+    }
+  }
+
+  private void crearDesdeItem(AuthPrincipal principal, CoactivaActa acta, CoactivaActaItem item) {
+    UUID delegadoId = item.getDelegadoId() != null ? item.getDelegadoId() : acta.getDelegadoId();
+    CoactivaExpediente expediente =
+        expedienteService.crearInterno(
+            principal,
+            new NuevoExpediente(
+                item.getNroJuicio(),
+                item.getNroOperacion(),
+                item.getOficinaCodigo() != null ? item.getOficinaCodigo() : acta.getOficinaCodigo(),
+                delegadoId,
+                item.getDeudorNombre(),
+                item.getDeudorCedula(),
+                item.getEtapaReportada(),
+                item.getFojas(),
+                acta.getId(),
+                "ACTA"));
+    item.setResultado(CoactivaActaItem.VINCULADO, expediente.getId(), item.getErrores());
+  }
+
+  private static List<CoactivaActaItem> seleccionarLista(List<CoactivaActaItem> lista, List<UUID> itemIds) {
+    if (itemIds == null) {
+      return lista.stream().filter(i -> CoactivaActaItem.PENDIENTE.equals(i.getEstadoMatch())).toList();
+    }
+    if (itemIds.isEmpty()) {
+      throw ApiException.badRequest("Selecciona expedientes en estado Lista.");
+    }
+    Map<UUID, CoactivaActaItem> porId =
+        lista.stream().collect(Collectors.toMap(CoactivaActaItem::getId, i -> i, (a, b) -> a));
+    List<CoactivaActaItem> objetivo = new ArrayList<>();
+    for (UUID itemId : itemIds.stream().distinct().toList()) {
+      CoactivaActaItem item = porId.get(itemId);
+      if (item == null || !CoactivaActaItem.PENDIENTE.equals(item.getEstadoMatch())) {
+        throw ApiException.badRequest("Solo se pueden generar expedientes en estado Lista.");
+      }
+      objetivo.add(item);
+    }
+    return objetivo;
   }
 
   private String nombreUsuario(AuthPrincipal principal) {
@@ -299,6 +388,14 @@ public class ActaImportService {
           request.deudorCedula(),
           request.etapaReportada(),
           request.fojas());
+      UUID delegadoFila = request.delegadoId() != null ? request.delegadoId() : acta.getDelegadoId();
+      if (delegadoFila != null) {
+        CoactivaDelegado delegado = delegados.require(tenantId, delegadoFila);
+        if (!delegado.isActivo()) {
+          throw ApiException.badRequest("El delegado no está activo.");
+        }
+      }
+      item.setDelegadoId(delegadoFila);
       item.setResultado(
           Boolean.TRUE.equals(request.omitir()) ? CoactivaActaItem.OMITIDO : CoactivaActaItem.PENDIENTE,
           null,
@@ -326,7 +423,7 @@ public class ActaImportService {
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(operacion), 40),
         juicioNorm,
         CoactivaTexto.anioDeJuicio(juicioNorm),
-        CoactivaTexto.truncate(CoactivaTexto.nombrePropio(deudor), 240),
+        CoactivaTexto.truncate(CoactivaTexto.sanitizarDeudor(deudor), 240),
         CoactivaTexto.normalizarIdentificacion(cedula),
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(etapa), 160),
         fojas);
@@ -426,6 +523,8 @@ public class ActaImportService {
         a.getTipo(),
         a.getTitulo(),
         a.getOficinaCodigo(),
+        a.getUecNombre(),
+        a.getDelegadoId(),
         a.getFechaActa(),
         a.getFechaRecepcion(),
         a.getTotalItems(),
@@ -441,6 +540,7 @@ public class ActaImportService {
         i.getId(),
         i.getFila(),
         i.getOficinaCodigo(),
+        i.getDelegadoId(),
         i.getNroOperacion(),
         i.getNroJuicio(),
         i.getAnio(),

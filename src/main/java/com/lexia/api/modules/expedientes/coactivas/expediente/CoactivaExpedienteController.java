@@ -1,5 +1,7 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BandejaResponse;
@@ -45,15 +47,23 @@ public class CoactivaExpedienteController {
 
   private final CoactivaExpedienteService service;
   private final CoactivaBandejaService bandeja;
+  private final CoactivaDelegadoService delegados;
 
-  public CoactivaExpedienteController(CoactivaExpedienteService service, CoactivaBandejaService bandeja) {
+  public CoactivaExpedienteController(
+      CoactivaExpedienteService service, CoactivaBandejaService bandeja, CoactivaDelegadoService delegados) {
     this.service = service;
     this.bandeja = bandeja;
+    this.delegados = delegados;
   }
 
   @GetMapping("/catalogos")
   public CatalogosResponse catalogos() {
     return bandeja.catalogos();
+  }
+
+  @GetMapping("/delegados")
+  public List<DelegadoItem> delegados() {
+    return delegados.delegadosActivos();
   }
 
   @GetMapping("/expedientes")

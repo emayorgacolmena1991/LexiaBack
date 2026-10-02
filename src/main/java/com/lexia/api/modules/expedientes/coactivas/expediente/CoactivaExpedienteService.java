@@ -138,7 +138,7 @@ public class CoactivaExpedienteService {
       throw new ApiException(
           HttpStatus.CONFLICT, "COA_JUICIO_DUPLICADO", "Ya existe un expediente con el juicio " + juicio + ".");
     }
-    String deudor = CoactivaTexto.nombrePropio(datos.deudorNombre());
+    String deudor = CoactivaTexto.sanitizarDeudor(datos.deudorNombre());
     String identificacion = CoactivaTexto.normalizarIdentificacion(datos.deudorIdentificacion());
 
     LegalCase legalCase =

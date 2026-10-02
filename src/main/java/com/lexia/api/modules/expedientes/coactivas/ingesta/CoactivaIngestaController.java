@@ -2,10 +2,12 @@ package com.lexia.api.modules.expedientes.coactivas.ingesta;
 
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaDetalle;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaHeaderRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaResumen;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.CargaMasivaResponse;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ConfirmacionResponse;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.GenerarExpedientesRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.VincularRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -71,6 +73,17 @@ public class CoactivaIngestaController {
   @PatchMapping("/actas/{id}")
   public ActaDetalle actualizarActa(@PathVariable UUID id, @Valid @RequestBody ActaRequest request) {
     return actas.actualizar(id, request);
+  }
+
+  @PatchMapping("/actas/{id}/header")
+  public ActaDetalle actualizarHeader(@PathVariable UUID id, @Valid @RequestBody ActaHeaderRequest request) {
+    return actas.actualizarHeader(id, request.delegadoId());
+  }
+
+  @PostMapping("/actas/{id}/generar-expedientes")
+  public ConfirmacionResponse generarExpedientes(
+      @PathVariable UUID id, @Valid @RequestBody GenerarExpedientesRequest request) {
+    return actas.generar(id, request.itemIds());
   }
 
   @PostMapping("/actas/{id}/confirmar")

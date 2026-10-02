@@ -61,6 +61,12 @@ public class CoactivaDelegadoService {
   }
 
   @Transactional(readOnly = true)
+  public List<DelegadoItem> delegadosActivos() {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    return listDelegados(AuthContext.require().tenantId()).stream().filter(DelegadoItem::activo).toList();
+  }
+
+  @Transactional(readOnly = true)
   public List<OficinaItem> oficinasAdmin() {
     authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
     return listOficinas(AuthContext.require().tenantId());

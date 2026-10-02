@@ -28,6 +28,7 @@ public final class ActaTableParser {
   private static final int HEADER_SCAN_ROWS = 10;
 
   enum Campo {
+    UEC,
     OFICINA,
     OPERACION,
     JUICIO,
@@ -48,7 +49,7 @@ public final class ActaTableParser {
       String etapa,
       Integer fojas) {}
 
-  public record Resultado(List<FilaActa> filas, List<String> advertencias) {}
+  public record Resultado(List<FilaActa> filas, String uec, List<String> advertencias) {}
 
   private ActaTableParser() {}
 
@@ -142,6 +143,8 @@ public final class ActaTableParser {
     Map<Campo, Integer> ultimaCabecera = null;
     int ultimaColumnas = -1;
     int numero = 1;
+    String uec = null;
+    boolean uecMixta = false;
 
     for (int t = 0; t < tablas.size(); t++) {
       List<List<String>> grid = tablas.get(t);
@@ -174,6 +177,14 @@ public final class ActaTableParser {
       ultimaColumnas = columnas;
       for (int r = headerRow + 1; r < grid.size(); r++) {
         List<String> row = grid.get(r);
+        String uecFila = celda(row, cabecera.get(Campo.UEC));
+        if (uecFila != null) {
+          if (uec == null) {
+            uec = uecFila;
+          } else if (!CoactivaTexto.claveNombre(uec).equals(CoactivaTexto.claveNombre(uecFila))) {
+            uecMixta = true;
+          }
+        }
         FilaActa fila = mapear(row, cabecera, numero);
         if (fila != null) {
           filas.add(fila);
@@ -181,10 +192,13 @@ public final class ActaTableParser {
         }
       }
     }
+    if (uecMixta) {
+      advertencias.add("La columna UEC trae más de un valor; la cabecera usa el primero.");
+    }
     if (filas.isEmpty()) {
       advertencias.add("No se encontraron filas de expedientes en el archivo.");
     }
-    return new Resultado(filas, advertencias);
+    return new Resultado(filas, uec, advertencias);
   }
 
   static Map<Campo, Integer> detectarCabecera(List<String> row) {
@@ -220,6 +234,10 @@ public final class ActaTableParser {
     if (h.contains("FOJA")) {
       return Optional.of(Campo.FOJAS);
     }
+    String compacto = h.replace(" ", "");
+    if (compacto.equals("UEC") || h.contains("UNIDAD EJECUTORA")) {
+      return Optional.of(Campo.UEC);
+    }
     if (h.contains("OFICINA") || h.contains("AGENCIA") || h.contains("SUCURSAL")) {
       return Optional.of(Campo.OFICINA);
     }
@@ -249,7 +267,14 @@ public final class ActaTableParser {
       return null;
     }
     return new FilaActa(
-        numero, oficina, operacion, CoactivaTexto.normalizarJuicio(juicioRaw), deudor, cedula, etapa, fojas);
+        numero,
+        oficina,
+        operacion,
+        CoactivaTexto.normalizarJuicio(juicioRaw),
+        CoactivaTexto.sanitizarDeudor(deudor),
+        cedula,
+        etapa,
+        fojas);
   }
 
   private static List<FilaActa> heuristica(List<List<String>> grid, int desde) {
@@ -271,7 +296,7 @@ public final class ActaTableParser {
           deudor = cell.trim();
         }
       }
-      filas.add(new FilaActa(numero++, null, null, juicio.get(), deudor, cedula, null, null));
+      filas.add(new FilaActa(numero++, null, null, juicio.get(), CoactivaTexto.sanitizarDeudor(deudor), cedula, null, null));
     }
     return filas;
   }
