@@ -119,7 +119,17 @@ public final class CoactivaExpedienteDtos {
       long tamanoBytes,
       String nroJuicioDetectado,
       String estadoVinculo,
-      Instant createdAt) {}
+      Instant createdAt,
+      String estadoIa,
+      String motivoRechazoIa,
+      Integer confianzaIa,
+      String checklistIa,
+      Instant iaAnalizadoAt,
+      UUID overridePor,
+      Instant overrideAt,
+      String overrideMotivo) {}
+
+  public record OverrideIaRequest(@Size(max = 600) String motivo) {}
 
   public record ExpedienteDetalle(
       UUID id,
@@ -153,6 +163,7 @@ public final class CoactivaExpedienteDtos {
       String observaciones,
       List<ParticipanteItem> participantes,
       List<NotificacionItem> notificaciones,
+      List<ArchivoItem> archivos,
       List<String> etapasPermitidas,
       Instant createdAt,
       Instant updatedAt,

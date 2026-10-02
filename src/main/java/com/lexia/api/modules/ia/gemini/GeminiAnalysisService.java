@@ -14,6 +14,7 @@ import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.util.List;
 import java.util.Locale;
@@ -204,6 +205,60 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     }
     return ExtraccionMinutaVivienda.error(
         "No se pudieron extraer variables del acto. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ValidacionDocumentoJson validarDocumento(String systemPrompt, String textoDocumento) {
+    String texto = textoDocumento == null ? "" : textoDocumento;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto OCR para validar el documento.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("GEMINI_API_KEY no configurada.");
+    }
+    String system =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Valida el documento y responde en JSON.";
+    Content content =
+        Content.fromParts(
+            Part.fromText(system),
+            Part.fromText(
+                "<documento_ocr>\n" + truncate(texto, 80_000) + "\n</documento_ocr>"));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0f)
+            .maxOutputTokens(1024)
+            .build();
+
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+          try {
+            String raw = client.models.generateContent(modelo, content, config).text();
+            if (StringUtils.hasText(raw)) {
+              LOG.info("Gemini validación documental OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(GeminiJsonSanitizer.limpiar(raw));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+            sleepBackoff(intento, false);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini validación documental {}", ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
+          }
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo validar el documento con Gemini. Último: " + ultimoDiagnostico);
   }
 
   @Override

@@ -45,6 +45,34 @@ public interface AnalisisDocumentoService {
         "Extracción de captura BIESS no disponible para este proveedor LLM.");
   }
 
+  /**
+   * Validación documental (coactivas): system prompt del catálogo + texto OCR de UN documento.
+   * El proveedor fuerza salida JSON ({@code response_format: json} / tool use) con el esquema
+   * {@code {"estado": "APROBADO|RECHAZADO", "confianza": 0-100, "razon_rechazo": "...",
+   * "checklist_cumplido": [...]}} y devuelve el JSON crudo; el parseo lo hace el llamador.
+   * Default: no soportado.
+   */
+  default ValidacionDocumentoJson validarDocumento(String systemPrompt, String textoDocumento) {
+    return ValidacionDocumentoJson.error(
+        "Validación documental no disponible para este proveedor LLM.");
+  }
+
+  /** JSON crudo del LLM o error de transporte/configuración. */
+  record ValidacionDocumentoJson(String json, String error) {
+
+    public static ValidacionDocumentoJson ok(String json) {
+      return new ValidacionDocumentoJson(json, null);
+    }
+
+    public static ValidacionDocumentoJson error(String motivo) {
+      return new ValidacionDocumentoJson(null, motivo);
+    }
+
+    public boolean esError() {
+      return error != null;
+    }
+  }
+
   record ExtraccionCapturaBiess(DatosBiessMinuta data, String estado, String motivo) {
 
     public static ExtraccionCapturaBiess ok(DatosBiessMinuta data) {

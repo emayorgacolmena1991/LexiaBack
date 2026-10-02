@@ -76,6 +76,11 @@
 			<version>1.66.0</version>
 		</dependency>
 		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.3</version>
+		</dependency>
+		<dependency>
 			<groupId>com.deepoove</groupId>
 			<artifactId>poi-tl</artifactId>
 			<version>1.12.2</version>

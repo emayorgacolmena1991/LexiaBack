@@ -37,6 +37,8 @@ lexia:
     soffice-path: ${LEXIA_SOFFICE_PATH:}
   coactivas:
     storage-dir: ${LEXIA_COACTIVAS_DIR:./data/coactivas}
+    ia:
+      dummy: ${LEXIA_COACTIVAS_IA_DUMMY:false}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
   prompts:

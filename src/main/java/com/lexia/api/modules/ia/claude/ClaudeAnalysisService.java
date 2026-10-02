@@ -11,6 +11,7 @@ import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.io.IOException;
 import java.net.URI;
@@ -42,6 +43,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String EXPEDIENTE_TOOL_NAME = ProcesarExpedienteCompletoPayload.TOOL_NAME;
   private static final String MINUTA_VIVIENDA_TOOL_NAME = "registrar_datos_minuta_vivienda";
   private static final String CAPTURA_BIESS_TOOL_NAME = "registrar_datos_captura_biess";
+  private static final String VALIDACION_TOOL_NAME = "validar_documento_coactivo";
+  private static final int MAX_CHARS_VALIDACION = 80_000;
+  private static final int MAX_TOKENS_VALIDACION = 1024;
   private static final int MAX_INTENTOS_CAPTURA_BIESS = 2;
   private static final int MAX_CHARS_CAPTURA = 20_000;
   private static final int MAX_TOKENS_EXPEDIENTE = 8192;
@@ -218,6 +222,59 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
+  public ValidacionDocumentoJson validarDocumento(String systemPrompt, String textoDocumento) {
+    String texto = textoDocumento == null ? "" : textoDocumento;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto OCR para validar el documento.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("ANTHROPIC_API_KEY no configurada.");
+    }
+    String prompt =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Valida el documento invocando " + VALIDACION_TOOL_NAME + ".";
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+        try {
+          HttpResponse<String> res = enviar(construirBodyValidacion(modelo, prompt, texto));
+          int status = res.statusCode();
+          if (status == 200) {
+            JsonNode root = objectMapper.readTree(res.body());
+            if ("max_tokens".equals(root.path("stop_reason").asText())) {
+              return ValidacionDocumentoJson.error("Respuesta truncada (max_tokens) al validar.");
+            }
+            JsonNode input = leerToolInput(root);
+            if (input != null && input.isObject()) {
+              LOG.info("Claude validación documental OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(objectMapper.writeValueAsString(input));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use " + VALIDACION_TOOL_NAME;
+          } else if (status == 429 || status == 529 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+            continue;
+          } else {
+            return ValidacionDocumentoJson.error(
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ValidacionDocumentoJson.error("Validación documental interrumpida.");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude validación documental: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo validar el documento con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
   public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     String texto = textoCaptura == null ? "" : textoCaptura;
     if (!StringUtils.hasText(texto.trim())) {
@@ -260,6 +317,46 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     }
     return ExtraccionCapturaBiess.error(
         "No se pudo leer la captura BIESS. Último: " + ultimoDiagnostico);
+  }
+
+  private String construirBodyValidacion(String modelo, String systemPrompt, String texto)
+      throws IOException {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    ObjectNode estado = props.putObject("estado");
+    estado.put("type", "string");
+    estado.putArray("enum").add("APROBADO").add("RECHAZADO");
+    props
+        .putObject("confianza")
+        .put("type", "integer")
+        .put("description", "Confianza 0 a 100.");
+    props
+        .putObject("razon_rechazo")
+        .put("type", "string")
+        .put("description", "Motivo concreto si RECHAZADO; cadena vacía si APROBADO.");
+    ObjectNode checklist = props.putObject("checklist_cumplido");
+    checklist.put("type", "array");
+    checklist.putObject("items").put("type", "string");
+    schema.putArray("required").add("estado").add("confianza").add("razon_rechazo").add("checklist_cumplido");
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", MAX_TOKENS_VALIDACION);
+    body.put("system", systemPrompt);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", VALIDACION_TOOL_NAME);
+    tool.put("description", "Registra el dictamen de validación documental en JSON estricto.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", VALIDACION_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "Valida este documento. No inventes datos.\n\n<documento_ocr>\n"
+            + truncate(texto, MAX_CHARS_VALIDACION)
+            + "\n</documento_ocr>");
+    return objectMapper.writeValueAsString(body);
   }
 
   private String construirBodyCapturaBiess(String modelo, String texto) throws IOException {

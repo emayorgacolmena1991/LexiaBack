@@ -66,6 +66,7 @@ public class CargaMasivaService {
                 .orElse(null);
         if (expediente != null) {
           expedienteService.vincular(principal, archivo, expediente);
+          expedienteService.encolarAnalisis(archivo, expediente.getEtapaVerificada());
           vinculados++;
         }
       }
@@ -92,6 +93,7 @@ public class CargaMasivaService {
     CoactivaArchivo archivo = expedienteService.requireArchivo(principal.tenantId(), archivoId);
     CoactivaExpediente expediente = expedienteService.require(principal.tenantId(), expedienteId);
     expedienteService.vincular(principal, archivo, expediente);
+    expedienteService.encolarAnalisis(archivo, expediente.getEtapaVerificada());
     return CoactivaExpedienteService.toItem(archivo);
   }
 

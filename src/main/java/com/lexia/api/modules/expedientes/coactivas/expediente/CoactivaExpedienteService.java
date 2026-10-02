@@ -16,6 +16,8 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.OverrideIaRequest;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
@@ -39,6 +41,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -66,6 +70,7 @@ public class CoactivaExpedienteService {
   private final CoactivaSemaforoService semaforo;
   private final CoactivaCaseSync caseSync;
   private final AuthorizationService authorization;
+  private final CoactivaValidacionIaWorker validacionIa;
 
   public CoactivaExpedienteService(
       CoactivaExpedienteRepository expedientes,
@@ -78,7 +83,8 @@ public class CoactivaExpedienteService {
       CoactivaDelegadoService delegados,
       CoactivaSemaforoService semaforo,
       CoactivaCaseSync caseSync,
-      AuthorizationService authorization) {
+      AuthorizationService authorization,
+      CoactivaValidacionIaWorker validacionIa) {
     this.expedientes = expedientes;
     this.participantes = participantes;
     this.notificaciones = notificaciones;
@@ -90,6 +96,7 @@ public class CoactivaExpedienteService {
     this.semaforo = semaforo;
     this.caseSync = caseSync;
     this.authorization = authorization;
+    this.validacionIa = validacionIa;
   }
 
   // ---------------------------------------------------------------------------
@@ -469,6 +476,7 @@ public class CoactivaExpedienteService {
         tipo == null || tipo.isBlank() ? CoactivaArchivo.EXPEDIENTE_ESCANEADO : validarEnum(tipo, TIPOS_ARCHIVO, "tipo");
     CoactivaArchivo archivo = guardarArchivo(principal, file, tipoArchivo);
     vincular(principal, archivo, expediente);
+    encolarAnalisis(archivo, expediente.getEtapaVerificada());
     return toItem(archivo);
   }
 
@@ -529,6 +537,65 @@ public class CoactivaExpedienteService {
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaArchivo archivo = requireArchivo(tenantId, archivoId);
     return new ArchivoContenido(archivo.getNombreOriginal(), archivo.getMimeType(), storage.read(archivo));
+  }
+
+  @Transactional(readOnly = true)
+  public ArchivoItem obtenerArchivo(UUID archivoId) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    return toItem(requireArchivo(AuthContext.require().tenantId(), archivoId));
+  }
+
+  @Transactional
+  public ArchivoItem overrideIa(UUID archivoId, OverrideIaRequest request) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    AuthPrincipal principal = AuthContext.require();
+    CoactivaArchivo archivo = requireArchivo(principal.tenantId(), archivoId);
+    String estado = archivo.getEstadoIa();
+    if (!CoactivaArchivo.IA_RECHAZADO.equals(estado) && !CoactivaArchivo.IA_ERROR.equals(estado)) {
+      throw ApiException.badRequest(
+          "Solo se puede forzar la aprobación de un documento rechazado o con error de IA.");
+    }
+    String motivo =
+        CoactivaTexto.truncate(
+            CoactivaTexto.blankToNull(request == null ? null : request.motivo()), 600);
+    archivo.aprobarManualmente(principal.userId(), motivo);
+    if (archivo.getExpedienteId() != null) {
+      registrarEvento(
+          principal.tenantId(),
+          archivo.getExpedienteId(),
+          "IA_OVERRIDE",
+          "Aprobación manual de documento",
+          archivo.getNombreOriginal() + (motivo == null ? "" : ": " + motivo),
+          principal.userId(),
+          archivo.getId());
+    }
+    return toItem(archivo);
+  }
+
+  /**
+   * Marca {@code ANALIZANDO} y lanza el worker tras el commit. No analiza actas ni PDFs de
+   * actuación generados por el sistema.
+   */
+  public void encolarAnalisis(CoactivaArchivo archivo, String etapa) {
+    String tipo = archivo.getTipo();
+    if (CoactivaArchivo.ACTA.equals(tipo) || "ACTUACION".equals(tipo)) {
+      return;
+    }
+    archivo.iniciarAnalisisIa(etapa);
+    UUID tenantId = archivo.getTenantId();
+    UUID archivoId = archivo.getId();
+    Runnable launch = () -> validacionIa.analizarAsync(tenantId, archivoId);
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              launch.run();
+            }
+          });
+    } else {
+      launch.run();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -638,6 +705,12 @@ public class CoactivaExpedienteService {
         expediente.getObservaciones(),
         lista.stream().map(p -> toItem(p, sinNotificar)).toList(),
         notifs.stream().map(n -> toItem(n, nombres.get(n.getParticipanteId()))).toList(),
+        archivos
+            .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                tenantId, expediente.getId())
+            .stream()
+            .map(CoactivaExpedienteService::toItem)
+            .toList(),
         permitidas,
         expediente.getCreatedAt(),
         expediente.getUpdatedAt(),
@@ -744,7 +817,15 @@ public class CoactivaExpedienteService {
         a.getTamanoBytes(),
         a.getNroJuicioDetectado(),
         a.getEstadoVinculo(),
-        a.getCreatedAt());
+        a.getCreatedAt(),
+        a.getEstadoIa(),
+        a.getMotivoRechazoIa(),
+        a.getConfianzaIa(),
+        a.getChecklistIa(),
+        a.getIaAnalizadoAt(),
+        a.getOverridePor(),
+        a.getOverrideAt(),
+        a.getOverrideMotivo());
   }
 
   private static DelegadoItem toDelegadoItem(CoactivaDelegado d) {

@@ -12,6 +12,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.OverrideIaRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ParticipanteItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ParticipanteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TimelineItem;
@@ -157,6 +158,17 @@ public class CoactivaExpedienteController {
       @RequestPart("file") MultipartFile file,
       @RequestParam(required = false) String tipo) {
     return service.subirArchivo(id, file, tipo);
+  }
+
+  @GetMapping("/archivos/{archivoId}")
+  public ArchivoItem archivo(@PathVariable UUID archivoId) {
+    return service.obtenerArchivo(archivoId);
+  }
+
+  @PatchMapping("/archivos/{archivoId}/override-ia")
+  public ArchivoItem overrideIa(
+      @PathVariable UUID archivoId, @RequestBody(required = false) @Valid OverrideIaRequest request) {
+    return service.overrideIa(archivoId, request);
   }
 
   @GetMapping("/archivos/{archivoId}/contenido")
