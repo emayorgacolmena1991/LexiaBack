@@ -190,5 +190,5 @@ public final class CoactivaExpedienteDtos {
       @NotBlank String etapa, @Size(max = 600) String motivo, Boolean forzar) {}
 
   public record TimelineItem(
-      String tipo, String titulo, String detalle, Instant fecha, UUID usuarioId) {}
+      String tipo, String titulo, String detalle, Instant fecha, UUID usuarioId, UUID archivoId) {}
 }

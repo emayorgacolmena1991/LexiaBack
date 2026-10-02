@@ -53,7 +53,7 @@ public class CoactivaExpedienteService {
   private static final Set<String> TIPOS_ARCHIVO =
       Set.of(
           "EXPEDIENTE_ESCANEADO", "ACTA", "LIQUIDACION", "PROVIDENCIA", "OFICIO",
-          "RESPUESTA_ENTIDAD", "ESCRITO", "EVIDENCIA", "OTRO");
+          "RESPUESTA_ENTIDAD", "ESCRITO", "EVIDENCIA", "OTRO", "ACTUACION");
 
   private final CoactivaExpedienteRepository expedientes;
   private final CoactivaParticipanteRepository participantes;
@@ -267,10 +267,12 @@ public class CoactivaExpedienteService {
 
     if (actual != null && actual != nueva && !forzar
         && !caseSync.transicionPermitida(tenantId, expediente.getCaseId(), actual, nueva)) {
+      List<String> allowedNext = caseSync.etapasSiguientes(tenantId, expediente.getCaseId(), actual);
       throw new ApiException(
           HttpStatus.CONFLICT,
           "COA_TRANSICION_INVALIDA",
-          "No se permite pasar de «" + actual.label() + "» a «" + nueva.label() + "». Usa «forzar» con motivo.");
+          "No se permite pasar de «" + actual.label() + "» a «" + nueva.label() + "».",
+          allowedNext);
     }
     if (forzar && CoactivaTexto.blankToNull(request.motivo()) == null) {
       throw ApiException.badRequest("Indica el motivo para forzar el cambio de etapa.");
@@ -307,10 +309,13 @@ public class CoactivaExpedienteService {
               "Etapa: " + etapaLabel(h.getEtapaNueva()),
               "Desde " + desde + (h.getMotivo() == null ? "" : ". " + h.getMotivo()),
               h.getCreatedAt(),
-              h.getUsuarioId()));
+              h.getUsuarioId(),
+              null));
     }
     for (CoactivaEvento e : eventos.findByTenantIdAndExpedienteIdOrderByCreatedAtAsc(tenantId, id)) {
-      items.add(new TimelineItem(e.getTipo(), e.getTitulo(), e.getDetalle(), e.getCreatedAt(), e.getUsuarioId()));
+      items.add(
+          new TimelineItem(
+              e.getTipo(), e.getTitulo(), e.getDetalle(), e.getCreatedAt(), e.getUsuarioId(), e.getArchivoId()));
     }
     for (CoactivaArchivo a :
         archivos.findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId, id)) {
@@ -320,7 +325,8 @@ public class CoactivaExpedienteService {
               "Archivo cargado: " + a.getNombreOriginal(),
               a.getTipo(),
               a.getCreatedAt(),
-              a.getSubidoPor()));
+              a.getSubidoPor(),
+              a.getId()));
     }
     items.sort(Comparator.comparing(TimelineItem::fecha).reversed());
     return items;
@@ -553,7 +559,18 @@ public class CoactivaExpedienteService {
 
   public void registrarEvento(
       UUID tenantId, UUID expedienteId, String tipo, String titulo, String detalle, UUID userId) {
-    eventos.save(CoactivaEvento.create(tenantId, expedienteId, tipo, titulo, detalle, userId));
+    registrarEvento(tenantId, expedienteId, tipo, titulo, detalle, userId, null);
+  }
+
+  public void registrarEvento(
+      UUID tenantId,
+      UUID expedienteId,
+      String tipo,
+      String titulo,
+      String detalle,
+      UUID userId,
+      UUID archivoId) {
+    eventos.save(CoactivaEvento.create(tenantId, expedienteId, tipo, titulo, detalle, userId, archivoId));
   }
 
   public static String etapaLabel(String etapa) {

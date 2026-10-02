@@ -1,6 +1,7 @@
 package com.lexia.api.common.api;
 
 import com.lexia.api.modules.auth.AuthException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,14 @@ public class ApiExceptionHandler {
   }
 
   @ExceptionHandler(ApiException.class)
-  public ResponseEntity<Map<String, String>> api(ApiException exception) {
-    return ResponseEntity.status(exception.getStatus())
-        .body(Map.of("code", exception.getCode(), "message", exception.getMessage()));
+  public ResponseEntity<Map<String, Object>> api(ApiException exception) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("code", exception.getCode());
+    body.put("message", exception.getMessage());
+    if (!exception.getAllowedNext().isEmpty()) {
+      body.put("allowedNext", exception.getAllowedNext());
+    }
+    return ResponseEntity.status(exception.getStatus()).body(body);
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)

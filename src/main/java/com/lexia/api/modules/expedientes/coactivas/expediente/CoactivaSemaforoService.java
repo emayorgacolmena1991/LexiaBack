@@ -153,7 +153,9 @@ public class CoactivaSemaforoService {
       case OPI_EMITIDA -> "Notificar OPI";
       case NOTIFICACION_COA -> "Imponer medidas cautelares";
       case MEDIDAS_CAUTELARES -> "Ratificar medidas";
+      case ESCRITO -> "Atender el escrito";
       case EMBARGO -> "Solicitar avalúo";
+      case HONORARIOS -> "Revisar honorarios";
       case AVALUO -> "Preparar remate";
       case REMATE -> "Liquidar remate";
       case CONVENIO -> "Controlar cuotas";
