@@ -180,24 +180,61 @@ public class CoactivaDelegadoService {
     return codigo != null && oficinas.findByTenantIdAndCodigo(tenantId, codigo).isPresent();
   }
 
-  /** Mapea un texto libre ("PORTOVIEJO", "Of. Manta", "GYE") al código de oficina configurado. */
+  /** Mapea un texto libre ("PORTOVIEJO", "Of. Manta", "BAHIA", "GYE") al código del catálogo. */
   @Transactional(readOnly = true)
   public String resolverCodigoOficina(UUID tenantId, String texto) {
+    return resolverCodigo(texto, oficinas.findByTenantIdOrderBySortOrderAscNombreAsc(tenantId));
+  }
+
+  @Transactional(readOnly = true)
+  public List<OficinaItem> oficinasActivas() {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    return listOficinas(AuthContext.require().tenantId()).stream().filter(OficinaItem::activo).toList();
+  }
+
+  @Transactional(readOnly = true)
+  public Map<String, CoactivaOficina> oficinasPorCodigo(UUID tenantId) {
+    Map<String, CoactivaOficina> map = new HashMap<>();
+    for (CoactivaOficina oficina : oficinas.findByTenantIdOrderBySortOrderAscNombreAsc(tenantId)) {
+      map.put(oficina.getCodigo(), oficina);
+    }
+    return map;
+  }
+
+  /**
+   * Coincidencia normalizada contra el catálogo. Exacta primero ({@code MANTA} = {@code Manta});
+   * si no, la primera palabra ({@code BAHIA} = {@code Bahía de Caráquez}). Sin coincidencia, null:
+   * no se inventa un código que el combo no puede seleccionar.
+   */
+  public static String resolverCodigo(String texto, List<CoactivaOficina> catalogo) {
     String clave = CoactivaTexto.claveNombre(texto);
     if (clave.isEmpty()) {
       return null;
     }
-    if ("GYE".equals(clave) || clave.contains("GUAYAS")) {
+    if ("GYE".equals(clave) || "GUAYAS".equals(clave)) {
       clave = "GUAYAQUIL";
     }
-    for (CoactivaOficina oficina : oficinas.findByTenantIdOrderBySortOrderAscNombreAsc(tenantId)) {
-      String codigo = oficina.getCodigo();
+    String porPrefijo = null;
+    for (CoactivaOficina oficina : catalogo) {
+      if (!oficina.isActivo()) {
+        continue;
+      }
+      String codigo = CoactivaTexto.claveNombre(oficina.getCodigo().replace('_', ' '));
       String nombre = CoactivaTexto.claveNombre(oficina.getNombre());
-      if (clave.equals(codigo) || clave.contains(codigo) || clave.contains(nombre)) {
-        return codigo;
+      if (clave.equals(codigo) || clave.equals(nombre)) {
+        return oficina.getCodigo();
+      }
+      if (porPrefijo == null && clave.length() >= 4
+          && (nombre.startsWith(clave + " ") || codigo.startsWith(clave + " ")
+              || contienePalabra(clave, nombre) || contienePalabra(clave, codigo))) {
+        porPrefijo = oficina.getCodigo();
       }
     }
-    return CoactivaTexto.truncate(clave.replace(' ', '_'), 32);
+    return porPrefijo;
+  }
+
+  private static boolean contienePalabra(String frase, String palabra) {
+    return palabra.length() >= 4 && (" " + frase + " ").contains(" " + palabra + " ");
   }
 
   private List<OficinaItem> listOficinas(UUID tenantId) {

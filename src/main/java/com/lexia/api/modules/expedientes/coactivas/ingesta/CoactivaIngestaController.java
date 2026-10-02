@@ -65,7 +65,7 @@ public class CoactivaIngestaController {
     return actas.crearManual(request);
   }
 
-  @GetMapping("/actas/{id}")
+  @GetMapping({"/actas/{id}", "/actas/{id}/borrador"})
   public ActaDetalle detalleActa(@PathVariable UUID id) {
     return actas.detalle(id);
   }

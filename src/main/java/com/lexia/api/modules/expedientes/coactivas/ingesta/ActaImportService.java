@@ -10,6 +10,7 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficina;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService;
@@ -507,12 +508,13 @@ public class ActaImportService {
     Map<String, Long> conteos =
         lista.stream()
             .collect(Collectors.groupingBy(CoactivaActaItem::getEstadoMatch, LinkedHashMap::new, Collectors.counting()));
+    Map<String, CoactivaOficina> oficinas = delegados.oficinasPorCodigo(tenantId);
     return new ActaDetalle(
         toResumen(acta),
         acta.getEntregadoPor(),
         acta.getRecibidoPor(),
         acta.getObservaciones(),
-        lista.stream().map(ActaImportService::toDto).toList(),
+        lista.stream().map(i -> toDto(i, oficinas)).toList(),
         conteos,
         advertencias);
   }
@@ -535,7 +537,8 @@ public class ActaImportService {
         a.getConfirmadaAt());
   }
 
-  private static ActaItemDto toDto(CoactivaActaItem i) {
+  private static ActaItemDto toDto(CoactivaActaItem i, Map<String, CoactivaOficina> oficinas) {
+    CoactivaOficina oficina = i.getOficinaCodigo() == null ? null : oficinas.get(i.getOficinaCodigo());
     return new ActaItemDto(
         i.getId(),
         i.getFila(),
@@ -552,6 +555,8 @@ public class ActaImportService {
         i.getFojas(),
         i.getExpedienteId(),
         i.getEstadoMatch(),
-        i.getErrores());
+        i.getErrores(),
+        oficina == null ? null : oficina.getId(),
+        oficina == null ? null : oficina.getNombre());
   }
 }

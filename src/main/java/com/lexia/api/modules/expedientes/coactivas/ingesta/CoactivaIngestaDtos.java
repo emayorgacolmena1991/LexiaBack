@@ -47,7 +47,9 @@ public final class CoactivaIngestaDtos {
       Integer fojas,
       UUID expedienteId,
       String estadoMatch,
-      String errores) {}
+      String errores,
+      UUID oficinaId,
+      String oficinaNombre) {}
 
   public record ActaDetalle(
       ActaResumen acta,
