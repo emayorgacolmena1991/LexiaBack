@@ -233,6 +233,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
           HttpResponse<String> res = enviar(construirBodyCapturaBiess(modelo, texto));
           int status = res.statusCode();
           if (status == 200) {
+            LOG.info("Claude captura BIESS modelo={} respuesta cruda: {}", modelo, res.body());
             DatosBiessMinuta data =
                 leerToolUse(objectMapper.readTree(res.body()), DatosBiessMinuta.class);
             if (data != null) {
@@ -277,8 +278,14 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         }) {
       props
           .putObject(field)
-          .put("type", "number")
-          .put("description", "Cifra de " + field + ". Omite el campo si no consta.");
+          .put("type", "string")
+          .put(
+              "description",
+              "Valor de "
+                  + field
+                  + " tal como aparece en el texto, con unidades y separadores (ej. \"25 años\","
+                  + " \"8,69 %\", \"85.000,50\"). Cadena vacía si no consta.");
+      required.add(field);
     }
     props
         .putObject("apoderado")
@@ -289,7 +296,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
     body.put("max_tokens", 512);
-    body.put("system", actos.visionPrompt());
+    body.put("system", actos.capturaBiessPrompt());
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", CAPTURA_BIESS_TOOL_NAME);
     tool.put(
@@ -317,7 +324,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     variables.put("type", "object");
     ObjectNode varProps = variables.putObject("properties");
     ArrayNode requiredVars = variables.putArray("required");
-    for (String field : schemaActo.campos()) {
+    for (String field : schemaActo.camposIa()) {
       varProps
           .putObject(field)
           .put("type", "string")

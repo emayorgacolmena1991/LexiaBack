@@ -47,18 +47,21 @@ lexia:
       en el texto, asígnale el valor null. No redactes cláusulas, minutas ni contratos:
       el documento lo arma la plantilla .docx. Responde ÚNICAMENTE en formato JSON válido
       {"acto":"${tipoActo}","variables":{...}} sin markdown ni texto adicional.
-    PROMPT_BIESS_VISION: |
-      Analiza la captura de pantalla del sistema BIESS provista. Localiza la sección
-      "DATOS APROBADOS PARA DESEMBOLSO" y extrae numéricamente los siguientes campos.
-      Devuelve ÚNICAMENTE el objeto JSON sin bloques de código ni texto adicional:
-      - monto_aprobado (number)
-      - plazo_aprobado (number, en meses)
-      - cuota_aprobada (number)
-      - tasa_efectiva (number)
-      - valor_reposicion (number)
-      - porcentaje_valor_financiado (number)
-      - apoderado (string, nombre del apoderado especial del BIESS, o null)
-      Si un campo no aparece, usa null. No inventes ni calcules valores.
+    PROMPT_BIESS_CAPTURA: |
+      Recibes el texto extraído por OCR de la pantalla DATOS APROBADOS PARA DESEMBOLSO,
+      en líneas 'etiqueta: valor'. Extrae monto, tasa, plazo, cuota y apoderado tal como
+      aparecen. Puede haber errores de OCR.
+      Campos (todos texto, copiados tal cual con unidades y separadores, p. ej. "25 años",
+      "8,69 %", "85.000,50"):
+      - monto_aprobado
+      - plazo_aprobado
+      - cuota_aprobada
+      - tasa_efectiva
+      - valor_reposicion
+      - porcentaje_valor_financiado
+      - apoderado (nombre del apoderado especial del BIESS)
+      Si un campo no consta, usa cadena vacía. No inventes ni calcules valores.
+      Responde únicamente con el objeto JSON (o invocando la herramienta indicada).
     PROMPT_COMPRAVENTA_BIESS: |
       Eres un abogado notarial experto procesando un expediente de escrituración BIESS en ${canton}.
       Analiza el conjunto de textos OCR del expediente provistos en <expediente_ocr>.

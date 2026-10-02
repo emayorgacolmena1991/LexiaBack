@@ -20,6 +20,8 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaI
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ParrafoEditado;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.PreviewMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.VariablesMinutaResponse;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta.CampoPlantilla;
+import com.lexia.api.modules.expedientes.minutas.ExpedienteVariablesService.Origenes;
 import com.lexia.api.modules.expedientes.minutas.ExpedienteVariablesService.VariablesConsolidadas;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraft;
 import com.lexia.api.modules.expedientes.escrituracion.MinutaDraftRepository;
@@ -38,12 +40,14 @@ import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -85,13 +89,10 @@ public class MinutaGenerationService {
    * editado (junto con sus tags alias en la plantilla).
    */
   static final List<String> TAGS_BIESS =
-      List.of(
-          "monto_prestamo",
-          "monto_prestamo_letras",
-          "tasa_interes_inicial",
-          "plazo_credito",
-          "cuota_credito",
-          "apoderado_biess");
+      Stream.concat(
+              Arrays.stream(CampoPlantilla.values()).map(CampoPlantilla::tag),
+              Stream.of("monto_prestamo_letras"))
+          .toList();
 
   public MinutaGenerationService(
       AuthorizationService authorization,
@@ -150,14 +151,19 @@ public class MinutaGenerationService {
 
     Map<String, String> overrides =
         draft == null ? Map.of() : variablesService.leerOverrides(draft.getOverrides());
-    MinutaViviendaData base = draft == null ? null : loadData(draft);
+    MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, loadData(draft));
     if (base == null) {
       base = new MinutaViviendaData();
       completarDesdeConsolidado(tenantId, caseId, base);
     }
-    MinutaViviendaData data =
-        variablesService.fusionar(base, datosBiess.cargar(caseId, tenantId), overrides);
-    return respuestaVariables(draft, descriptor, variablesService.consolidar(descriptor, data));
+    DatosBiessMinuta biess = datosBiess.cargar(caseId, tenantId);
+    MinutaViviendaData data = variablesService.fusionar(base, biess, overrides);
+    return respuestaVariables(
+        draft,
+        descriptor,
+        variablesService.consolidar(descriptor, data),
+        variablesService.origenes(descriptor, base, biess, overrides),
+        biess);
   }
 
   /**
@@ -181,7 +187,8 @@ public class MinutaGenerationService {
     MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
 
     MinutaDraft draft = ultimoDraft(file, tenantId, kind);
-    MinutaViviendaData base = draft == null ? null : loadData(draft);
+    MinutaViviendaData renderizado = draft == null ? null : loadData(draft);
+    MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, renderizado);
     if (draft == null) {
       base = datosBase(tenantId, caseId, legalCase, null, product, kind);
       draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
@@ -191,18 +198,21 @@ public class MinutaGenerationService {
     }
 
     Map<String, String> overrides = variablesService.leerOverrides(draft.getOverrides());
+    variablesService.quitarOverrides(overrides, request == null ? null : request.restaurar());
     overrides.putAll(
         variablesService.normalizarOverrides(descriptor, request == null ? null : request.variables()));
+    // La tienda BIESS solo guarda la captura: los cambios manuales viven en los overrides.
     DatosBiessMinuta biessGuardado = datosBiess.cargar(caseId, tenantId);
     MinutaViviendaData data = variablesService.fusionar(base, biessGuardado, overrides);
 
-    byte[] docx = renderizarDataDriven(draft, descriptor, base, data);
+    byte[] docx =
+        renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
     Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
     persistData(draft, data);
+    draft.setDatosExtraidos(json(base));
     draft.setOverrides(variablesService.escribirOverrides(overrides));
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
-    datosBiess.guardar(tenantId, caseId, biessDesde(data, biessGuardado));
 
     VariablesConsolidadas consolidadas = variablesService.consolidar(descriptor, data);
     byte[] pdfBytes = pdf.toPdf(docx);
@@ -215,7 +225,14 @@ public class MinutaGenerationService {
         consolidadas.variablesPendientes().size(),
         pdfBytes.length);
     return new PreviewMinuta(
-        draft.getId(), pdfBytes, respuestaVariables(draft, descriptor, consolidadas));
+        draft.getId(),
+        pdfBytes,
+        respuestaVariables(
+            draft,
+            descriptor,
+            consolidadas,
+            variablesService.origenes(descriptor, base, biessGuardado, overrides),
+            biessGuardado));
   }
 
   public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
@@ -250,7 +267,11 @@ public class MinutaGenerationService {
   }
 
   private VariablesMinutaResponse respuestaVariables(
-      MinutaDraft draft, MinutaTemplateDescriptor descriptor, VariablesConsolidadas c) {
+      MinutaDraft draft,
+      MinutaTemplateDescriptor descriptor,
+      VariablesConsolidadas c,
+      Origenes origenes,
+      DatosBiessMinuta biess) {
     return new VariablesMinutaResponse(
         draft == null ? null : draft.getId(),
         descriptor.templateKind(),
@@ -263,23 +284,11 @@ public class MinutaGenerationService {
         c.completo(),
         draft == null || !StringUtils.hasText(draft.getStoragePath())
             ? null
-            : downloadUrl(draft.getId()));
-  }
-
-  /** Datos del crédito del JSON final, conservando las cifras BIESS que no viven en la minuta. */
-  private static DatosBiessMinuta biessDesde(MinutaViviendaData data, DatosBiessMinuta previo) {
-    DatosBiessMinuta actual = DatosBiessMinuta.from(data);
-    if (previo == null) {
-      return actual;
-    }
-    return new DatosBiessMinuta(
-        actual.monto(),
-        actual.tasa(),
-        actual.plazo(),
-        actual.cuota(),
-        previo.valorReposicion(),
-        previo.porcentajeValorFinanciado(),
-        actual.apoderado());
+            : downloadUrl(draft.getId()),
+        origenes.origenes(),
+        origenes.valoresExtraidos(),
+        biess == null || biess.isEmpty() ? null : biess,
+        CampoPlantilla.mapa());
   }
 
   private MinutaDraft ultimoDraft(WritingFile file, UUID tenantId, String kind) {
@@ -468,16 +477,10 @@ public class MinutaGenerationService {
       DatosBiessMinuta biess,
       byte[] docxActual) {
     Map<String, Object> antes = renderer.valoresPorTag(descriptor, data);
-    String montoAnterior = DatosBiessMinuta.from(data).monto();
-    data.setMontoPrestamo(biess.monto());
-    data.setTasaInteresInicial(biess.tasa());
-    data.setPlazoCredito(biess.plazo());
-    data.setCuotaCredito(biess.cuota());
-    data.setApoderadoBiess(biess.apoderado());
-    if (!montoAnterior.equals(biess.monto())) {
-      // Evita un monto en letras que ya no coincide con la cifra; queda como dato pendiente.
-      data.setMontoPrestamoLetras("");
+    for (CampoPlantilla campo : CampoPlantilla.values()) {
+      campo.asignar(data, campo.valor(biess));
     }
+    ExpedienteVariablesService.letrasDesdeMonto(data);
     return draft.isEditedManually()
         ? contenido.actualizarValores(
             docxActual,
@@ -746,6 +749,7 @@ public class MinutaGenerationService {
     MinutaViviendaData data = extraerConIa(legalCase, sessionIdHint, productCode, templateKind);
     completarDesdeConsolidado(tenantId, caseId, data);
     aplicarDatosBiessGuardados(tenantId, caseId, data);
+    ExpedienteVariablesService.letrasDesdeMonto(data);
     return data;
   }
 
@@ -818,22 +822,11 @@ public class MinutaGenerationService {
     if (guardados == null) {
       return;
     }
-    if (StringUtils.hasText(guardados.monto())
-        && !guardados.monto().equals(DatosBiessMinuta.from(data).monto())) {
-      data.setMontoPrestamo(guardados.monto());
-      data.setMontoPrestamoLetras("");
-    }
-    if (StringUtils.hasText(guardados.tasa())) {
-      data.setTasaInteresInicial(guardados.tasa());
-    }
-    if (StringUtils.hasText(guardados.plazo())) {
-      data.setPlazoCredito(guardados.plazo());
-    }
-    if (StringUtils.hasText(guardados.cuota())) {
-      data.setCuotaCredito(guardados.cuota());
-    }
-    if (StringUtils.hasText(guardados.apoderado())) {
-      data.setApoderadoBiess(guardados.apoderado());
+    for (CampoPlantilla campo : CampoPlantilla.values()) {
+      String valor = campo.valor(guardados);
+      if (StringUtils.hasText(valor)) {
+        campo.asignar(data, valor);
+      }
     }
   }
 
@@ -886,11 +879,30 @@ public class MinutaGenerationService {
   }
 
   private void persistData(MinutaDraft draft, MinutaViviendaData data) {
+    draft.setPayload(json(data));
+  }
+
+  private String json(MinutaViviendaData data) {
     try {
-      draft.setPayload(objectMapper.writeValueAsString(data));
+      return objectMapper.writeValueAsString(data);
     } catch (JsonProcessingException e) {
       throw ApiException.badRequest("No se pudieron guardar los datos de la minuta.");
     }
+  }
+
+  /**
+   * Capa IA + expediente del borrador. Los borradores previos a V55 no la tienen y usan el payload
+   * renderizado ({@code fallback}): sus overrides ya están mezclados ahí.
+   */
+  private MinutaViviendaData datosExtraidos(MinutaDraft draft, MinutaViviendaData fallback) {
+    if (StringUtils.hasText(draft.getDatosExtraidos())) {
+      try {
+        return objectMapper.readValue(draft.getDatosExtraidos(), MinutaViviendaData.class);
+      } catch (IOException e) {
+        LOG.warn("Datos extraídos ilegibles draft={}: {}", draft.getId(), e.getMessage());
+      }
+    }
+    return fallback;
   }
 
   private MinutaViviendaData loadData(MinutaDraft draft) {

@@ -28,7 +28,7 @@ class ActoVariableCatalogTest {
         java.util.Map.of(
             ActoVariableCatalog.PROMPT_EXTRACCION_ACTO,
             "Extrae variables del acto '${tipoActo}'. Si no consta, null. Solo JSON.",
-            ActoVariableCatalog.PROMPT_BIESS_VISION,
+            ActoVariableCatalog.PROMPT_BIESS_CAPTURA,
             "Sección DATOS APROBADOS PARA DESEMBOLSO. monto_aprobado plazo_aprobado cuota_aprobada tasa_efectiva valor_reposicion porcentaje_valor_financiado"));
     catalog = new ActoVariableCatalog(prompts);
   }
@@ -66,8 +66,8 @@ class ActoVariableCatalogTest {
   }
 
   @Test
-  void visionPideMetricasDeDesembolso() {
-    String prompt = catalog.visionPrompt();
+  void capturaPideMetricasDeDesembolso() {
+    String prompt = catalog.capturaBiessPrompt();
     assertTrue(prompt.contains("DATOS APROBADOS PARA DESEMBOLSO"));
     assertTrue(prompt.contains("monto_aprobado"));
     assertTrue(prompt.contains("cuota_aprobada"));
@@ -108,7 +108,7 @@ class ActoVariableCatalogTest {
   void ymlDeclaraLosDosPrompts() throws Exception {
     String yml = Files.readString(Path.of("src/main/resources/application.yml"));
     assertTrue(yml.contains("PROMPT_EXTRACCION_ACTO:"));
-    assertTrue(yml.contains("PROMPT_BIESS_VISION:"));
+    assertTrue(yml.contains("PROMPT_BIESS_CAPTURA:"));
     assertTrue(yml.contains("DATOS APROBADOS PARA DESEMBOLSO"));
     assertTrue(yml.contains("monto_aprobado"));
     assertTrue(yml.contains("No redactes cláusulas"));

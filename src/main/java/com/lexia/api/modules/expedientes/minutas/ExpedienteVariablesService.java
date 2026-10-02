@@ -7,12 +7,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ValorExtraido;
+import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta.CampoPlantilla;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -33,6 +36,15 @@ public class ExpedienteVariablesService {
 
   private static final Logger LOG = LoggerFactory.getLogger(ExpedienteVariablesService.class);
   private static final TypeReference<Map<String, String>> MAPA = new TypeReference<>() {};
+
+  public static final String ORIGEN_IA = "IA";
+  public static final String ORIGEN_BIESS = "BIESS";
+  public static final String ORIGEN_MANUAL = "MANUAL";
+  public static final String ORIGEN_AUTO = "AUTO";
+
+  static final String MONTO_LETRAS = "monto_prestamo_letras";
+
+  private static final Locale ES = Locale.forLanguageTag("es");
 
   private final ActoVariableCatalog catalogo;
   private final DocxMinutaRenderer renderer;
@@ -60,30 +72,29 @@ public class ExpedienteVariablesService {
     return List.copyOf(campos);
   }
 
-  /** Fusión con precedencia LLM &lt; BIESS &lt; overrides. Devuelve una copia; no muta {@code llm}. */
+  /**
+   * Fusión con precedencia LLM &lt; BIESS &lt; overrides. Devuelve una copia; no muta {@code llm}.
+   * {@code monto_prestamo_letras} es derivado: siempre se calcula desde la cifra final y no admite
+   * valor del LLM ni override manual.
+   */
   public MinutaViviendaData fusionar(
       MinutaViviendaData llm, DatosBiessMinuta biess, Map<String, String> overrides) {
     ObjectNode json = mapper.valueToTree(llm == null ? new MinutaViviendaData() : llm);
     if (biess != null) {
-      String montoAnterior = json.path("monto_prestamo").asText("");
-      pisarSiHayValor(json, "monto_prestamo", biess.monto());
-      pisarSiHayValor(json, "tasa_interes_inicial", biess.tasa());
-      pisarSiHayValor(json, "plazo_credito", biess.plazo());
-      pisarSiHayValor(json, "cuota_credito", biess.cuota());
-      pisarSiHayValor(json, "apoderado_biess", biess.apoderado());
-      if (StringUtils.hasText(biess.monto())
-          && !normalizar(montoAnterior).equals(normalizar(biess.monto()))
-          && (overrides == null || !overrides.containsKey("monto_prestamo_letras"))) {
-        // Un monto en letras que ya no corresponde a la cifra queda pendiente.
-        json.set("monto_prestamo_letras", TextNode.valueOf(""));
+      for (CampoPlantilla campo : CampoPlantilla.values()) {
+        pisarSiHayValor(json, campo.tag(), campo.valor(biess));
       }
     }
     if (overrides != null) {
       for (Map.Entry<String, String> e : overrides.entrySet()) {
         String campo = MinutaTagAliases.canonico(e.getKey());
-        json.set(campo, TextNode.valueOf(e.getValue() == null ? "" : e.getValue().trim()));
+        if (!MONTO_LETRAS.equals(campo)) {
+          json.set(campo, TextNode.valueOf(e.getValue() == null ? "" : e.getValue().trim()));
+        }
       }
     }
+    json.set(
+        MONTO_LETRAS, TextNode.valueOf(letras(json.path(CampoPlantilla.MONTO.tag()).asText(""))));
     try {
       return mapper.treeToValue(json, MinutaViviendaData.class);
     } catch (JsonProcessingException ex) {
@@ -115,8 +126,60 @@ public class ExpedienteVariablesService {
   }
 
   /**
-   * Normaliza el body del preview: solo tags del acto (canónicos o alias), números a texto plano.
-   * Devuelve los descartados para registrarlos.
+   * Capa de la que sale cada variable del acto (MANUAL &gt; BIESS &gt; IA; sin entrada si no tiene
+   * valor) y, para las manuales, el valor extraído al que vuelve "Restaurar".
+   *
+   * @param extraidos capa IA + expediente, sin BIESS ni overrides
+   */
+  public Origenes origenes(
+      MinutaTemplateDescriptor descriptor,
+      MinutaViviendaData extraidos,
+      DatosBiessMinuta biess,
+      Map<String, String> overrides) {
+    Map<String, Object> sinOverrides = fusionar(extraidos, biess, Map.of()).toTemplateMap();
+    Map<String, String> origenes = new LinkedHashMap<>();
+    Map<String, ValorExtraido> valores = new LinkedHashMap<>();
+    Map<String, Object> finales =
+        overrides == null || overrides.isEmpty()
+            ? sinOverrides
+            : fusionar(extraidos, biess, overrides).toTemplateMap();
+    for (String campo : camposDelActo(descriptor)) {
+      if (MONTO_LETRAS.equals(campo)) {
+        if (!MinutaViviendaData.isMissing(finales.get(campo))) {
+          origenes.put(campo, ORIGEN_AUTO);
+        }
+        continue;
+      }
+      Object valor = sinOverrides.get(campo);
+      String origen =
+          MinutaViviendaData.isMissing(valor)
+              ? null
+              : StringUtils.hasText(valorBiess(biess, campo)) ? ORIGEN_BIESS : ORIGEN_IA;
+      if (overrides != null && overrides.containsKey(campo)) {
+        origenes.put(campo, ORIGEN_MANUAL);
+        valores.put(campo, new ValorExtraido(origen == null ? "" : valor.toString(), origen));
+      } else if (origen != null) {
+        origenes.put(campo, origen);
+      }
+    }
+    return new Origenes(origenes, valores);
+  }
+
+  /** Quita los overrides de {@code tags} (canónicos o alias) para volver al valor extraído. */
+  public void quitarOverrides(Map<String, String> overrides, List<String> tags) {
+    if (tags == null) {
+      return;
+    }
+    for (String tag : tags) {
+      if (tag != null) {
+        overrides.remove(MinutaTagAliases.canonico(tag.trim()));
+      }
+    }
+  }
+
+  /**
+   * Normaliza el body del preview: solo tags editables del acto (canónicos o alias), números a texto
+   * plano. Las letras del monto son derivadas y se descartan.
    */
   public Map<String, String> normalizarOverrides(
       MinutaTemplateDescriptor descriptor, Map<String, Object> entrada) {
@@ -125,6 +188,7 @@ public class ExpedienteVariablesService {
       return out;
     }
     Set<String> permitidos = new LinkedHashSet<>(camposDelActo(descriptor));
+    permitidos.remove(MONTO_LETRAS);
     List<String> descartados = new ArrayList<>();
     for (Map.Entry<String, Object> e : entrada.entrySet()) {
       String campo = MinutaTagAliases.canonico(e.getKey() == null ? "" : e.getKey().trim());
@@ -150,7 +214,9 @@ public class ExpedienteVariablesService {
     }
     try {
       Map<String, String> leidos = mapper.readValue(json, MAPA);
-      return leidos == null ? new LinkedHashMap<>() : new LinkedHashMap<>(leidos);
+      Map<String, String> out = leidos == null ? new LinkedHashMap<>() : new LinkedHashMap<>(leidos);
+      out.keySet().removeIf(k -> MONTO_LETRAS.equals(MinutaTagAliases.canonico(k)));
+      return out;
     } catch (JsonProcessingException e) {
       LOG.warn("Overrides de minuta ilegibles: {}", e.getMessage());
       return new LinkedHashMap<>();
@@ -165,14 +231,27 @@ public class ExpedienteVariablesService {
     }
   }
 
+  private static String valorBiess(DatosBiessMinuta biess, String campo) {
+    return CampoPlantilla.porTag(campo).map(c -> c.valor(biess)).orElse(null);
+  }
+
   private static void pisarSiHayValor(ObjectNode json, String campo, String valor) {
     if (StringUtils.hasText(valor)) {
       json.set(campo, TextNode.valueOf(valor.trim()));
     }
   }
 
-  private static String normalizar(String s) {
-    return s == null ? "" : s.replaceAll("[^0-9.]", "");
+  /** Recalcula las letras desde la cifra (flujos que no pasan por {@link #fusionar}). */
+  public static void letrasDesdeMonto(MinutaViviendaData data) {
+    data.setMontoPrestamoLetras(letras(data.getMontoPrestamo()));
+  }
+
+  /**
+   * Solo las palabras ("OCHENTA Y CINCO MIL"): las plantillas ya escriben "(Son: … Dólares de los
+   * Estados Unidos de América)" alrededor del tag.
+   */
+  static String letras(String monto) {
+    return NumeroALetras.monto(monto).toUpperCase(ES);
   }
 
   private static String aTexto(Object valor) {
@@ -200,4 +279,11 @@ public class ExpedienteVariablesService {
       return variablesPendientes.isEmpty();
     }
   }
+
+  /**
+   * @param origenes tag → IA | BIESS | MANUAL (solo los que tienen valor o son manuales).
+   * @param valoresExtraidos tag manual → valor sin override.
+   */
+  public record Origenes(
+      Map<String, String> origenes, Map<String, ValorExtraido> valoresExtraidos) {}
 }

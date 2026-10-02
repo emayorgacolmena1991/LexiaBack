@@ -19,7 +19,10 @@ import org.springframework.util.StringUtils;
 public class ActoVariableCatalog {
 
   public static final String PROMPT_EXTRACCION_ACTO = "PROMPT_EXTRACCION_ACTO";
-  public static final String PROMPT_BIESS_VISION = "PROMPT_BIESS_VISION";
+  public static final String PROMPT_BIESS_CAPTURA = "PROMPT_BIESS_CAPTURA";
+
+  /** Variables que calcula el backend (no se piden al LLM). */
+  public static final Set<String> CALCULADOS = Set.of("monto_prestamo_letras");
 
   private static final List<String> DEFAULT_CAMPOS =
       List.of(
@@ -436,7 +439,7 @@ public class ActoVariableCatalog {
     String base =
         prompts.resolvePrompt(PROMPT_EXTRACCION_ACTO, Map.of("tipoActo", schema.codigo()));
     StringBuilder keys = new StringBuilder();
-    for (String campo : schema.campos()) {
+    for (String campo : schema.camposIa()) {
       keys.append("- ").append(campo).append('\n');
     }
     return base
@@ -444,8 +447,8 @@ public class ActoVariableCatalog {
         + keys;
   }
 
-  public String visionPrompt() {
-    return prompts.getRawPrompt(PROMPT_BIESS_VISION);
+  public String capturaBiessPrompt() {
+    return prompts.getRawPrompt(PROMPT_BIESS_CAPTURA);
   }
 
   public Map<String, List<String>> esquemas() {
@@ -477,6 +480,11 @@ public class ActoVariableCatalog {
 
     public ActoVariableSchema {
       campos = campos == null ? List.of() : List.copyOf(campos);
+    }
+
+    /** Campos que se piden al LLM: excluye los que el backend calcula. */
+    public List<String> camposIa() {
+      return campos.stream().filter(c -> !CALCULADOS.contains(c)).toList();
     }
   }
 }

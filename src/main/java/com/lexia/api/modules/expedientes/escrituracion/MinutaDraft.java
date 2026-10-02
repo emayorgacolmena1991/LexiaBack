@@ -45,6 +45,11 @@ public class MinutaDraft {
   @Column(columnDefinition = "jsonb")
   private String overrides;
 
+  /** Capa IA + expediente, sin BIESS ni overrides (origen de cada variable y "Restaurar"). */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "datos_extraidos", columnDefinition = "jsonb")
+  private String datosExtraidos;
+
   @Column(name = "edited_manually", nullable = false)
   private boolean editedManually;
 
@@ -108,6 +113,15 @@ public class MinutaDraft {
 
   public void setOverrides(String overrides) {
     this.overrides = overrides;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getDatosExtraidos() {
+    return datosExtraidos;
+  }
+
+  public void setDatosExtraidos(String datosExtraidos) {
+    this.datosExtraidos = datosExtraidos;
     this.updatedAt = Instant.now();
   }
 

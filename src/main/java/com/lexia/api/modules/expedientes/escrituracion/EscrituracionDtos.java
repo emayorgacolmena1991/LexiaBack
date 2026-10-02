@@ -143,11 +143,26 @@ public final class EscrituracionDtos {
       List<String> variablesPendientes,
       java.util.Map<String, String> etiquetas,
       boolean completo,
-      String downloadUrl) {}
+      String downloadUrl,
+      java.util.Map<String, String> origenes,
+      java.util.Map<String, ValorExtraido> valoresExtraidos,
+      DatosBiessMinuta datosBiess,
+      java.util.Map<String, String> camposBiess) {}
 
-  /** TICKET-INT-102 [C.2]: variables corregidas/llenadas en el panel; solo las que cambian. */
+  /**
+   * Valor al que vuelve "Restaurar" un campo corregido a mano.
+   *
+   * @param origen IA | BIESS, o {@code null} si no hay valor extraído
+   */
+  public record ValorExtraido(String valor, String origen) {}
+
+  /**
+   * TICKET-INT-102 [C.2]: variables corregidas/llenadas en el panel (solo las que cambian) y tags
+   * cuyo override manual se elimina para volver al valor extraído (IA o BIESS).
+   */
   @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
-  public record PreviewMinutaRequest(java.util.Map<String, Object> variables) {}
+  public record PreviewMinutaRequest(
+      java.util.Map<String, Object> variables, List<String> restaurar) {}
 
   /**
    * Dónde retomar el wizard si el usuario sale del flujo.

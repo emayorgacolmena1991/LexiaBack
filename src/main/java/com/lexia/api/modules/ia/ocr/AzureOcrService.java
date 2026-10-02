@@ -3,7 +3,7 @@ package com.lexia.api.modules.ia.ocr;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
-/** Módulo 1: Azure Document Intelligence — solo texto plano OCR ({@code prebuilt-read}). */
+/** Módulo 1: Azure Document Intelligence — texto plano ({@code prebuilt-read}) o layout. */
 @Service
 public class AzureOcrService {
 
@@ -25,5 +25,10 @@ public class AzureOcrService {
       return "";
     }
     return content.asText("");
+  }
+
+  /** {@code analyzeResult} de {@code prebuilt-layout}: content, pages[].lines y tables. */
+  public JsonNode analizarLayout(byte[] bytesArchivo, String mimeType) {
+    return client.analyze("prebuilt-layout", bytesArchivo, mimeType);
   }
 }

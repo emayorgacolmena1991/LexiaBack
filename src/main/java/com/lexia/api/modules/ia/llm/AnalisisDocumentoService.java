@@ -37,7 +37,7 @@ public interface AnalisisDocumentoService {
 
   /**
    * Captura de pantalla BIESS ("DATOS APROBADOS PARA DESEMBOLSO"): monto, plazo, cuota, tasa,
-   * valor de reposición, porcentaje financiado y apoderado. Prompt: {@code PROMPT_BIESS_VISION}.
+   * valor de reposición, porcentaje financiado y apoderado. Prompt: {@code PROMPT_BIESS_CAPTURA}.
    * Default: no soportado.
    */
   default ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
