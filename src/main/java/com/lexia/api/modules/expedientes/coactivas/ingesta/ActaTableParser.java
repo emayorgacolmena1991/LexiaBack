@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.EnumSet;
 import java.util.Set;
 import org.apache.poi.ss.usermodel.Cell;
@@ -101,6 +103,18 @@ public final class ActaTableParser {
       grid.add(cells);
     }
     return List.of(grid);
+  }
+
+  private static final Pattern UEC_EN_TEXTO =
+      Pattern.compile("(?i)\\bU\\.?\\s*E\\.?\\s*C\\b\\.?[:\\s-]+([\\p{L}]{4,})");
+
+  /** Primera localidad junto a la etiqueta UEC cuando la columna no vino en la tabla. */
+  public static String uecEnTexto(String texto) {
+    if (texto == null || texto.isBlank()) {
+      return null;
+    }
+    Matcher matcher = UEC_EN_TEXTO.matcher(texto);
+    return matcher.find() ? matcher.group(1) : null;
   }
 
   /** Tablas del {@code analyzeResult} de Azure Document Intelligence (modelo prebuilt-layout). */

@@ -100,5 +100,29 @@ class ActaIngestaTextoTest {
     assertEquals("GUAYAQUIL", CoactivaDelegadoService.resolverCodigo("GYE", catalogo));
     assertNull(CoactivaDelegadoService.resolverCodigo("Johao Perez", catalogo));
     assertNull(CoactivaDelegadoService.resolverCodigo("  ", catalogo));
+    assertEquals("PORTOVIEJO", CoactivaDelegadoService.resolverCodigo("PORTOVIEJO", conAgencias(tenant, catalogo)));
+    assertEquals("BAHIA", CoactivaDelegadoService.resolverCodigo("BAHIA", conAgencias(tenant, catalogo)));
+    assertEquals("CALCETA", CoactivaDelegadoService.resolverCodigo("CALCETA", conAgencias(tenant, catalogo)));
+    assertNull(ActaImportService.oficinaDeFila(null, "GUAYAQUIL"));
+    assertNull(ActaImportService.oficinaDeFila("  ", "GUAYAQUIL"));
+    assertEquals("BAHIA", ActaImportService.oficinaDeFila("Bahía", "BAHIA"));
+    assertEquals("CALCETA", ActaImportService.oficinaDeFila("CALCETA", null));
+  }
+
+  @Test
+  void leeUecEscritaJuntoALaEtiqueta() {
+    assertEquals("PORTOVIEJO", ActaTableParser.uecEnTexto("ACTA DE ENTREGA\nUEC: PORTOVIEJO\nOFICINA BAHIA"));
+    assertEquals("PORTOVIEJO", ActaTableParser.uecEnTexto("U.E.C. PORTOVIEJO"));
+    assertNull(ActaTableParser.uecEnTexto("OFICINA GUAYAQUIL"));
+  }
+
+  private static List<CoactivaOficina> conAgencias(UUID tenant, List<CoactivaOficina> base) {
+    return List.of(
+        base.get(0),
+        base.get(1),
+        base.get(2),
+        CoactivaOficina.create(tenant, "PORTOVIEJO", "Portoviejo", "Manabí", 4),
+        CoactivaOficina.create(tenant, "BAHIA", "Bahía", "Manabí", 5),
+        CoactivaOficina.create(tenant, "CALCETA", "Calceta", "Manabí", 6));
   }
 }

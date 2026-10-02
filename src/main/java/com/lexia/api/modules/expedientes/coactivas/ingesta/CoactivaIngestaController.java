@@ -53,10 +53,9 @@ public class CoactivaIngestaController {
   public ActaDetalle importarActa(
       @RequestPart("file") MultipartFile file,
       @RequestParam(required = false) String tipo,
-      @RequestParam(required = false) String oficinaCodigo,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaActa,
       @RequestParam(required = false) String titulo) {
-    return actas.importar(file, tipo, oficinaCodigo, fechaActa, titulo);
+    return actas.importar(file, tipo, fechaActa, titulo);
   }
 
   @PostMapping(value = "/actas/manual", consumes = MediaType.APPLICATION_JSON_VALUE)

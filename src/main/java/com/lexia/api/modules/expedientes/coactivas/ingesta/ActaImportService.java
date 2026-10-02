@@ -97,8 +97,7 @@ public class ActaImportService {
   }
 
   @Transactional
-  public ActaDetalle importar(
-      MultipartFile file, String tipo, String oficinaCodigo, LocalDate fechaActa, String titulo) {
+  public ActaDetalle importar(MultipartFile file, String tipo, LocalDate fechaActa, String titulo) {
     authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
     AuthPrincipal principal = AuthContext.require();
     UUID tenantId = principal.tenantId();
@@ -108,6 +107,7 @@ public class ActaImportService {
     String nombre = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
     String fuente;
     List<List<List<String>>> tablas;
+    String textoDocumento = null;
     try {
       byte[] bytes = file.getBytes();
       if (nombre.endsWith(".xlsx") || nombre.endsWith(".xls")) {
@@ -126,6 +126,7 @@ public class ActaImportService {
         }
         JsonNode result = azure.analyze(LAYOUT_MODEL, bytes, file.getContentType());
         tablas = ActaTableParser.leerAzureLayout(result);
+        textoDocumento = result.path("content").asText("");
       } else {
         throw ApiException.badRequest("Formato de acta no soportado. Usa .xlsx, .xls, .csv o .pdf.");
       }
@@ -138,8 +139,8 @@ public class ActaImportService {
 
     ActaTableParser.Resultado resultado = ActaTableParser.interpretar(tablas);
     CoactivaActa acta = CoactivaActa.create(tenantId, normalizarTipo(tipo), fuente, principal.userId());
-    String uecFuente = resultado.uec() != null ? resultado.uec() : oficinaCodigo;
-    String oficina = delegados.resolverCodigoOficina(tenantId, uecFuente);
+    String uecTexto = resultado.uec() != null ? resultado.uec() : ActaTableParser.uecEnTexto(textoDocumento);
+    String oficina = delegados.resolverCodigoOficina(tenantId, uecTexto);
     acta.setCabecera(
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(titulo) == null ? file.getOriginalFilename() : titulo, 240),
         oficina,
@@ -148,7 +149,7 @@ public class ActaImportService {
         null,
         nombreUsuario(principal),
         null);
-    acta.setUecNombre(CoactivaTexto.truncate(CoactivaTexto.nombrePropio(resultado.uec()), 120));
+    acta.setUecNombre(CoactivaTexto.truncate(CoactivaTexto.nombrePropio(uecTexto), 120));
     actas.save(acta);
 
     CoactivaArchivo archivo = expedienteService.guardarArchivo(principal, file, CoactivaArchivo.ACTA);
@@ -157,7 +158,7 @@ public class ActaImportService {
 
     for (FilaActa fila : resultado.filas()) {
       CoactivaActaItem item = CoactivaActaItem.create(tenantId, acta.getId(), fila.fila());
-      aplicarDatos(tenantId, item, oficina, fila.oficina(), fila.operacion(), fila.juicio(), fila.deudor(),
+      aplicarDatos(tenantId, item, fila.oficina(), fila.operacion(), fila.juicio(), fila.deudor(),
           fila.cedula(), fila.etapa(), fila.fojas());
       items.save(item);
     }
@@ -381,7 +382,6 @@ public class ActaImportService {
       aplicarDatos(
           tenantId,
           item,
-          acta.getOficinaCodigo(),
           request.oficinaCodigo(),
           request.nroOperacion(),
           request.nroJuicio(),
@@ -408,7 +408,6 @@ public class ActaImportService {
   private void aplicarDatos(
       UUID tenantId,
       CoactivaActaItem item,
-      String oficinaActa,
       String oficina,
       String operacion,
       String juicio,
@@ -417,8 +416,7 @@ public class ActaImportService {
       String etapa,
       Integer fojas) {
     String juicioNorm = CoactivaTexto.normalizarJuicio(juicio);
-    String oficinaNorm =
-        CoactivaTexto.blankToNull(oficina) == null ? oficinaActa : delegados.resolverCodigoOficina(tenantId, oficina);
+    String oficinaNorm = oficinaDeFila(oficina, delegados.resolverCodigoOficina(tenantId, oficina));
     item.setDatos(
         oficinaNorm,
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(operacion), 40),
@@ -428,6 +426,18 @@ public class ActaImportService {
         CoactivaTexto.normalizarIdentificacion(cedula),
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(etapa), 160),
         fojas);
+  }
+
+  /** Oficina de la fila. Sin texto, null: no hereda la UEC ni un default del formulario. */
+  static String oficinaDeFila(String textoFila, String codigoResuelto) {
+    if (CoactivaTexto.blankToNull(textoFila) == null) {
+      return null;
+    }
+    if (codigoResuelto != null) {
+      return codigoResuelto;
+    }
+    String clave = CoactivaTexto.claveNombre(textoFila).replace(' ', '_');
+    return clave.isEmpty() ? null : CoactivaTexto.truncate(clave, 32);
   }
 
   /** Recalcula estado/errores de las filas no omitidas de un acta en borrador. */
