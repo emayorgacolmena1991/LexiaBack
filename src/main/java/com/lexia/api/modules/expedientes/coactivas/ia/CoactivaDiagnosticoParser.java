@@ -25,9 +25,24 @@ public final class CoactivaDiagnosticoParser {
        "etapa_procesal_detectada": "PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO",
        "documentos_identificados": [{"tipo": "PAGARE", "foja_inicio": 1, "foja_fin": 4, "presente": true}],
        "alertas_inconsistencias": ["motivo concreto"],
-       "datos_extraidos": {"juicio": "", "operacion": "", "deudor": "", "monto_mora": null},
+       "datos_extraidos": {
+         "juicio": null, "operacion": null, "deudor": null, "monto_mora": null,
+         "cedula_deudor_principal": null, "correo_notificacion_deudor": null,
+         "nombre_garante_solidario": null, "cedula_garante_solidario": null,
+         "nombre_depositario_judicial": null, "cedula_depositario_judicial": null,
+         "nombre_funcionario_coactiva": null, "nombre_gerente_general": null, "nombre_abogado_secretario": null,
+         "numero_resolucion_delegacion": null, "fecha_resolucion_delegacion": null,
+         "monto_deuda_total": null, "monto_honorarios": null, "cuenta_honorarios_abogado": null,
+         "banco_embargado": null,
+         "cuentas_embargadas": [{"numero_cuenta": null, "tipo": "CORRIENTE|AHORROS", "titular": "DEUDOR|GARANTE", "banco": null, "monto_retenido": null}],
+         "correo_estudio_juridico_externo": null, "correo_funcionario_coactiva": null, "correo_coactiva_institucional": null},
        "siguiente_accion_sugerida": "qué debe hacer el abogado"}
       No inventes documentos ni fojas que no estén en el texto. Si falta, presente=false y sin fojas.
+      En datos_extraidos copia solo valores que consten literalmente en el texto; si un dato no aparece usa null
+      (cuentas_embargadas: [] si no hay oficios de retención). No deduzcas, completes ni estimes valores.
+      Nombres sin títulos ni tratamientos (sin "señor", "Sr.", "Abg.", "Mgs.", "Ing."). Cédulas solo con dígitos.
+      Montos como número decimal sin símbolo ni separador de miles. Fechas tal como constan en el documento.
+      Correos solo si aparecen escritos en el expediente.
       """;
 
   private final ObjectMapper objectMapper;
@@ -209,7 +224,9 @@ public final class CoactivaDiagnosticoParser {
                 datos.put(e.getKey(), v.numberValue());
               } else if (v.isBoolean()) {
                 datos.put(e.getKey(), v.asBoolean());
-              } else if (!v.isContainerNode()) {
+              } else if (v.isContainerNode()) {
+                datos.put(e.getKey(), objectMapper.convertValue(v, Object.class));
+              } else {
                 datos.put(e.getKey(), v.asText());
               }
             });

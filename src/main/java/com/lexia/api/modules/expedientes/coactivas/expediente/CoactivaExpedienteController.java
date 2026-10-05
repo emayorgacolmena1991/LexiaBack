@@ -172,6 +172,12 @@ public class CoactivaExpedienteController {
     return service.obtenerAnalisis(id);
   }
 
+  @PostMapping("/expedientes/{id}/analisis")
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public AnalisisResponse reanalizar(@PathVariable UUID id) {
+    return service.reanalizar(id);
+  }
+
   @GetMapping("/archivos/{archivoId}")
   public ArchivoItem archivo(@PathVariable UUID archivoId) {
     return service.obtenerArchivo(archivoId);

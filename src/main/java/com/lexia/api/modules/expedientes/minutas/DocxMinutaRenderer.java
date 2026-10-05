@@ -6,7 +6,9 @@ import com.deepoove.poi.template.MetaTemplate;
 import com.lexia.api.common.api.ApiException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -14,6 +16,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.slf4j.Logger;
@@ -26,6 +33,10 @@ import org.springframework.stereotype.Service;
 public class DocxMinutaRenderer {
 
   private static final Logger LOG = LoggerFactory.getLogger(DocxMinutaRenderer.class);
+  private static final Pattern PARTE_TEXTO =
+      Pattern.compile("word/(document|header\\d*|footer\\d*|footnotes|endnotes)\\.xml");
+  private static final Pattern HIPERVINCULO =
+      Pattern.compile("<w:hyperlink\\b[^>]*>(.*?)</w:hyperlink>", Pattern.DOTALL);
 
   private final Map<String, List<String>> tagsPorPlantilla = new ConcurrentHashMap<>();
 
@@ -33,43 +44,55 @@ public class DocxMinutaRenderer {
     if (descriptor == null) {
       throw ApiException.badRequest("Descriptor de plantilla requerido.");
     }
+    byte[] bytes = renderInterno(descriptor.classpathResource(), data, true);
+    LOG.info(
+        "DOCX renderizado product={} kind={} bytes={}",
+        descriptor.productCode(),
+        descriptor.templateKind(),
+        bytes.length);
+    return bytes;
+  }
+
+  /**
+   * Render genérico: cada tag {@code {{...}}} de la plantilla debe existir tal cual en {@code data}
+   * (sin los alias de Escrituración).
+   */
+  public byte[] renderPlantilla(String classpathResource, Map<String, Object> data) {
+    byte[] bytes = renderInterno(classpathResource, data, false);
+    LOG.info("DOCX renderizado plantilla={} bytes={}", classpathResource, bytes.length);
+    return bytes;
+  }
+
+  private byte[] renderInterno(String classpathResource, Map<String, Object> data, boolean aliases) {
     Map<String, Object> safe = data == null ? Map.of() : data;
-    ClassPathResource resource = resource(descriptor);
-    try (InputStream in = resource.getInputStream();
+    try (InputStream in = abrir(classpathResource);
         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
       XWPFTemplate template = XWPFTemplate.compile(in);
       List<String> tags = tagNames(template);
-      List<String> sinDato = MinutaTagAliases.sinResolver(tags, safe.keySet());
+      List<String> sinDato =
+          aliases
+              ? MinutaTagAliases.sinResolver(tags, safe.keySet())
+              : tags.stream().filter(t -> !safe.containsKey(t)).toList();
       if (!sinDato.isEmpty()) {
         template.close();
         throw ApiException.badRequest(
             "La plantilla "
-                + descriptor.classpathResource()
+                + classpathResource
                 + " tiene placeholders sin dato asociado: "
                 + String.join(", ", sinDato.stream().map(t -> "{{" + t + "}}").toList()));
       }
-      template.render(MinutaTagAliases.valoresPorTag(tags, safe));
+      template.render(aliases ? MinutaTagAliases.valoresPorTag(tags, safe) : safe);
       template.write(out);
       template.close();
       byte[] bytes = out.toByteArray();
-      verificarSinPlaceholders(descriptor, bytes);
-      LOG.info(
-          "DOCX renderizado product={} kind={} bytes={}",
-          descriptor.productCode(),
-          descriptor.templateKind(),
-          bytes.length);
+      verificarSinPlaceholders(classpathResource, bytes);
       return bytes;
     } catch (ApiException e) {
       throw e;
     } catch (Exception e) {
-      LOG.error(
-          "Error renderizando DOCX {}: {}",
-          descriptor.classpathResource(),
-          e.getMessage(),
-          e);
+      LOG.error("Error renderizando DOCX {}: {}", classpathResource, e.getMessage(), e);
       String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-      throw ApiException.badRequest(
-          "Error al generar el documento .docx de la minuta: " + detail);
+      throw ApiException.badRequest("Error al generar el documento .docx: " + detail);
     }
   }
 
@@ -80,7 +103,7 @@ public class DocxMinutaRenderer {
 
   /** Bytes de la plantilla sin renderizar (con sus tags {@code {{...}}}). */
   public byte[] plantilla(MinutaTemplateDescriptor descriptor) {
-    try (InputStream in = resource(descriptor).getInputStream()) {
+    try (InputStream in = resource(descriptor.classpathResource()).getInputStream()) {
       return in.readAllBytes();
     } catch (java.io.IOException e) {
       throw ApiException.badRequest(
@@ -90,10 +113,14 @@ public class DocxMinutaRenderer {
 
   /** Tags {@code {{...}}} presentes en la plantilla (cuerpo, encabezados y pies). */
   public List<String> tags(MinutaTemplateDescriptor descriptor) {
+    return tags(descriptor.classpathResource());
+  }
+
+  public List<String> tags(String classpathResource) {
     return tagsPorPlantilla.computeIfAbsent(
-        descriptor.classpathResource(),
+        classpathResource,
         key -> {
-          try (InputStream in = resource(descriptor).getInputStream();
+          try (InputStream in = abrir(key);
               XWPFTemplate template = XWPFTemplate.compile(in)) {
             return List.copyOf(tagNames(template));
           } catch (ApiException e) {
@@ -142,11 +169,61 @@ public class DocxMinutaRenderer {
         tags(descriptor), new MinutaViviendaData().toTemplateMap().keySet());
   }
 
-  private static ClassPathResource resource(MinutaTemplateDescriptor descriptor) {
-    ClassPathResource resource = new ClassPathResource(descriptor.classpathResource());
+  /** Plantilla lista para poi-tl: tags dentro de hipervínculos quedan como runs normales. */
+  private static InputStream abrir(String classpathResource) throws IOException {
+    try (InputStream in = resource(classpathResource).getInputStream()) {
+      return new ByteArrayInputStream(sinHipervinculosEnTags(in.readAllBytes()));
+    }
+  }
+
+  /**
+   * poi-tl no resuelve tags dentro de {@code <w:hyperlink>} (Word convierte en enlace los correos
+   * escritos como {@code {{correo}}}). Esos enlaces se desenvuelven: el texto y su formato se
+   * conservan y el destino, que apuntaba al placeholder, se descarta.
+   */
+  static byte[] sinHipervinculosEnTags(byte[] docx) throws IOException {
+    ByteArrayOutputStream out = new ByteArrayOutputStream(docx.length);
+    boolean cambio = false;
+    try (ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(docx));
+        ZipOutputStream zout = new ZipOutputStream(out)) {
+      ZipEntry entry;
+      while ((entry = zin.getNextEntry()) != null) {
+        byte[] contenido = zin.readAllBytes();
+        if (PARTE_TEXTO.matcher(entry.getName()).matches()) {
+          String xml = new String(contenido, StandardCharsets.UTF_8);
+          String limpio = desenvolverHipervinculos(xml);
+          if (!limpio.equals(xml)) {
+            contenido = limpio.getBytes(StandardCharsets.UTF_8);
+            cambio = true;
+          }
+        }
+        zout.putNextEntry(new ZipEntry(entry.getName()));
+        zout.write(contenido);
+        zout.closeEntry();
+      }
+    }
+    return cambio ? out.toByteArray() : docx;
+  }
+
+  private static String desenvolverHipervinculos(String xml) {
+    Matcher m = HIPERVINCULO.matcher(xml);
+    StringBuilder sb = new StringBuilder(xml.length());
+    while (m.find()) {
+      String interior = m.group(1);
+      String texto = interior.replaceAll("<[^>]+>", "");
+      m.appendReplacement(sb, Matcher.quoteReplacement(texto.contains("{{") ? interior : m.group()));
+    }
+    m.appendTail(sb);
+    return sb.toString();
+  }
+
+  private static ClassPathResource resource(String classpathResource) {
+    if (classpathResource == null || classpathResource.isBlank()) {
+      throw ApiException.badRequest("Ruta de plantilla requerida.");
+    }
+    ClassPathResource resource = new ClassPathResource(classpathResource);
     if (!resource.exists()) {
-      throw ApiException.badRequest(
-          "Plantilla no encontrada en classpath: " + descriptor.classpathResource());
+      throw ApiException.badRequest("Plantilla no encontrada en classpath: " + classpathResource);
     }
     return resource;
   }
@@ -161,7 +238,7 @@ public class DocxMinutaRenderer {
     return new ArrayList<>(names);
   }
 
-  private static void verificarSinPlaceholders(MinutaTemplateDescriptor descriptor, byte[] bytes)
+  private static void verificarSinPlaceholders(String classpathResource, byte[] bytes)
       throws Exception {
     try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(bytes));
         XWPFWordExtractor extractor = new XWPFWordExtractor(doc)) {
@@ -169,7 +246,7 @@ public class DocxMinutaRenderer {
       if (text.contains("{{") || text.contains("}}")) {
         throw ApiException.badRequest(
             "El documento generado conserva placeholders sin resolver ("
-                + descriptor.classpathResource()
+                + classpathResource
                 + ").");
       }
     }

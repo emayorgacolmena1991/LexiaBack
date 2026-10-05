@@ -60,6 +60,29 @@ class CoactivaDiagnosticoParserTest {
   }
 
   @Test
+  void conservaCuentasEmbargadasAnidadas() {
+    Parse r =
+        parser.parse(
+            """
+            {"datos_extraidos": {
+               "juicio": "025-2024-00026",
+               "nombre_garante_solidario": null,
+               "cuentas_embargadas": [
+                 {"numero_cuenta": "2200111111", "titular": "DEUDOR", "monto_retenido": 1250.50}
+               ]}}
+            """);
+    assertTrue(r.ok());
+    var datos = r.diagnostico().datosExtraidos();
+    assertTrue(datos.containsKey("nombre_garante_solidario"));
+    assertNull(datos.get("nombre_garante_solidario"));
+    var cuentas = (java.util.List<?>) datos.get("cuentas_embargadas");
+    assertEquals(1, cuentas.size());
+    assertEquals("2200111111", ((java.util.Map<?, ?>) cuentas.get(0)).get("numero_cuenta"));
+    Parse reparsed = parser.parse(r.diagnostico().json());
+    assertEquals(cuentas, reparsed.diagnostico().datosExtraidos().get("cuentas_embargadas"));
+  }
+
+  @Test
   void vacioEsError() {
     assertFalse(parser.parse("").ok());
     assertFalse(parser.parse("no es json").ok());

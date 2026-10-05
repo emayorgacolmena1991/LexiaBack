@@ -8,4 +8,7 @@ public interface CoactivaAnalisisRepository extends JpaRepository<CoactivaAnalis
 
   Optional<CoactivaAnalisis> findFirstByTenantIdAndExpedienteIdOrderByCreatedAtDesc(
       UUID tenantId, UUID expedienteId);
+
+  Optional<CoactivaAnalisis> findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+      UUID tenantId, UUID expedienteId, String estado);
 }

@@ -12,9 +12,11 @@ public final class CoactivaActuacionDtos {
 
   private CoactivaActuacionDtos() {}
 
-  public record PlantillaItem(UUID id, String nombre, String etapa) {}
+  /** @param generable la plantilla tiene un .docx asociado y puede generar la actuación */
+  public record PlantillaItem(UUID id, String nombre, String etapa, boolean generable) {}
 
-  public record GenerarActuacionRequest(@NotNull UUID plantillaId) {}
+  /** {@code permitirIncompleto} solo se envía tras la confirmación explícita del usuario. */
+  public record GenerarActuacionRequest(@NotNull UUID plantillaId, Boolean permitirIncompleto) {}
 
   public record ActuacionResponse(UUID actuacionId, UUID archivoId, String estado) {}
 

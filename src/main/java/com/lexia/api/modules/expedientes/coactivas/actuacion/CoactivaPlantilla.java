@@ -24,8 +24,20 @@ public class CoactivaPlantilla {
   @Column(nullable = false)
   private boolean activo;
 
+  /** Recurso de classpath bajo {@code templates/coactivas/}; null si aún no tiene .docx. */
+  @Column(name = "ruta_docx", length = 255)
+  private String rutaDocx;
+
   public UUID getId() {
     return id;
+  }
+
+  public String getRutaDocx() {
+    return rutaDocx;
+  }
+
+  public boolean generable() {
+    return rutaDocx != null && !rutaDocx.isBlank();
   }
 
   public String getNombre() {

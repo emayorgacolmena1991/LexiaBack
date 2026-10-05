@@ -39,6 +39,15 @@ lexia:
     storage-dir: ${LEXIA_COACTIVAS_DIR:./data/coactivas}
     ia:
       dummy: ${LEXIA_COACTIVAS_IA_DUMMY:false}
+    # Datos institucionales de las actuaciones .docx. Vacío → se toman del expediente analizado
+    # o la generación informa la variable como faltante.
+    plantillas:
+      gerente-general: ${LEXIA_COACTIVAS_GERENTE_GENERAL:}
+      correo-institucional: ${LEXIA_COACTIVAS_CORREO_INSTITUCIONAL:}
+      correo-estudio-juridico: ${LEXIA_COACTIVAS_CORREO_ESTUDIO_JURIDICO:}
+      # Código de oficina → número de zonal, p. ej. "PORTOVIEJO=4,CHONE=4".
+      zonales: ${LEXIA_COACTIVAS_ZONALES:}
+      zona-horaria: ${LEXIA_COACTIVAS_ZONA_HORARIA:America/Guayaquil}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
   prompts:

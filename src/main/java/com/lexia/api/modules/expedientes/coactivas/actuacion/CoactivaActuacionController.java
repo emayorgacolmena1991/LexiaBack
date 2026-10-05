@@ -46,7 +46,9 @@ public class CoactivaActuacionController {
       @PathVariable UUID id,
       @Valid @RequestBody GenerarActuacionRequest request,
       @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-    GenerarResultado resultado = service.generar(id, request.plantillaId(), idempotencyKey);
+    GenerarResultado resultado =
+        service.generar(
+            id, request.plantillaId(), idempotencyKey, Boolean.TRUE.equals(request.permitirIncompleto()));
     return ResponseEntity.status(resultado.creada() ? 201 : 200).body(resultado.body());
   }
 

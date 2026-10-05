@@ -13,16 +13,19 @@ import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDt
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.PlantillaItem;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ResultadoHttp;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.SolicitudResponse;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaDataMapper.PlantillaDatos;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoRepository;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoStorage;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoStorage.StoredFile;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService;
-import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipanteRepository;
+import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
+import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -40,6 +43,9 @@ public class CoactivaActuacionService {
   static final String DATADOC_NO_CONFIGURADO =
       "DataDoc no está configurado en este ambiente. No se sincronizó ningún dato.";
 
+  static final String PLANTILLA_DATOS_INCOMPLETOS = "PLANTILLA_DATOS_INCOMPLETOS";
+  private static final String PREFIJO_PLANTILLAS = "templates/coactivas/";
+
   private static final Set<String> OPI = Set.of("OPI_EMITIDA", "NOTIFICACION_COA");
 
   private final AuthorizationService authorization;
@@ -50,7 +56,9 @@ public class CoactivaActuacionService {
   private final CoactivaSolicitudRepository solicitudes;
   private final CoactivaArchivoRepository archivos;
   private final CoactivaArchivoStorage storage;
-  private final CoactivaParticipanteRepository participantes;
+  private final CoactivaPlantillaDataMapper mapper;
+  private final DocxMinutaRenderer renderer;
+  private final DocxPdfConverter pdfConverter;
 
   public CoactivaActuacionService(
       AuthorizationService authorization,
@@ -61,7 +69,9 @@ public class CoactivaActuacionService {
       CoactivaSolicitudRepository solicitudes,
       CoactivaArchivoRepository archivos,
       CoactivaArchivoStorage storage,
-      CoactivaParticipanteRepository participantes) {
+      CoactivaPlantillaDataMapper mapper,
+      DocxMinutaRenderer renderer,
+      DocxPdfConverter pdfConverter) {
     this.authorization = authorization;
     this.expedientes = expedientes;
     this.plantillas = plantillas;
@@ -70,7 +80,9 @@ public class CoactivaActuacionService {
     this.solicitudes = solicitudes;
     this.archivos = archivos;
     this.storage = storage;
-    this.participantes = participantes;
+    this.mapper = mapper;
+    this.renderer = renderer;
+    this.pdfConverter = pdfConverter;
   }
 
   @Transactional(readOnly = true)
@@ -84,14 +96,15 @@ public class CoactivaActuacionService {
     return plantillas
         .findByTenantIdAndEtapaInAndActivoTrueOrderByNombreAsc(principal.tenantId(), etapas)
         .stream()
-        .map(p -> new PlantillaItem(p.getId(), p.getNombre(), p.getEtapa()))
+        .map(p -> new PlantillaItem(p.getId(), p.getNombre(), p.getEtapa(), p.generable()))
         .toList();
   }
 
   public record GenerarResultado(boolean creada, ActuacionResponse body) {}
 
   @Transactional
-  public GenerarResultado generar(UUID expedienteId, UUID plantillaId, String idempotencyKey) {
+  public GenerarResultado generar(
+      UUID expedienteId, UUID plantillaId, String idempotencyKey, boolean permitirIncompleto) {
     authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
     AuthPrincipal principal = AuthContext.require();
     UUID tenantId = principal.tenantId();
@@ -125,24 +138,14 @@ public class CoactivaActuacionService {
           "PLANTILLA_ETAPA",
           "La plantilla no corresponde a la etapa verificada del expediente.");
     }
-    String deudor =
-        participantes
-            .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByOrdenAsc(tenantId, expedienteId)
-            .stream()
-            .filter(p -> "DEUDOR".equals(p.getRol()))
-            .map(p -> p.getNombreCompleto())
-            .findFirst()
-            .orElse("Sin deudor");
+    String ruta = rutaDocx(plantilla);
+    PlantillaDatos datos = mapper.mapear(expediente);
+    List<String> faltantes = datos.faltantes(renderer.tags(ruta));
+    if (!faltantes.isEmpty() && !permitirIncompleto) {
+      throw datosIncompletos(faltantes, datos.analisisDisponible());
+    }
+    byte[] pdf = pdfConverter.toPdf(renderer.renderPlantilla(ruta, datos.valoresConVacios(faltantes)));
     String nombre = nombrePdf(plantilla.getNombre());
-    byte[] pdf =
-        ActuacionPdf.generar(
-            "Actuacion coactiva",
-            ActuacionPdf.lineas(
-                "Plantilla: " + plantilla.getNombre(),
-                "Juicio: " + expediente.getNroJuicio(),
-                "Deudor: " + deudor,
-                "Etapa: " + CoactivaExpedienteService.etapaLabel(expediente.getEtapaVerificada()),
-                "Estado: GENERADO"));
     UUID archivoId = UUID.randomUUID();
     StoredFile stored = storage.storeBytes(tenantId, archivoId, nombre, pdf);
     CoactivaArchivo archivo =
@@ -167,7 +170,16 @@ public class CoactivaActuacionService {
         expedienteId,
         "ACTUACION",
         "Actuación generada: " + plantilla.getNombre(),
-        "Estado GENERADO. Usuario " + principal.userId(),
+        "Estado GENERADO. Usuario "
+            + principal.userId()
+            + (datos.discrepancias().isEmpty()
+                ? ""
+                : ". Se usó el dato del expediente donde la IA leyó otro valor: "
+                    + String.join(", ", datos.discrepancias()))
+            + (faltantes.isEmpty()
+                ? ""
+                : ". Generado con datos incompletos confirmado por el usuario; campos vacíos: "
+                    + String.join(", ", faltantes)),
         principal.userId(),
         archivoId);
     expediente.setFechaUltimaActuacion(LocalDate.now());
@@ -391,6 +403,36 @@ public class CoactivaActuacionService {
       return true;
     }
     return OPI.contains(plantillaEtapa) && OPI.contains(etapaVerificada);
+  }
+
+  private static String rutaDocx(CoactivaPlantilla plantilla) {
+    if (!plantilla.generable()) {
+      throw new ApiException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "PLANTILLA_SIN_DOCX",
+          "El formato " + plantilla.getNombre() + " todavía no tiene una plantilla .docx asociada.");
+    }
+    String ruta = plantilla.getRutaDocx().trim();
+    if (!ruta.startsWith(PREFIJO_PLANTILLAS) || !ruta.endsWith(".docx") || ruta.contains("..")) {
+      throw new ApiException(
+          HttpStatus.UNPROCESSABLE_ENTITY, "PLANTILLA_RUTA_INVALIDA", "La ruta de la plantilla no es válida.");
+    }
+    return ruta;
+  }
+
+  static ApiException datosIncompletos(List<String> faltantes, boolean analisisDisponible) {
+    String mensaje =
+        "No se puede generar el documento porque faltan "
+            + (faltantes.size() == 1 ? "1 dato obligatorio." : faltantes.size() + " datos obligatorios.")
+            + (analisisDisponible
+                ? " Complétalos en el expediente o verifica que consten en el PDF analizado."
+                : " El expediente no tiene un análisis IA completado; carga y analiza el PDF del juicio.");
+    return new ApiException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        PLANTILLA_DATOS_INCOMPLETOS,
+        mensaje,
+        List.of(),
+        Map.of("variablesFaltantes", faltantes));
   }
 
   private static String nombrePdf(String plantilla) {

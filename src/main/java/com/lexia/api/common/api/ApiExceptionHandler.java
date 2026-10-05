@@ -32,6 +32,7 @@ public class ApiExceptionHandler {
     if (!exception.getAllowedNext().isEmpty()) {
       body.put("allowedNext", exception.getAllowedNext());
     }
+    exception.getDetails().forEach(body::putIfAbsent);
     return ResponseEntity.status(exception.getStatus()).body(body);
   }
 

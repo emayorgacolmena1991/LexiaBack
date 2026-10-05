@@ -41,6 +41,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -582,6 +583,54 @@ public class CoactivaExpedienteService {
         diag.siguienteAccion(),
         null,
         ultimo.getCreatedAt());
+  }
+
+  /**
+   * Vuelve a encolar el diagnóstico IA sobre el PDF ya analizado o, si no hay, sobre el último
+   * expediente escaneado/unificado del juicio.
+   */
+  @Transactional
+  public AnalisisResponse reanalizar(UUID expedienteId) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    CoactivaExpediente expediente = require(tenantId, expedienteId);
+    if (CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())) {
+      throw new ApiException(
+          HttpStatus.CONFLICT, "COA_ANALISIS_EN_CURSO", "El expediente ya se está analizando.");
+    }
+    CoactivaArchivo archivo =
+        pdfParaReanalisis(tenantId, expediente)
+            .orElseThrow(() -> ApiException.notFound("El expediente no tiene un PDF para analizar."));
+    encolarAnalisis(archivo, expediente.getEtapaVerificada());
+    registrarEvento(
+        tenantId,
+        expedienteId,
+        "ANALISIS_REINICIADO",
+        "Análisis IA reiniciado",
+        archivo.getNombreOriginal(),
+        principal.userId(),
+        archivo.getId());
+    return AnalisisResponse.enCurso(archivo.getId());
+  }
+
+  private Optional<CoactivaArchivo> pdfParaReanalisis(UUID tenantId, CoactivaExpediente expediente) {
+    UUID expedienteId = expediente.getId();
+    if (expediente.getAnalisisArchivoId() != null) {
+      var previo =
+          archivos
+              .findByIdAndTenantIdAndDeletedAtIsNull(expediente.getAnalisisArchivoId(), tenantId)
+              .filter(a -> expedienteId.equals(a.getExpedienteId()))
+              .filter(a -> CoactivaArchivo.esExpedienteUnificado(a.getTipo()));
+      if (previo.isPresent()) {
+        return previo;
+      }
+    }
+    return archivos
+        .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId, expedienteId)
+        .stream()
+        .filter(a -> CoactivaArchivo.esExpedienteUnificado(a.getTipo()))
+        .findFirst();
   }
 
   /** Guarda el archivo en disco y lo registra SIN_ASIGNAR. */
