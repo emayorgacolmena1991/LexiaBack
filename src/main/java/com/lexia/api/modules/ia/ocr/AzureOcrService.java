@@ -17,9 +17,14 @@ public class AzureOcrService {
     return client.isConfigured();
   }
 
+  /** {@code analyzeResult} de {@code prebuilt-read}: content y pages[].lines / words. */
+  public JsonNode analizarLectura(byte[] bytesArchivo, String mimeType) {
+    return client.analyze("prebuilt-read", bytesArchivo, mimeType);
+  }
+
   /** Extrae solo texto plano del PDF/imagen. */
   public String extraerTexto(byte[] bytesArchivo, String mimeType) {
-    JsonNode analyzeResult = client.analyze("prebuilt-read", bytesArchivo, mimeType);
+    JsonNode analyzeResult = analizarLectura(bytesArchivo, mimeType);
     JsonNode content = analyzeResult.path("content");
     if (content.isMissingNode() || content.isNull()) {
       return "";

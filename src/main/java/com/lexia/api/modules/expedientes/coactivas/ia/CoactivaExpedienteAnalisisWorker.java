@@ -28,8 +28,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 /**
- * PDF único del juicio: OCR por fojas, prompt de {@code coactiva_prompt_catalog} según la etapa,
- * diagnóstico JSON en {@code coactiva_analisis}.
+ * PDF único del juicio: Azure OCR del archivo completo, prompt de {@code coactiva_prompt_catalog}
+ * según la etapa, diagnóstico JSON en {@code coactiva_analisis}.
  */
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -81,7 +81,7 @@ public class CoactivaExpedienteAnalisisWorker {
     this.tx = new TransactionTemplate(txManager);
   }
 
-  @Async
+  @Async("taskExecutor")
   public void analizarAsync(UUID tenantId, UUID archivoId) {
     if (TenantContext.getTenantId() == null) {
       TenantContext.setTenantId(tenantId);
@@ -119,14 +119,19 @@ public class CoactivaExpedienteAnalisisWorker {
           ? Resultado.ok(ctx.etapa(), promptId, parsed.diagnostico())
           : Resultado.error(ctx.etapa(), promptId, parsed.error());
     }
-    LOG.info("Paso 1 OCR expediente archivo={}", archivo.getId());
-    String texto = pdfTexto.extraer(storage.read(archivo), archivo.getMimeType(), archivo.getNombreOriginal());
-    if (!StringUtils.hasText(texto)) {
+    LOG.info("Paso 1 OCR Azure expediente archivo={}", archivo.getId());
+    CoactivaPdfTexto.TextoOcr extraido =
+        pdfTexto.extraer(storage.read(archivo), archivo.getMimeType(), archivo.getNombreOriginal());
+    if (CoactivaPdfTexto.calidadInsuficiente(extraido)) {
+      return Resultado.calidad(ctx.etapa(), promptId, CoactivaPdfTexto.mensajeCalidad(extraido.paginas()));
+    }
+    if (!StringUtils.hasText(extraido.texto())) {
       return Resultado.error(ctx.etapa(), promptId, "El PDF no contiene texto legible.");
     }
-    LOG.info("Paso 2 LLM archivo={} chars={}", archivo.getId(), texto.length());
+    LOG.info("Paso 2 LLM archivo={} chars={}", archivo.getId(), extraido.caracteres());
     ValidacionDocumentoJson raw =
-        analisis.diagnosticarCoactiva(system + CoactivaDiagnosticoParser.FORMATO_JSON, truncate(texto, MAX_CHARS));
+        analisis.diagnosticarCoactiva(
+            system + CoactivaDiagnosticoParser.FORMATO_JSON, truncate(extraido.texto(), MAX_CHARS));
     if (raw.esError()) {
       return Resultado.error(ctx.etapa(), promptId, raw.error());
     }
@@ -162,7 +167,11 @@ public class CoactivaExpedienteAnalisisWorker {
                     resultado.error()));
             archivo.registrarResultadoIa(CoactivaArchivo.IA_ERROR, truncate(resultado.error(), 600), null, null);
             if (vigente) {
-              expediente.marcarErrorAnalisis();
+              if (resultado.calidad()) {
+                expediente.marcarErrorCalidad();
+              } else {
+                expediente.marcarErrorAnalisis();
+              }
             }
             return;
           }
@@ -283,13 +292,18 @@ public class CoactivaExpedienteAnalisisWorker {
 
   private record Contexto(String etapa, String juicio, String operacion, String deudor) {}
 
-  private record Resultado(String etapa, Long promptId, CoactivaDiagnostico diagnostico, String error) {
+  private record Resultado(
+      String etapa, Long promptId, CoactivaDiagnostico diagnostico, String error, boolean calidad) {
     static Resultado ok(String etapa, Long promptId, CoactivaDiagnostico diagnostico) {
-      return new Resultado(etapa, promptId, diagnostico, null);
+      return new Resultado(etapa, promptId, diagnostico, null, false);
     }
 
     static Resultado error(String etapa, Long promptId, String error) {
-      return new Resultado(etapa, promptId, null, error);
+      return new Resultado(etapa, promptId, null, error, false);
+    }
+
+    static Resultado calidad(String etapa, Long promptId, String error) {
+      return new Resultado(etapa, promptId, null, error, true);
     }
   }
 }

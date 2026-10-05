@@ -28,6 +28,7 @@ public class CoactivaExpediente implements Persistable<UUID> {
   public static final String ANALISIS_ANALIZANDO = "ANALIZANDO";
   public static final String ANALISIS_ANALIZADO = "ANALIZADO";
   public static final String ANALISIS_ERROR = "ERROR_ANALISIS";
+  public static final String ANALISIS_ERROR_CALIDAD = "ERROR_CALIDAD_DIGITALIZACION";
 
   @Id private UUID id;
 
@@ -64,7 +65,7 @@ public class CoactivaExpediente implements Persistable<UUID> {
   @Column(name = "estado_operativo", nullable = false, length = 16)
   private String estadoOperativo;
 
-  @Column(name = "estado_analisis", nullable = false, length = 16)
+  @Column(name = "estado_analisis", nullable = false, length = 32)
   private String estadoAnalisis = ANALISIS_NO_APLICA;
 
   @Column(name = "analisis_archivo_id")
@@ -298,6 +299,10 @@ public class CoactivaExpediente implements Persistable<UUID> {
 
   public void marcarErrorAnalisis() {
     this.estadoAnalisis = ANALISIS_ERROR;
+  }
+
+  public void marcarErrorCalidad() {
+    this.estadoAnalisis = ANALISIS_ERROR_CALIDAD;
   }
 
   public String getEtapaReportada() {
