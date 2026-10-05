@@ -144,6 +144,7 @@ public final class CoactivaExpedienteDtos {
       UUID asistenteUserId,
       Integer fojas,
       String estadoOperativo,
+      String estadoAnalisis,
       String etapaReportada,
       String etapaReportadaTexto,
       String etapaVerificada,
@@ -199,6 +200,28 @@ public final class CoactivaExpedienteDtos {
 
   public record CambioEtapaRequest(
       @NotBlank String etapa, @Size(max = 600) String motivo, Boolean forzar) {}
+
+  public record DocumentoDetectado(String tipo, Integer fojaInicio, Integer fojaFin, boolean presente) {}
+
+  public record AnalisisResponse(
+      String estadoAnalisis,
+      UUID analisisId,
+      UUID archivoId,
+      String etapaPrompt,
+      Integer porcentajeCompletitud,
+      String etapaProcesalDetectada,
+      List<DocumentoDetectado> documentosIdentificados,
+      List<String> alertasInconsistencias,
+      Map<String, Object> datosExtraidos,
+      String siguienteAccionSugerida,
+      String error,
+      Instant createdAt) {
+
+    public static AnalisisResponse enCurso(UUID archivoId) {
+      return new AnalisisResponse(
+          "ANALIZANDO", null, archivoId, null, null, null, List.of(), List.of(), Map.of(), null, null, null);
+    }
+  }
 
   public record TimelineItem(
       String tipo, String titulo, String detalle, Instant fecha, UUID usuarioId, UUID archivoId) {}

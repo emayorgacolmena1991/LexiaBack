@@ -16,6 +16,7 @@ import org.springframework.data.domain.Persistable;
 public class CoactivaArchivo implements Persistable<UUID> {
 
   public static final String EXPEDIENTE_ESCANEADO = "EXPEDIENTE_ESCANEADO";
+  public static final String EXPEDIENTE_UNIFICADO = "EXPEDIENTE_UNIFICADO";
   public static final String ACTA = "ACTA";
   public static final String VINCULADO = "VINCULADO";
   public static final String SIN_ASIGNAR = "SIN_ASIGNAR";
@@ -195,6 +196,11 @@ public class CoactivaArchivo implements Persistable<UUID> {
 
   public boolean analizando() {
     return IA_ANALIZANDO.equals(estadoIa);
+  }
+
+  /** PDF del juicio completo: el diagnóstico es por etapa, no por tipo de pieza. */
+  public static boolean esExpedienteUnificado(String tipo) {
+    return EXPEDIENTE_ESCANEADO.equals(tipo) || EXPEDIENTE_UNIFICADO.equals(tipo);
   }
 
   public boolean validoParaChecklist() {

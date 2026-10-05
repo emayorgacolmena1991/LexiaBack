@@ -44,8 +44,11 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String MINUTA_VIVIENDA_TOOL_NAME = "registrar_datos_minuta_vivienda";
   private static final String CAPTURA_BIESS_TOOL_NAME = "registrar_datos_captura_biess";
   private static final String VALIDACION_TOOL_NAME = "validar_documento_coactivo";
+  private static final String DIAGNOSTICO_TOOL_NAME = "diagnosticar_expediente_coactivo";
   private static final int MAX_CHARS_VALIDACION = 80_000;
   private static final int MAX_TOKENS_VALIDACION = 1024;
+  private static final int MAX_CHARS_DIAGNOSTICO = 120_000;
+  private static final int MAX_TOKENS_DIAGNOSTICO = 4096;
   private static final int MAX_INTENTOS_CAPTURA_BIESS = 2;
   private static final int MAX_CHARS_CAPTURA = 20_000;
   private static final int MAX_TOKENS_EXPEDIENTE = 8192;
@@ -275,6 +278,59 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
+  public ValidacionDocumentoJson diagnosticarCoactiva(String systemPrompt, String textoExpediente) {
+    String texto = textoExpediente == null ? "" : textoExpediente;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto OCR para diagnosticar el expediente.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("ANTHROPIC_API_KEY no configurada.");
+    }
+    String prompt =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Diagnostica el expediente invocando " + DIAGNOSTICO_TOOL_NAME + ".";
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+        try {
+          HttpResponse<String> res = enviar(construirBodyDiagnostico(modelo, prompt, texto));
+          int status = res.statusCode();
+          if (status == 200) {
+            JsonNode root = objectMapper.readTree(res.body());
+            if ("max_tokens".equals(root.path("stop_reason").asText())) {
+              return ValidacionDocumentoJson.error("Respuesta truncada (max_tokens) al diagnosticar.");
+            }
+            JsonNode input = leerToolInput(root);
+            if (input != null && input.isObject()) {
+              LOG.info("Claude diagnóstico coactivo OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(objectMapper.writeValueAsString(input));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use " + DIAGNOSTICO_TOOL_NAME;
+          } else if (status == 429 || status == 529 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+            continue;
+          } else {
+            return ValidacionDocumentoJson.error(
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ValidacionDocumentoJson.error("Diagnóstico coactivo interrumpido.");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude diagnóstico coactivo: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo diagnosticar el expediente con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
   public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     String texto = textoCaptura == null ? "" : textoCaptura;
     if (!StringUtils.hasText(texto.trim())) {
@@ -356,6 +412,64 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         "Valida este documento. No inventes datos.\n\n<documento_ocr>\n"
             + truncate(texto, MAX_CHARS_VALIDACION)
             + "\n</documento_ocr>");
+    return objectMapper.writeValueAsString(body);
+  }
+
+  private String construirBodyDiagnostico(String modelo, String systemPrompt, String texto)
+      throws IOException {
+    ObjectNode doc = objectMapper.createObjectNode();
+    doc.put("type", "object");
+    ObjectNode docProps = doc.putObject("properties");
+    docProps.putObject("tipo").put("type", "string");
+    docProps.putObject("foja_inicio").put("type", "integer").put("description", "0 si no consta.");
+    docProps.putObject("foja_fin").put("type", "integer").put("description", "0 si no consta.");
+    docProps.putObject("presente").put("type", "boolean");
+    doc.putArray("required").add("tipo").add("presente");
+
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    props.putObject("porcentaje_completitud").put("type", "integer").put("description", "0 a 100.");
+    props.putObject("etapa_procesal_detectada").put("type", "string");
+    ObjectNode docs = props.putObject("documentos_identificados");
+    docs.put("type", "array");
+    docs.set("items", doc);
+    ObjectNode alertas = props.putObject("alertas_inconsistencias");
+    alertas.put("type", "array");
+    alertas.putObject("items").put("type", "string");
+    ObjectNode datos = props.putObject("datos_extraidos");
+    datos.put("type", "object");
+    ObjectNode datosProps = datos.putObject("properties");
+    datosProps.putObject("juicio").put("type", "string");
+    datosProps.putObject("operacion").put("type", "string");
+    datosProps.putObject("deudor").put("type", "string");
+    datosProps.putObject("monto_mora").put("type", "number");
+    props.putObject("siguiente_accion_sugerida").put("type", "string");
+    schema
+        .putArray("required")
+        .add("porcentaje_completitud")
+        .add("etapa_procesal_detectada")
+        .add("documentos_identificados")
+        .add("alertas_inconsistencias")
+        .add("datos_extraidos")
+        .add("siguiente_accion_sugerida");
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", MAX_TOKENS_DIAGNOSTICO);
+    body.put("system", systemPrompt);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", DIAGNOSTICO_TOOL_NAME);
+    tool.put("description", "Registra el diagnóstico del expediente coactivo unificado.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", DIAGNOSTICO_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "Diagnostica este expediente. No inventes documentos ni fojas.\n\n<expediente_ocr>\n"
+            + truncate(texto, MAX_CHARS_DIAGNOSTICO)
+            + "\n</expediente_ocr>");
     return objectMapper.writeValueAsString(body);
   }
 

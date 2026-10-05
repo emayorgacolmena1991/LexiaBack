@@ -24,6 +24,11 @@ public class CoactivaExpediente implements Persistable<UUID> {
   public static final String VERIFICADO = "VERIFICADO";
   public static final String ARCHIVADO = "ARCHIVADO";
 
+  public static final String ANALISIS_NO_APLICA = "NO_APLICA";
+  public static final String ANALISIS_ANALIZANDO = "ANALIZANDO";
+  public static final String ANALISIS_ANALIZADO = "ANALIZADO";
+  public static final String ANALISIS_ERROR = "ERROR_ANALISIS";
+
   @Id private UUID id;
 
   @Transient private boolean isNew = true;
@@ -58,6 +63,12 @@ public class CoactivaExpediente implements Persistable<UUID> {
 
   @Column(name = "estado_operativo", nullable = false, length = 16)
   private String estadoOperativo;
+
+  @Column(name = "estado_analisis", nullable = false, length = 16)
+  private String estadoAnalisis = ANALISIS_NO_APLICA;
+
+  @Column(name = "analisis_archivo_id")
+  private UUID analisisArchivoId;
 
   @Column(name = "etapa_reportada", length = 24)
   private String etapaReportada;
@@ -134,6 +145,7 @@ public class CoactivaExpediente implements Persistable<UUID> {
     expediente.caseId = caseId;
     expediente.nroJuicio = nroJuicio;
     expediente.estadoOperativo = RECIBIDO;
+    expediente.estadoAnalisis = ANALISIS_NO_APLICA;
     expediente.semaforo = "GRIS";
     expediente.createdAt = now;
     expediente.createdBy = userId;
@@ -265,6 +277,27 @@ public class CoactivaExpediente implements Persistable<UUID> {
 
   public void setEstadoOperativo(String estadoOperativo) {
     this.estadoOperativo = estadoOperativo;
+  }
+
+  public String getEstadoAnalisis() {
+    return estadoAnalisis;
+  }
+
+  public UUID getAnalisisArchivoId() {
+    return analisisArchivoId;
+  }
+
+  public void marcarAnalizando(UUID archivoId) {
+    this.estadoAnalisis = ANALISIS_ANALIZANDO;
+    this.analisisArchivoId = archivoId;
+  }
+
+  public void marcarAnalizado() {
+    this.estadoAnalisis = ANALISIS_ANALIZADO;
+  }
+
+  public void marcarErrorAnalisis() {
+    this.estadoAnalisis = ANALISIS_ERROR;
   }
 
   public String getEtapaReportada() {

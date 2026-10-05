@@ -14,9 +14,16 @@ import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoStora
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.DocumentoDetectado;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.OverrideIaRequest;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaAnalisis;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaAnalisisRepository;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
@@ -56,7 +63,7 @@ public class CoactivaExpedienteService {
   private static final Set<String> MEDIOS = Set.of("BOLETA", "PERSONAL", "CORREO");
   private static final Set<String> TIPOS_ARCHIVO =
       Set.of(
-          "EXPEDIENTE_ESCANEADO", "ACTA", "LIQUIDACION", "PROVIDENCIA", "OFICIO",
+          "EXPEDIENTE_ESCANEADO", "EXPEDIENTE_UNIFICADO", "ACTA", "LIQUIDACION", "PROVIDENCIA", "OFICIO",
           "RESPUESTA_ENTIDAD", "ESCRITO", "EVIDENCIA", "OTRO", "ACTUACION");
 
   private final CoactivaExpedienteRepository expedientes;
@@ -71,6 +78,11 @@ public class CoactivaExpedienteService {
   private final CoactivaCaseSync caseSync;
   private final AuthorizationService authorization;
   private final CoactivaValidacionIaWorker validacionIa;
+  private final CoactivaExpedienteAnalisisWorker diagnostico;
+  private final CoactivaAnalisisRepository analisisRepo;
+  private final CoactivaDiagnosticoParser diagnosticoParser;
+
+  private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
 
   public CoactivaExpedienteService(
       CoactivaExpedienteRepository expedientes,
@@ -84,7 +96,10 @@ public class CoactivaExpedienteService {
       CoactivaSemaforoService semaforo,
       CoactivaCaseSync caseSync,
       AuthorizationService authorization,
-      CoactivaValidacionIaWorker validacionIa) {
+      CoactivaValidacionIaWorker validacionIa,
+      CoactivaExpedienteAnalisisWorker diagnostico,
+      CoactivaAnalisisRepository analisisRepo,
+      CoactivaDiagnosticoParser diagnosticoParser) {
     this.expedientes = expedientes;
     this.participantes = participantes;
     this.notificaciones = notificaciones;
@@ -97,6 +112,9 @@ public class CoactivaExpedienteService {
     this.caseSync = caseSync;
     this.authorization = authorization;
     this.validacionIa = validacionIa;
+    this.diagnostico = diagnostico;
+    this.analisisRepo = analisisRepo;
+    this.diagnosticoParser = diagnosticoParser;
   }
 
   // ---------------------------------------------------------------------------
@@ -480,6 +498,92 @@ public class CoactivaExpedienteService {
     return toItem(archivo);
   }
 
+  /** PDF completo del juicio (hasta 300 MB). Dispara OCR por fojas y el prompt de la etapa. */
+  @Transactional
+  public ArchivoItem subirDocumentoUnificado(UUID expedienteId, MultipartFile file) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    if (file == null || file.isEmpty()) {
+      throw ApiException.badRequest("Adjunta el PDF del expediente.");
+    }
+    if (file.getSize() > MAX_PDF_BYTES) {
+      throw ApiException.badRequest("El PDF supera 300 MB.");
+    }
+    if (!esPdf(file)) {
+      throw ApiException.badRequest("El expediente unificado debe ser un PDF.");
+    }
+    AuthPrincipal principal = AuthContext.require();
+    CoactivaExpediente expediente = require(principal.tenantId(), expedienteId);
+    CoactivaArchivo archivo = guardarArchivo(principal, file, CoactivaArchivo.EXPEDIENTE_UNIFICADO);
+    vincular(principal, archivo, expediente);
+    encolarAnalisis(archivo, expediente.getEtapaVerificada());
+    return toItem(archivo);
+  }
+
+  @Transactional(readOnly = true)
+  public AnalisisResponse obtenerAnalisis(UUID expedienteId) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    CoactivaExpediente expediente = require(tenantId, expedienteId);
+    CoactivaAnalisis ultimo =
+        analisisRepo.findFirstByTenantIdAndExpedienteIdOrderByCreatedAtDesc(tenantId, expedienteId).orElse(null);
+    boolean enCurso =
+        CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())
+            && (ultimo == null || !ultimo.getArchivoId().equals(expediente.getAnalisisArchivoId()));
+    if (enCurso) {
+      return AnalisisResponse.enCurso(expediente.getAnalisisArchivoId());
+    }
+    if (ultimo == null) {
+      throw ApiException.notFound("El expediente aún no tiene diagnóstico.");
+    }
+    if (CoactivaAnalisis.ERROR.equals(ultimo.getEstado())) {
+      return new AnalisisResponse(
+          expediente.getEstadoAnalisis(),
+          ultimo.getId(),
+          ultimo.getArchivoId(),
+          ultimo.getEtapa(),
+          null,
+          null,
+          List.of(),
+          List.of(),
+          Map.of(),
+          null,
+          ultimo.getError(),
+          ultimo.getCreatedAt());
+    }
+    CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(ultimo.getResultado());
+    CoactivaDiagnostico diag = parsed.diagnostico();
+    if (diag == null) {
+      return new AnalisisResponse(
+          expediente.getEstadoAnalisis(),
+          ultimo.getId(),
+          ultimo.getArchivoId(),
+          ultimo.getEtapa(),
+          null,
+          ultimo.getEtapaDetectada(),
+          List.of(),
+          List.of(),
+          Map.of(),
+          null,
+          parsed.error(),
+          ultimo.getCreatedAt());
+    }
+    return new AnalisisResponse(
+        expediente.getEstadoAnalisis(),
+        ultimo.getId(),
+        ultimo.getArchivoId(),
+        ultimo.getEtapa(),
+        diag.porcentajeCompletitud(),
+        diag.etapaNormalizada() != null ? diag.etapaNormalizada() : diag.etapaDetectada(),
+        diag.documentos().stream()
+            .map(d -> new DocumentoDetectado(d.tipo(), d.fojaInicio(), d.fojaFin(), d.presente()))
+            .toList(),
+        diag.alertas(),
+        diag.datosExtraidos(),
+        diag.siguienteAccion(),
+        null,
+        ultimo.getCreatedAt());
+  }
+
   /** Guarda el archivo en disco y lo registra SIN_ASIGNAR. */
   @Transactional
   public CoactivaArchivo guardarArchivo(AuthPrincipal principal, MultipartFile file, String tipo) {
@@ -581,10 +685,25 @@ public class CoactivaExpedienteService {
     if (CoactivaArchivo.ACTA.equals(tipo) || "ACTUACION".equals(tipo)) {
       return;
     }
+    if (CoactivaArchivo.esExpedienteUnificado(tipo)) {
+      encolarDiagnostico(archivo, etapa);
+      return;
+    }
     archivo.iniciarAnalisisIa(etapa);
-    UUID tenantId = archivo.getTenantId();
-    UUID archivoId = archivo.getId();
-    Runnable launch = () -> validacionIa.analizarAsync(tenantId, archivoId);
+    lanzarTrasCommit(() -> validacionIa.analizarAsync(archivo.getTenantId(), archivo.getId()));
+  }
+
+  private void encolarDiagnostico(CoactivaArchivo archivo, String etapa) {
+    archivo.iniciarAnalisisIa(etapa);
+    if (archivo.getExpedienteId() != null) {
+      expedientes
+          .findByIdAndTenantIdAndDeletedAtIsNull(archivo.getExpedienteId(), archivo.getTenantId())
+          .ifPresent(e -> e.marcarAnalizando(archivo.getId()));
+    }
+    lanzarTrasCommit(() -> diagnostico.analizarAsync(archivo.getTenantId(), archivo.getId()));
+  }
+
+  private static void lanzarTrasCommit(Runnable launch) {
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(
           new TransactionSynchronization() {
@@ -596,6 +715,12 @@ public class CoactivaExpedienteService {
     } else {
       launch.run();
     }
+  }
+
+  private static boolean esPdf(MultipartFile file) {
+    String nombre = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
+    String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase(Locale.ROOT);
+    return nombre.endsWith(".pdf") || mime.contains("pdf");
   }
 
   // ---------------------------------------------------------------------------
@@ -686,6 +811,7 @@ public class CoactivaExpedienteService {
         expediente.getAsistenteUserId(),
         expediente.getFojas(),
         expediente.getEstadoOperativo(),
+        expediente.getEstadoAnalisis(),
         expediente.getEtapaReportada(),
         expediente.getEtapaReportadaTexto(),
         expediente.getEtapaVerificada(),

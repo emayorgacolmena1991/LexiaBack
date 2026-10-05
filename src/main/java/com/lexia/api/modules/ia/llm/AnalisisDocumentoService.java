@@ -57,6 +57,16 @@ public interface AnalisisDocumentoService {
         "Validación documental no disponible para este proveedor LLM.");
   }
 
+  /**
+   * Diagnóstico del PDF único de coactivas. El prompt ya trae la etapa y el contrato JSON
+   * ({@code porcentaje_completitud}, documentos por foja, alertas, siguiente acción). Devuelve el
+   * JSON crudo; el parseo lo hace el llamador.
+   */
+  default ValidacionDocumentoJson diagnosticarCoactiva(String systemPrompt, String textoExpediente) {
+    return ValidacionDocumentoJson.error(
+        "Diagnóstico de expediente coactivo no disponible para este proveedor LLM.");
+  }
+
   /** JSON crudo del LLM o error de transporte/configuración. */
   record ValidacionDocumentoJson(String json, String error) {
 

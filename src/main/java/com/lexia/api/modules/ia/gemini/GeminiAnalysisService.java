@@ -262,6 +262,74 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
+  public ValidacionDocumentoJson diagnosticarCoactiva(String systemPrompt, String textoExpediente) {
+    return completarJson(
+        systemPrompt,
+        textoExpediente,
+        120_000,
+        4096,
+        "Sin texto OCR para diagnosticar el expediente.",
+        "diagnóstico coactivo");
+  }
+
+  private ValidacionDocumentoJson completarJson(
+      String systemPrompt,
+      String textoDocumento,
+      int maxChars,
+      int maxTokens,
+      String vacio,
+      String etiqueta) {
+    String texto = textoDocumento == null ? "" : textoDocumento;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error(vacio);
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("GEMINI_API_KEY no configurada.");
+    }
+    String system =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Responde en JSON.";
+    Content content =
+        Content.fromParts(
+            Part.fromText(system),
+            Part.fromText("<documento_ocr>\n" + truncate(texto, maxChars) + "\n</documento_ocr>"));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0f)
+            .maxOutputTokens(maxTokens)
+            .build();
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+          try {
+            String raw = client.models.generateContent(modelo, content, config).text();
+            if (StringUtils.hasText(raw)) {
+              LOG.info("Gemini {} OK modelo={}", etiqueta, modelo);
+              return ValidacionDocumentoJson.ok(GeminiJsonSanitizer.limpiar(raw));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+            sleepBackoff(intento, false);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini {} {}", etiqueta, ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
+          }
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo completar " + etiqueta + " con Gemini. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
   public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     String texto = textoCaptura == null ? "" : textoCaptura;
     if (!StringUtils.hasText(texto.trim())) {

@@ -4,6 +4,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BandejaResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
@@ -158,6 +159,17 @@ public class CoactivaExpedienteController {
       @RequestPart("file") MultipartFile file,
       @RequestParam(required = false) String tipo) {
     return service.subirArchivo(id, file, tipo);
+  }
+
+  @PostMapping(value = "/expedientes/{id}/documento-unificado", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  @ResponseStatus(HttpStatus.CREATED)
+  public ArchivoItem documentoUnificado(@PathVariable UUID id, @RequestPart("file") MultipartFile file) {
+    return service.subirDocumentoUnificado(id, file);
+  }
+
+  @GetMapping("/expedientes/{id}/analisis")
+  public AnalisisResponse analisis(@PathVariable UUID id) {
+    return service.obtenerAnalisis(id);
   }
 
   @GetMapping("/archivos/{archivoId}")

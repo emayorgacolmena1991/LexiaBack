@@ -6,7 +6,7 @@ spring:
     name: lexia-api
   servlet:
     multipart:
-      max-file-size: 100MB
+      max-file-size: 300MB
       max-request-size: 500MB
   datasource:
     url: jdbc:postgresql://${LEXIA_DB_HOST:51.79.11.21}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
