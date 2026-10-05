@@ -1,6 +1,7 @@
 package com.lexia.api.modules.expedientes.coactivas.ingesta;
 
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaDetalle;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaHeaderRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaRequest;
@@ -103,6 +104,12 @@ public class CoactivaIngestaController {
   @PostMapping("/carga-masiva/{archivoId}/vincular")
   public ArchivoItem vincular(@PathVariable UUID archivoId, @Valid @RequestBody VincularRequest request) {
     return cargaMasiva.vincular(archivoId, request.expedienteId());
+  }
+
+  @PostMapping("/archivos/{archivoId}/vincular")
+  public ExpedienteDetalle vincularArchivo(
+      @PathVariable UUID archivoId, @Valid @RequestBody VincularRequest request) {
+    return cargaMasiva.vincularManual(archivoId, request.expedienteId());
   }
 
   @DeleteMapping("/carga-masiva/{archivoId}")

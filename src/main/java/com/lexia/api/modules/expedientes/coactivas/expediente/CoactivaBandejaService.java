@@ -4,6 +4,7 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaEtapa;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
+import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoRepository;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
@@ -11,6 +12,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CatalogosResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.EtapaItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteResumen;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteSelectorItem;
 import com.lexia.api.modules.identity.AuthorizationService;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
@@ -24,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -188,6 +191,109 @@ public class CoactivaBandejaService {
             cb.or(
                 cb.like(cb.lower(root.get("nroJuicio")), like),
                 cb.like(cb.lower(root.get("nroOperacion")), like),
+                root.get("id").in(sub)));
+      }
+      return cb.and(predicates.toArray(Predicate[]::new));
+    };
+  }
+
+  @Transactional(readOnly = true)
+  public List<ExpedienteSelectorItem> selector(String query, int limit, boolean soloSinDocumento) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    int safeLimit = Math.min(Math.max(limit, 1), 50);
+    String q = CoactivaTexto.blankToNull(query);
+    List<CoactivaExpediente> sinDocumento = buscarSelector(tenantId, q, safeLimit, true);
+    List<CoactivaExpediente> conDocumento = List.of();
+    if (!soloSinDocumento && sinDocumento.size() < safeLimit) {
+      conDocumento = buscarSelector(tenantId, q, safeLimit - sinDocumento.size(), false);
+    }
+    return aSelector(tenantId, sinDocumento, conDocumento);
+  }
+
+  private List<CoactivaExpediente> buscarSelector(
+      UUID tenantId, String query, int limit, boolean sinDocumento) {
+    return expedientes
+        .findAll(
+            selectorSpec(tenantId, query, sinDocumento),
+            PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "createdAt")))
+        .getContent();
+  }
+
+  private List<ExpedienteSelectorItem> aSelector(
+      UUID tenantId, List<CoactivaExpediente> sinDocumento, List<CoactivaExpediente> conDocumento) {
+    List<CoactivaExpediente> rows = new ArrayList<>(sinDocumento);
+    rows.addAll(conDocumento);
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    List<UUID> ids = rows.stream().map(CoactivaExpediente::getId).toList();
+    Map<UUID, List<CoactivaParticipante>> porExpediente =
+        participantes.findByTenantIdAndExpedienteIdInAndDeletedAtIsNull(tenantId, ids).stream()
+            .collect(Collectors.groupingBy(CoactivaParticipante::getExpedienteId));
+    Map<String, String> oficinas = new HashMap<>();
+    for (var oficina : delegados.catalogos().oficinas()) {
+      oficinas.put(oficina.codigo(), oficina.nombre());
+    }
+    Set<UUID> conPdf = conDocumento.stream().map(CoactivaExpediente::getId).collect(Collectors.toSet());
+    List<ExpedienteSelectorItem> items = new ArrayList<>();
+    for (CoactivaExpediente expediente : rows) {
+      List<CoactivaParticipante> lista =
+          new ArrayList<>(porExpediente.getOrDefault(expediente.getId(), List.of()));
+      lista.sort(Comparator.comparingInt(CoactivaParticipante::getOrden));
+      CoactivaParticipante deudor =
+          lista.stream().filter(p -> CoactivaParticipante.DEUDOR.equals(p.getRol())).findFirst().orElse(null);
+      String etapa = expediente.getEtapaVerificada();
+      if (etapa == null || etapa.isBlank()) {
+        etapa = expediente.getEtapaReportada();
+      }
+      String codigo = expediente.getOficinaCodigo();
+      items.add(
+          new ExpedienteSelectorItem(
+              expediente.getId(),
+              expediente.getNroJuicio(),
+              expediente.getNroOperacion(),
+              deudor == null ? null : deudor.getNombreCompleto(),
+              deudor == null ? null : deudor.getIdentificacion(),
+              codigo == null ? null : oficinas.getOrDefault(codigo, codigo),
+              etapa,
+              conPdf.contains(expediente.getId())));
+    }
+    return items;
+  }
+
+  private static Specification<CoactivaExpediente> selectorSpec(
+      UUID tenantId, String query, boolean sinDocumento) {
+    return (root, cq, cb) -> {
+      List<Predicate> predicates = new ArrayList<>();
+      predicates.add(cb.equal(root.get("tenantId"), tenantId));
+      predicates.add(cb.isNull(root.get("deletedAt")));
+      Subquery<UUID> docs = cq.subquery(UUID.class);
+      Root<CoactivaArchivo> archivo = docs.from(CoactivaArchivo.class);
+      docs.select(archivo.get("expedienteId"))
+          .where(
+              cb.equal(archivo.get("tenantId"), tenantId),
+              cb.isNull(archivo.get("deletedAt")),
+              cb.isNotNull(archivo.get("expedienteId")),
+              archivo
+                  .get("tipo")
+                  .in(CoactivaArchivo.EXPEDIENTE_ESCANEADO, CoactivaArchivo.EXPEDIENTE_UNIFICADO));
+      predicates.add(sinDocumento ? cb.not(root.get("id").in(docs)) : root.get("id").in(docs));
+      if (query != null) {
+        String like = "%" + query.toLowerCase(Locale.ROOT) + "%";
+        Subquery<UUID> sub = cq.subquery(UUID.class);
+        Root<CoactivaParticipante> participante = sub.from(CoactivaParticipante.class);
+        sub.select(participante.get("expedienteId"))
+            .where(
+                cb.equal(participante.get("tenantId"), tenantId),
+                cb.isNull(participante.get("deletedAt")),
+                cb.or(
+                    cb.like(cb.lower(participante.get("nombreCompleto")), like),
+                    cb.like(participante.get("identificacion"), "%" + query + "%")));
+        predicates.add(
+            cb.or(
+                cb.like(cb.lower(root.get("nroJuicio")), like),
+                cb.like(cb.lower(cb.coalesce(root.get("nroOperacion"), "")), like),
                 root.get("id").in(sub)));
       }
       return cb.and(predicates.toArray(Predicate[]::new));

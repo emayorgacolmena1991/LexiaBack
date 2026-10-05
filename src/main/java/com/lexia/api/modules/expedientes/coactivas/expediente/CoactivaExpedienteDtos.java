@@ -131,6 +131,16 @@ public final class CoactivaExpedienteDtos {
 
   public record OverrideIaRequest(@Size(max = 600) String motivo) {}
 
+  public record ExpedienteSelectorItem(
+      UUID id,
+      String numeroJuicio,
+      String numeroOperacion,
+      String deudorNombre,
+      String deudorCedula,
+      String oficina,
+      String etapa,
+      boolean tieneDocumento) {}
+
   public record ExpedienteDetalle(
       UUID id,
       UUID caseId,

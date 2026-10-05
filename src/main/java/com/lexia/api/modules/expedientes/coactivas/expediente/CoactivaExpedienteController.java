@@ -11,6 +11,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CatalogosResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteSelectorItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.OverrideIaRequest;
@@ -85,6 +86,14 @@ public class CoactivaExpedienteController {
       @RequestParam(defaultValue = "0") int page,
       @RequestParam(defaultValue = "25") int size) {
     return bandeja.listar(new Filtro(oficina, delegadoId, etapa, semaforo, estadoOperativo, q), page, size);
+  }
+
+  @GetMapping("/expedientes/selector")
+  public List<ExpedienteSelectorItem> selector(
+      @RequestParam(required = false) String query,
+      @RequestParam(defaultValue = "20") int limit,
+      @RequestParam(defaultValue = "true") boolean soloSinDocumento) {
+    return bandeja.selector(query, limit, soloSinDocumento);
   }
 
   @PostMapping("/expedientes")

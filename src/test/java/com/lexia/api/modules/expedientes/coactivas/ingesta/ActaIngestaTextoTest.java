@@ -7,6 +7,7 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficina;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.ActaTableParser.Resultado;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -114,6 +115,17 @@ class ActaIngestaTextoTest {
     assertEquals("PORTOVIEJO", ActaTableParser.uecEnTexto("ACTA DE ENTREGA\nUEC: PORTOVIEJO\nOFICINA BAHIA"));
     assertEquals("PORTOVIEJO", ActaTableParser.uecEnTexto("U.E.C. PORTOVIEJO"));
     assertNull(ActaTableParser.uecEnTexto("OFICINA GUAYAQUIL"));
+  }
+
+  @Test
+  void fechaDeCabeceraReemplazaElDefault() {
+    assertEquals(
+        LocalDate.of(2023, 11, 23),
+        ActaTableParser.fechaEnDocumento("Acta de entrega\nFecha: 23/11/2023\nUEC Portoviejo", List.of()));
+    assertEquals(
+        LocalDate.of(2024, 1, 5),
+        ActaTableParser.fechaEnDocumento(null, List.of(List.of(List.of("Fecha del acta", "2024-01-05")))));
+    assertNull(ActaTableParser.fechaEnDocumento("Juicio 025-2024-00026", List.of()));
   }
 
   private static List<CoactivaOficina> conAgencias(UUID tenant, List<CoactivaOficina> base) {

@@ -138,13 +138,15 @@ public class ActaImportService {
     }
 
     ActaTableParser.Resultado resultado = ActaTableParser.interpretar(tablas);
+    LocalDate detectada = ActaTableParser.fechaEnDocumento(textoDocumento, tablas);
+    LocalDate fecha = detectada != null ? detectada : (fechaActa != null ? fechaActa : LocalDate.now());
     CoactivaActa acta = CoactivaActa.create(tenantId, normalizarTipo(tipo), fuente, principal.userId());
     String uecTexto = resultado.uec() != null ? resultado.uec() : ActaTableParser.uecEnTexto(textoDocumento);
     String oficina = delegados.resolverCodigoOficina(tenantId, uecTexto);
     acta.setCabecera(
         CoactivaTexto.truncate(CoactivaTexto.blankToNull(titulo) == null ? file.getOriginalFilename() : titulo, 240),
         oficina,
-        fechaActa,
+        fecha,
         LocalDate.now(),
         null,
         nombreUsuario(principal),
@@ -287,7 +289,7 @@ public class ActaImportService {
         request.oficinaCodigo() == null
             ? acta.getOficinaCodigo()
             : delegados.resolverCodigoOficina(principal.tenantId(), request.oficinaCodigo()),
-        request.fechaActa(),
+        request.fechaActa() != null ? request.fechaActa() : (acta.getFechaActa() != null ? acta.getFechaActa() : LocalDate.now()),
         request.fechaRecepcion() == null ? LocalDate.now() : request.fechaRecepcion(),
         CoactivaTexto.blankToNull(request.entregadoPor()),
         recibidoPor,

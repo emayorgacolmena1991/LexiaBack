@@ -66,6 +66,9 @@ public class CoactivaArchivo implements Persistable<UUID> {
   @Column(name = "estado_vinculo", nullable = false, length = 16)
   private String estadoVinculo;
 
+  @Column(name = "vincular_manual", nullable = false)
+  private boolean vincularManual;
+
   @Column(name = "subido_por")
   private UUID subidoPor;
 
@@ -146,6 +149,10 @@ public class CoactivaArchivo implements Persistable<UUID> {
   public void vincularExpediente(UUID expedienteId) {
     this.expedienteId = expedienteId;
     this.estadoVinculo = VINCULADO;
+  }
+
+  public void marcarVinculoManual() {
+    this.vincularManual = true;
   }
 
   public void vincularActa(UUID actaId) {

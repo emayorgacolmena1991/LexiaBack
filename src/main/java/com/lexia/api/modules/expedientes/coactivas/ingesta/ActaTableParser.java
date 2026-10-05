@@ -5,6 +5,7 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -107,6 +108,17 @@ public final class ActaTableParser {
 
   private static final Pattern UEC_EN_TEXTO =
       Pattern.compile("(?i)\\bU\\.?\\s*E\\.?\\s*C\\b\\.?[:\\s-]+([\\p{L}]{4,})");
+  private static final Pattern FECHA_DMY =
+      Pattern.compile(
+          "(?i)fecha(?:\\s+de\\s+(?:acta|entrega|recepci[oó]n))?[^\\d]{0,40}(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})");
+  private static final Pattern FECHA_ISO =
+      Pattern.compile(
+          "(?i)fecha(?:\\s+de\\s+(?:acta|entrega|recepci[oó]n))?[^\\d]{0,40}(\\d{4})-(\\d{2})-(\\d{2})");
+
+  /** Fecha junto a la etiqueta «Fecha» en la cabecera del acta. Null si el documento no la trae. */
+  public static LocalDate fechaEnDocumento(String texto, List<List<List<String>>> tablas) {
+    return fechaJuntoAEtiqueta(unirCabecera(texto, tablas));
+  }
 
   /** Primera localidad junto a la etiqueta UEC cuando la columna no vino en la tabla. */
   public static String uecEnTexto(String texto) {
@@ -115,6 +127,52 @@ public final class ActaTableParser {
     }
     Matcher matcher = UEC_EN_TEXTO.matcher(texto);
     return matcher.find() ? matcher.group(1) : null;
+  }
+
+  private static String unirCabecera(String texto, List<List<List<String>>> tablas) {
+    StringBuilder sb = new StringBuilder();
+    if (texto != null) {
+      sb.append(texto, 0, Math.min(texto.length(), 2500)).append('\n');
+    }
+    if (tablas == null) {
+      return sb.toString();
+    }
+    int filas = 0;
+    for (List<List<String>> tabla : tablas) {
+      for (List<String> row : tabla) {
+        if (filas++ >= 15) {
+          return sb.toString();
+        }
+        sb.append(String.join(" ", row)).append('\n');
+      }
+    }
+    return sb.toString();
+  }
+
+  private static LocalDate fechaJuntoAEtiqueta(String texto) {
+    if (texto == null || texto.isBlank()) {
+      return null;
+    }
+    Matcher iso = FECHA_ISO.matcher(texto);
+    if (iso.find()) {
+      LocalDate fecha = fechaValida(iso.group(1), iso.group(2), iso.group(3));
+      if (fecha != null) {
+        return fecha;
+      }
+    }
+    Matcher dmy = FECHA_DMY.matcher(texto);
+    if (dmy.find()) {
+      return fechaValida(dmy.group(3), dmy.group(2), dmy.group(1));
+    }
+    return null;
+  }
+
+  private static LocalDate fechaValida(String year, String month, String day) {
+    try {
+      return LocalDate.of(Integer.parseInt(year), Integer.parseInt(month), Integer.parseInt(day));
+    } catch (RuntimeException ex) {
+      return null;
+    }
   }
 
   /** Tablas del {@code analyzeResult} de Azure Document Intelligence (modelo prebuilt-layout). */
