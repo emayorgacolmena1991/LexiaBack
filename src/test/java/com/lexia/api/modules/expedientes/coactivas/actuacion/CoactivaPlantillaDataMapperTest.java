@@ -132,6 +132,45 @@ class CoactivaPlantillaDataMapperTest {
   }
 
   @Test
+  void aliasCubreEtiquetasDeLasPlantillasNuevas() {
+    Map<String, Object> ocr = ocrCompleto();
+    ocr.put("fecha_embargo", "27 de abril del 2026");
+    ocr.put("fecha_liquidacion", "27 de abril de 2026");
+    ocr.put("valor_embargo_num", "155.50");
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(ocr), AHORA);
+    Map<String, Object> v = datos.valores();
+
+    assertEquals("JUAN CARLOS PEREZ LOPEZ", v.get("nombre_deudor_1"));
+    assertEquals("025-2024-00026", v.get("numero_juicio"));
+    assertEquals("025-2024-00026", v.get("numero_proceso_coactivo"));
+    assertEquals("Portoviejo", v.get("ciudad"));
+    assertEquals("4", v.get("numero_zona"));
+    assertEquals("PORTOVIEJO", v.get("zona"));
+    assertEquals("15,000.00", v.get("monto_liquidacion"));
+    assertEquals("CARLOS SECRETARIO", v.get("abogado_secretario"));
+    assertEquals("MARIA DELEGADA", v.get("funcionario_coactiva"));
+    assertEquals("PEDRO GARANTE", v.get("nombre_garante_1"));
+    assertEquals("1", v.get("foja_inicio_numero"));
+    assertEquals("120", v.get("foja_fin_numero"));
+    assertEquals("ciento veinte", v.get("foja_fin_texto"));
+    assertEquals("Banecuador B.P.", v.get("nombre_institucion_bancaria"));
+    assertEquals("5", v.get("dia_entrega"));
+    assertEquals("octubre", v.get("mes_entrega"));
+    assertEquals("2026", v.get("anio_entrega"));
+    assertEquals("27", v.get("dia_embargo"));
+    assertEquals("abril", v.get("mes_embargo"));
+    assertEquals("2026", v.get("anio_embargo"));
+    assertEquals("27 de abril de 2026", v.get("fecha_liquidacion_actualizada"));
+    assertEquals("2200111111", v.get("numero_cuenta_retencion"));
+    assertEquals("172.50", v.get("valor_honorarios_total_num"));
+    assertEquals("150.00", v.get("valor_honorarios_subtotal"));
+    assertEquals("22.50", v.get("valor_iva_honorarios"));
+    assertEquals("CIENTO CINCUENTA Y CINCO CON 50/100", v.get("valor_embargo_texto"));
+    assertEquals("JUAN CARLOS PEREZ LOPEZ", v.get("nombre_receptor"));
+  }
+
+  @Test
   void limpiaTratamientosDeLosNombres() {
     assertEquals("Juan Pérez", CoactivaPlantillaDataMapper.limpiarNombre("el/la señor(a) Juan Pérez"));
     assertEquals("Ana Ruiz", CoactivaPlantillaDataMapper.limpiarNombre("Abg. Ana Ruiz"));

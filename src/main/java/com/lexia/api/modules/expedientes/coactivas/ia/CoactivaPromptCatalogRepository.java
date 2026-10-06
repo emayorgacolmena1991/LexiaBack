@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.coactivas.ia;
 
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -7,6 +8,8 @@ public interface CoactivaPromptCatalogRepository extends JpaRepository<CoactivaP
 
   Optional<CoactivaPromptCatalog> findFirstByTipoDocumentoAndEtapaAndActivoTrue(
       String tipoDocumento, String etapa);
+
+  List<CoactivaPromptCatalog> findByTipoDocumentoAndEtapaAndActivoTrue(String tipoDocumento, String etapa);
 
   /**
    * Resuelve el prompt más específico: (tipo, etapa) → (tipo, '*') → ('*', etapa) → ('*', '*').

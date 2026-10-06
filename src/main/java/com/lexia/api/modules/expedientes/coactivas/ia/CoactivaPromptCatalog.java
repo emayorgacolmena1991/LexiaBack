@@ -7,6 +7,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Catálogo de system prompts por tipo de documento y etapa coactiva. {@code '*'} actúa como
@@ -30,6 +32,14 @@ public class CoactivaPromptCatalog {
 
   @Column(name = "system_prompt", nullable = false)
   private String systemPrompt;
+
+  /** Vacío en prompts de diagnóstico. Ruta classpath cuando {@code tipo_documento} es PLANTILLA. */
+  @Column(name = "plantilla_archivo", nullable = false, length = 255)
+  private String plantillaArchivo = "";
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "variables_requeridas", columnDefinition = "jsonb")
+  private String variablesRequeridas;
 
   @Column(length = 255)
   private String descripcion;
@@ -57,6 +67,14 @@ public class CoactivaPromptCatalog {
 
   public String getSystemPrompt() {
     return systemPrompt;
+  }
+
+  public String getPlantillaArchivo() {
+    return plantillaArchivo;
+  }
+
+  public String getVariablesRequeridas() {
+    return variablesRequeridas;
   }
 
   public String getDescripcion() {

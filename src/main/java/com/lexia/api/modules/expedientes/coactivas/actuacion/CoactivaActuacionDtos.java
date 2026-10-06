@@ -6,17 +6,26 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.UUID;
 
 public final class CoactivaActuacionDtos {
 
   private CoactivaActuacionDtos() {}
 
-  /** @param generable la plantilla tiene un .docx asociado y puede generar la actuación */
-  public record PlantillaItem(UUID id, String nombre, String etapa, boolean generable) {}
+  /**
+   * @param generable la plantilla tiene un .docx asociado y puede generar la actuación
+   * @param variables etiqueta → valor de la IA o {@code [COMPLETAR: etiqueta]} si no hubo dato
+   */
+  public record PlantillaItem(
+      UUID id, String nombre, String etapa, boolean generable, Map<String, String> variables) {}
 
   /** {@code permitirIncompleto} solo se envía tras la confirmación explícita del usuario. */
   public record GenerarActuacionRequest(@NotNull UUID plantillaId, Boolean permitirIncompleto) {}
+
+  /** {@code formato} {@code pdf} (default) o {@code docx}. {@code variables} pisa lo que llenó la IA. */
+  public record GenerarDocumentoRequest(
+      @NotNull UUID plantillaId, Map<String, String> variables, @Size(max = 8) String formato) {}
 
   public record ActuacionResponse(UUID actuacionId, UUID archivoId, String estado) {}
 

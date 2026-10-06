@@ -3,18 +3,22 @@ package com.lexia.api.modules.expedientes.coactivas.actuacion;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ActuacionResponse;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ErrorBody;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.GenerarActuacionRequest;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.GenerarDocumentoRequest;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.HonorariosResponse;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.MedidaItem;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.MedidaRequest;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.PlantillaItem;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ResultadoHttp;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.SolicitudResponse;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionService.DocumentoGenerado;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionService.GenerarResultado;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,6 +43,18 @@ public class CoactivaActuacionController {
   @GetMapping("/expedientes/{id}/plantillas")
   public List<PlantillaItem> plantillas(@PathVariable UUID id, @RequestParam String etapa) {
     return service.plantillas(id, etapa);
+  }
+
+  @PostMapping("/expedientes/{id}/generar-documento")
+  public ResponseEntity<byte[]> generarDocumento(
+      @PathVariable UUID id, @Valid @RequestBody GenerarDocumentoRequest request) {
+    DocumentoGenerado doc =
+        service.generarDocumento(id, request.plantillaId(), request.variables(), request.formato());
+    return ResponseEntity.status(201)
+        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + doc.nombre() + "\"")
+        .header("X-Actuacion-Id", doc.actuacionId().toString())
+        .contentType(MediaType.parseMediaType(doc.mime()))
+        .body(doc.bytes());
   }
 
   @PostMapping("/expedientes/{id}/actuaciones")

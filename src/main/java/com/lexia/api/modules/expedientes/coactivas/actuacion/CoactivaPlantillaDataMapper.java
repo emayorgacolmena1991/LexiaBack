@@ -23,6 +23,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -59,6 +60,9 @@ public class CoactivaPlantillaDataMapper {
   private static final DateTimeFormatter FECHA_LARGA = DateTimeFormatter.ofPattern("d 'de' MMMM 'de' yyyy", ES);
   private static final DateTimeFormatter HORA = DateTimeFormatter.ofPattern("HH'h'mm", ES);
   private static final Pattern EMAIL = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
+  private static final Pattern FECHA_PARTES =
+      Pattern.compile("(?iu)(\\d{1,2})\\s+de\\s+([\\p{L}]+)\\s+(?:de|del)\\s+(\\d{4})");
+  private static final BigDecimal DIVISOR_IVA = new BigDecimal("1.15");
   private static final Pattern TRATAMIENTO =
       Pattern.compile(
           "(?iu)^(?:(?:el|la)(?:\\s*/\\s*la)?\\s+)?"
@@ -224,7 +228,160 @@ public class CoactivaPlantillaDataMapper {
     }
     r.sinComparar("banco_embargado", banco, null);
 
+    completar(r, f, ocr, ahora);
     return new PlantillaDatos(r.valores, r.discrepancias, f.datosExtraidos() != null);
+  }
+
+  /**
+   * Cubre el resto de etiquetas de las plantillas de {@code templates/coactivas}: alias del dato
+   * canónico, segundo deudor/garante, fojas y lo que el OCR traiga con el mismo nombre de variable.
+   */
+  private static void completar(Resolver r, Fuentes f, Map<String, Object> ocr, ZonedDateTime ahora) {
+    List<CoactivaParticipante> deudores = porRol(f.participantes(), DEUDOR);
+    List<CoactivaParticipante> garantes = porRol(f.participantes(), GARANTE);
+    persona(r, ocr, "nombre_deudor_principal_2", "cedula_deudor_principal_2", deudores.size() > 1 ? deudores.get(1) : null);
+    persona(
+        r, ocr, "nombre_garante_solidario_2", "cedula_garante_solidario_2", garantes.size() > 1 ? garantes.get(1) : null);
+
+    List<String> correos = new ArrayList<>();
+    deudores.forEach(p -> correos.addAll(correosDe(p.getEmails())));
+    garantes.forEach(p -> correos.addAll(correosDe(p.getEmails())));
+    List<String> unicos = correos.stream().distinct().toList();
+    if (unicos.size() > 1) {
+      r.ponerSiAusente("correo_notificacion_2", unicos.get(1));
+    }
+    if (unicos.size() > 2) {
+      r.ponerSiAusente("correo_notificacion_3", unicos.get(2));
+    }
+
+    CoactivaExpediente exp = f.expediente();
+    r.ponerSiAusente("zona", exp.getOficinaCodigo() == null ? null : exp.getOficinaCodigo().toUpperCase(Locale.ROOT));
+    r.ponerSiAusente("nombre_institucion_bancaria", "Banecuador B.P.");
+    r.ponerSiAusente("dia_entrega", String.valueOf(ahora.getDayOfMonth()));
+    r.ponerSiAusente("mes_entrega", ahora.getMonth().getDisplayName(TextStyle.FULL, ES));
+    r.ponerSiAusente("anio_entrega", String.valueOf(ahora.getYear()));
+    Integer fojas = exp.getFojas();
+    if (fojas != null && fojas > 0) {
+      r.ponerSiAusente("foja_inicio_numero", "1");
+      r.ponerSiAusente("foja_inicio_texto", "uno");
+      r.ponerSiAusente("foja_fin_numero", String.valueOf(fojas));
+      r.ponerSiAusente("foja_fin_texto", NumeroALetras.entero(fojas.longValue()));
+    }
+
+    volcarOcr(r, ocr);
+
+    r.copiar("numero_juicio_coactivo", "numero_juicio", "numero_proceso", "numero_proceso_coactivo");
+    r.copiar("nombre_deudor_principal", "nombre_deudor_principal_1", "nombre_deudor_1", "nombre_cliente");
+    r.copiar("cedula_deudor_principal", "cedula_deudor_principal_1", "cedula_deudor_1");
+    r.copiar("nombre_garante_solidario", "nombre_garante_solidario_1", "nombre_garante_1");
+    r.copiar("cedula_garante_solidario", "cedula_garante_solidario_1", "cedula_garante_1");
+    r.copiar("nombre_deudor_principal_2", "nombre_deudor_2");
+    r.copiar("cedula_deudor_principal_2", "cedula_deudor_2");
+    r.copiar("nombre_garante_solidario_2", "nombre_garante_2");
+    r.copiar("cedula_garante_solidario_2", "cedula_garante_2");
+    r.copiar("nombre_funcionario_coactiva", "funcionario_coactiva", "nombre_delegado");
+    r.copiar("nombre_abogado_secretario", "abogado_secretario", "nombre_secretario");
+    r.copiar("ciudad_actuacion", "ciudad", "ciudad_zonal");
+    r.copiar("numero_zonal", "numero_zona");
+    r.copiar("fecha_actuacion", "fecha_providencia", "fecha_acta");
+    r.copiar("hora_actuacion", "hora");
+    r.copiar("monto_deuda_total", "monto_liquidacion");
+    r.copiar("monto_deuda_total_letras", "monto_liquidacion_letras");
+    r.copiar("correo_notificacion_deudor", "correo_notificacion_1");
+    r.copiar("correo_coactiva_institucional", "correo_notificacion_coactiva");
+    r.copiar("correo_estudio_juridico_externo", "correo_abogado_externo", "correo_abogado_secretario");
+    r.copiar("correo_funcionario_coactiva", "correo_delegado");
+    r.copiar("banco_embargado", "banco_retencion", "institucion_financiera");
+    r.copiar("nombre_depositario_judicial", "nombre_depositario");
+    r.copiar("cedula_depositario_judicial", "cedula_depositario");
+    r.copiar("cuenta_honorarios_abogado", "numero_cuenta_honorarios");
+    r.copiar("monto_honorarios", "valor_honorarios_total_num");
+    r.copiar("monto_honorarios_letras", "valor_honorarios_total_texto");
+    r.copiarSiAusente("valor_embargo_num_letras", "valor_embargo_texto");
+    r.copiarSiAusente("numero_cuenta_1", "numero_cuenta_retencion");
+    r.copiarSiAusente("numero_cuenta_1", "numero_cuenta_retencion_1");
+    r.copiarSiAusente("nombre_deudor_principal", "nombre_receptor");
+    r.copiarSiAusente("cedula_deudor_principal", "cedula_receptor");
+    r.copiarSiAusente("ciudad_actuacion", "agencia");
+    r.copiarSiAusente("ciudad_actuacion", "unidad_ejecucion_coactiva");
+    r.copiarSiAusente("fecha_liquidacion", "fecha_liquidacion_actualizada");
+    r.copiarSiAusente("fecha_acta", "fecha_auto_designacion");
+    partirFecha(r, "fecha_embargo", "dia_embargo", "mes_embargo", "anio_embargo");
+    desglosarHonorarios(r);
+  }
+
+  private static void persona(Resolver r, Map<String, Object> ocr, String nombreKey, String cedulaKey, CoactivaParticipante p) {
+    r.nombre(nombreKey, p == null ? null : p.getNombreCompleto(), texto(ocr, nombreKey));
+    r.cedula(cedulaKey, p == null ? null : p.getIdentificacion(), texto(ocr, cedulaKey));
+  }
+
+  private static void volcarOcr(Resolver r, Map<String, Object> ocr) {
+    for (Map.Entry<String, Object> e : ocr.entrySet()) {
+      Object raw = e.getValue();
+      if (raw == null || raw instanceof Map || raw instanceof Collection) {
+        continue;
+      }
+      String key = e.getKey();
+      if (esMonto(key)) {
+        r.montoSiAusente(key, monto(raw));
+      } else {
+        r.ponerSiAusente(key, raw.toString());
+      }
+    }
+  }
+
+  static boolean esMonto(String key) {
+    if (key.endsWith("_letras") || key.endsWith("_texto")) {
+      return false;
+    }
+    return key.startsWith("monto_") || key.startsWith("valor_") || key.equals("valor") || key.equals("iva") || key.equals("total") || key.equals("abono");
+  }
+
+  private static void partirFecha(Resolver r, String fechaKey, String dia, String mes, String anio) {
+    Object raw = r.valor(fechaKey);
+    if (raw == null) {
+      return;
+    }
+    Matcher m = FECHA_PARTES.matcher(raw.toString());
+    if (!m.find()) {
+      return;
+    }
+    r.ponerSiAusente(dia, m.group(1));
+    r.ponerSiAusente(mes, m.group(2).toLowerCase(ES));
+    r.ponerSiAusente(anio, m.group(3));
+  }
+
+  private static void desglosarHonorarios(Resolver r) {
+    BigDecimal total = monto(r.valor("monto_honorarios"));
+    if (total == null) {
+      return;
+    }
+    BigDecimal subtotal = total.divide(DIVISOR_IVA, 2, RoundingMode.HALF_UP);
+    BigDecimal iva = total.subtract(subtotal);
+    r.ponerSiAusente("valor_honorarios_subtotal", formatoMonto(subtotal));
+    r.ponerSiAusente("valor_iva_honorarios", formatoMonto(iva));
+    r.ponerSiAusente("valor", formatoMonto(subtotal));
+    r.ponerSiAusente("iva", formatoMonto(iva));
+    r.ponerSiAusente("total", formatoMonto(total));
+  }
+
+  private static List<CoactivaParticipante> porRol(List<CoactivaParticipante> items, String rol) {
+    if (items == null) {
+      return List.of();
+    }
+    return items.stream().filter(p -> rol.equals(p.getRol())).toList();
+  }
+
+  static List<String> correosDe(String raw) {
+    if (raw == null) {
+      return List.of();
+    }
+    Matcher m = EMAIL.matcher(raw);
+    List<String> out = new ArrayList<>();
+    while (m.find()) {
+      out.add(m.group().toLowerCase(Locale.ROOT));
+    }
+    return out;
   }
 
   /**
@@ -422,6 +579,47 @@ public class CoactivaPlantillaDataMapper {
       }
       valores.put(variable, formatoMonto(valor));
       valores.put(variable + "_letras", letras(valor));
+    }
+
+    void montoSiAusente(String variable, BigDecimal valor) {
+      if (valores.containsKey(variable)) {
+        return;
+      }
+      monto(variable, valor);
+    }
+
+    void ponerSiAusente(String variable, String valor) {
+      if (variable == null || valores.containsKey(variable)) {
+        return;
+      }
+      String v = CoactivaTexto.blankToNull(valor);
+      if (v != null && !"null".equalsIgnoreCase(v)) {
+        valores.put(variable, v);
+      }
+    }
+
+    void copiar(String origen, String... destinos) {
+      Object v = valores.get(origen);
+      if (v == null || v.toString().isBlank()) {
+        return;
+      }
+      for (String destino : destinos) {
+        valores.put(destino, v);
+      }
+    }
+
+    void copiarSiAusente(String origen, String destino) {
+      if (valores.containsKey(destino)) {
+        return;
+      }
+      Object v = valores.get(origen);
+      if (v != null && !v.toString().isBlank()) {
+        valores.put(destino, v);
+      }
+    }
+
+    Object valor(String variable) {
+      return valores.get(variable);
     }
 
     private void preferir(

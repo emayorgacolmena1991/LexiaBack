@@ -24,11 +24,14 @@ import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
 import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -44,7 +47,10 @@ public class CoactivaActuacionService {
       "DataDoc no está configurado en este ambiente. No se sincronizó ningún dato.";
 
   static final String PLANTILLA_DATOS_INCOMPLETOS = "PLANTILLA_DATOS_INCOMPLETOS";
+  static final String MARCADOR = "[COMPLETAR: %s]";
   private static final String PREFIJO_PLANTILLAS = "templates/coactivas/";
+  private static final Pattern VARIABLE = Pattern.compile("[A-Za-z0-9_]{1,80}");
+  private static final int MAX_VALOR = 500;
 
   private static final Set<String> OPI = Set.of("OPI_EMITIDA", "NOTIFICACION_COA");
 
@@ -89,15 +95,84 @@ public class CoactivaActuacionService {
   public List<PlantillaItem> plantillas(UUID expedienteId, String etapa) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     AuthPrincipal principal = AuthContext.require();
-    expedientes.require(principal.tenantId(), expedienteId);
     CoactivaEtapa parsed =
         CoactivaEtapa.parse(etapa).orElseThrow(() -> ApiException.badRequest("Etapa procesal desconocida."));
     Set<String> etapas = OPI.contains(parsed.name()) ? OPI : Set.of(parsed.name());
+    CoactivaExpediente expediente = expedientes.require(principal.tenantId(), expedienteId);
+    PlantillaDatos datos = mapper.mapear(expediente);
     return plantillas
         .findByTenantIdAndEtapaInAndActivoTrueOrderByNombreAsc(principal.tenantId(), etapas)
         .stream()
-        .map(p -> new PlantillaItem(p.getId(), p.getNombre(), p.getEtapa(), p.generable()))
+        .map(p -> new PlantillaItem(p.getId(), p.getNombre(), p.getEtapa(), p.generable(), variablesDe(p, datos)))
         .toList();
+  }
+
+  public record DocumentoGenerado(UUID actuacionId, String nombre, String mime, byte[] bytes) {}
+
+  @Transactional
+  public DocumentoGenerado generarDocumento(
+      UUID expedienteId, UUID plantillaId, Map<String, String> overrides, String formato) {
+    authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    if (expediente.getEtapaVerificada() == null) {
+      throw ApiException.badRequest("Confirma la etapa del expediente antes de generar la actuación.");
+    }
+    CoactivaPlantilla plantilla =
+        plantillas
+            .findByIdAndTenantIdAndActivoTrue(plantillaId, tenantId)
+            .orElseThrow(() -> ApiException.notFound("Plantilla no encontrada."));
+    if (!compatible(plantilla.getEtapa(), expediente.getEtapaVerificada())) {
+      throw new ApiException(
+          HttpStatus.CONFLICT,
+          "PLANTILLA_ETAPA",
+          "La plantilla no corresponde a la etapa verificada del expediente.");
+    }
+    boolean pdf = formatoPdf(formato);
+    String ruta = rutaDocx(plantilla);
+    PlantillaDatos datos = mapper.mapear(expediente);
+    List<String> tags = renderer.tags(ruta);
+    Map<String, Object> valores = new HashMap<>(datos.valores());
+    aplicarOverrides(valores, overrides, tags);
+    List<String> marcadores = new java.util.ArrayList<>();
+    for (String tag : tags) {
+      Object actual = valores.get(tag);
+      if (actual == null || actual.toString().isBlank()) {
+        valores.put(tag, MARCADOR.formatted(tag));
+        marcadores.add(tag);
+      }
+    }
+    byte[] docx = renderer.renderPlantilla(ruta, valores);
+    byte[] body = pdf ? pdfConverter.toPdf(docx) : docx;
+    String nombre = nombreArchivo(plantilla.getNombre(), pdf ? ".pdf" : ".docx");
+    String mime =
+        pdf
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    UUID archivoId = UUID.randomUUID();
+    StoredFile stored = storage.storeBytes(tenantId, archivoId, nombre, body);
+    CoactivaArchivo archivo =
+        CoactivaArchivo.create(
+            archivoId, tenantId, "ACTUACION", nombre, mime, stored.size(), stored.sha256(), stored.path(), principal.userId());
+    archivo.vincularExpediente(expedienteId);
+    archivos.save(archivo);
+    CoactivaActuacion actuacion =
+        actuaciones.save(
+            CoactivaActuacion.crear(tenantId, expedienteId, plantillaId, archivoId, null, principal.userId()));
+    expedientes.registrarEvento(
+        tenantId,
+        expedienteId,
+        "ACTUACION",
+        "Documento generado: " + plantilla.getNombre(),
+        marcadores.isEmpty()
+            ? "Estado GENERADO."
+            : "Estado GENERADO. Campos sin dato: " + String.join(", ", marcadores),
+        principal.userId(),
+        archivoId);
+    expediente.setFechaUltimaActuacion(LocalDate.now());
+    expediente.touch(principal.userId());
+    return new DocumentoGenerado(actuacion.getId(), nombre, mime, body);
   }
 
   public record GenerarResultado(boolean creada, ActuacionResponse body) {}
@@ -435,8 +510,53 @@ public class CoactivaActuacionService {
         Map.of("variablesFaltantes", faltantes));
   }
 
+  private Map<String, String> variablesDe(CoactivaPlantilla plantilla, PlantillaDatos datos) {
+    if (!plantilla.generable()) {
+      return Map.of();
+    }
+    Map<String, String> out = new LinkedHashMap<>();
+    for (String tag : renderer.tags(plantilla.getRutaDocx().trim())) {
+      Object valor = datos.valores().get(tag);
+      String texto = valor == null ? "" : valor.toString();
+      out.put(tag, texto.isBlank() ? MARCADOR.formatted(tag) : texto);
+    }
+    return out;
+  }
+
+  private static void aplicarOverrides(
+      Map<String, Object> valores, Map<String, String> overrides, List<String> tags) {
+    if (overrides == null || overrides.isEmpty()) {
+      return;
+    }
+    Set<String> permitidas = Set.copyOf(tags);
+    for (Map.Entry<String, String> e : overrides.entrySet()) {
+      if (e.getKey() == null || !VARIABLE.matcher(e.getKey()).matches() || !permitidas.contains(e.getKey())) {
+        continue;
+      }
+      String valor = CoactivaTexto.blankToNull(e.getValue());
+      if (valor == null || valor.startsWith("[COMPLETAR:")) {
+        continue;
+      }
+      valores.put(e.getKey(), valor.length() > MAX_VALOR ? valor.substring(0, MAX_VALOR) : valor);
+    }
+  }
+
+  private static boolean formatoPdf(String formato) {
+    if (formato == null || formato.isBlank() || "pdf".equalsIgnoreCase(formato.trim())) {
+      return true;
+    }
+    if ("docx".equalsIgnoreCase(formato.trim())) {
+      return false;
+    }
+    throw ApiException.badRequest("Formato no soportado. Usa pdf o docx.");
+  }
+
   private static String nombrePdf(String plantilla) {
-    String base = plantilla.replaceAll("(?i)\\.docx$", "");
-    return base + ".pdf";
+    return nombreArchivo(plantilla, ".pdf");
+  }
+
+  private static String nombreArchivo(String plantilla, String extension) {
+    String base = plantilla.replaceAll("(?i)\\.docx$", "").replace("\"", "");
+    return base + extension;
   }
 }

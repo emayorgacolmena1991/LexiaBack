@@ -35,7 +35,22 @@ public final class CoactivaDiagnosticoParser {
          "monto_deuda_total": null, "monto_honorarios": null, "cuenta_honorarios_abogado": null,
          "banco_embargado": null,
          "cuentas_embargadas": [{"numero_cuenta": null, "tipo": "CORRIENTE|AHORROS", "titular": "DEUDOR|GARANTE", "banco": null, "monto_retenido": null}],
-         "correo_estudio_juridico_externo": null, "correo_funcionario_coactiva": null, "correo_coactiva_institucional": null},
+         "correo_estudio_juridico_externo": null, "correo_funcionario_coactiva": null, "correo_coactiva_institucional": null,
+         "nombre_deudor_principal_2": null, "cedula_deudor_principal_2": null,
+         "nombre_garante_solidario_2": null, "cedula_garante_solidario_2": null,
+         "fecha_liquidacion": null, "fecha_embargo": null, "fecha_orden_pago_inmediato": null,
+         "fecha_escrito_presentado": null, "fecha_comprobante_pago": null, "numero_comprobante_pago": null,
+         "monto_retencion": null, "monto_credito_original": null, "monto_abono": null,
+         "monto_retencion_1": null, "monto_retencion_2": null,
+         "numero_oficio": null, "institucion_financiera": null,
+         "nombre_embargado": null, "cedula_embargado": null, "calidad_embargado": null,
+         "nombre_coactivado": null, "cedula_coactivado": null, "calidad_coactivado": null,
+         "numero_cuenta_retencion": null, "numero_cuenta_destino": null, "tipo_cuenta_destino": null,
+         "numero_oficio_retencion_1": null, "numero_oficio_retencion_2": null,
+         "correo_notificacion_2": null, "correo_notificacion_3": null,
+         "numero_cuotas": null, "fecha_convenio": null,
+         "nombre_receptor": null, "cedula_receptor": null,
+         "titulo_delegado": null, "titulo_secretario": null, "titulo_gerente_general": null, "titulo_depositario": null},
        "siguiente_accion_sugerida": "qué debe hacer el abogado"}
       No inventes documentos ni fojas que no estén en el texto. Si falta, presente=false y sin fojas.
       En datos_extraidos copia solo valores que consten literalmente en el texto; si un dato no aparece usa null

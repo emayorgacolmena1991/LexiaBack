@@ -110,7 +110,9 @@ public class CoactivaExpedienteAnalisisWorker {
   private Resultado diagnosticar(CoactivaArchivo archivo, Contexto ctx) {
     CoactivaPromptCatalog prompt =
         catalog.resolver(TIPO_PROMPT, ctx.etapa()).orElse(null);
-    String system = contextualizar(prompt == null ? PROMPT_FALLBACK : prompt.getSystemPrompt(), ctx);
+    String system =
+        contextualizar(prompt == null ? PROMPT_FALLBACK : prompt.getSystemPrompt(), ctx)
+            + variablesDeEtapa(ctx.etapa());
     Long promptId = prompt == null ? null : prompt.getId();
     if (dummy || !analisis.isConfigured()) {
       LOG.info("Diagnóstico dummy archivo={} llmConfigured={}", archivo.getId(), analisis.isConfigured());
@@ -230,6 +232,31 @@ public class CoactivaExpedienteAnalisisWorker {
               nulo(expediente.getNroOperacion()),
               deudor);
         });
+  }
+
+  private String variablesDeEtapa(String etapa) {
+    if (etapa == null || etapa.isBlank()) {
+      return "";
+    }
+    List<CoactivaPromptCatalog> filas =
+        catalog.findByTipoDocumentoAndEtapaAndActivoTrue("PLANTILLA", etapa);
+    if (filas == null || filas.isEmpty()) {
+      return "";
+    }
+    StringBuilder sb = new StringBuilder();
+    sb.append(
+        "\n\nPlantillas de esta etapa. Incluye en datos_extraidos cada variable que conste en el OCR; null si no aparece:\n");
+    for (CoactivaPromptCatalog fila : filas) {
+      if (fila.getVariablesRequeridas() == null || fila.getVariablesRequeridas().isBlank()) {
+        continue;
+      }
+      sb.append("- ")
+          .append(fila.getPlantillaArchivo())
+          .append(": ")
+          .append(fila.getVariablesRequeridas())
+          .append('\n');
+    }
+    return sb.toString();
   }
 
   private static String contextualizar(String prompt, Contexto ctx) {
