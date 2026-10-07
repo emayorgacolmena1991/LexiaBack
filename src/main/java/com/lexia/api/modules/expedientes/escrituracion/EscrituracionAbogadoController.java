@@ -33,6 +33,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -117,7 +118,19 @@ public class EscrituracionAbogadoController {
     return regularizacion.resolverObservacion(id, observacionId);
   }
 
-  @GetMapping("/expedientes/{id}/escrituracion")
+  @PatchMapping({
+    "/expedientes/{id}/escrituracion/observaciones/{observacionId}/cerrar",
+    "/escrituracion/expedientes/{id}/observaciones/{observacionId}/cerrar"
+  })
+  public RegularizacionResponse cerrarObservacion(
+      @PathVariable UUID id, @PathVariable UUID observacionId) {
+    return regularizacion.resolverObservacion(id, observacionId);
+  }
+
+  @GetMapping({
+    "/expedientes/{id}/escrituracion",
+    "/escrituracion/expedientes/{id}"
+  })
   public ResponseEntity<WritingSnapshot> snapshot(@PathVariable UUID id) {
     if (escritura == null) {
       return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();

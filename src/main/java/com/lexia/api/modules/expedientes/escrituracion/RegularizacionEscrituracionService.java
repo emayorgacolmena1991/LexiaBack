@@ -4,6 +4,7 @@ import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ObservacionCotejoItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.RegularizacionResponse;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.List;
@@ -78,7 +79,7 @@ public class RegularizacionEscrituracionService {
     LegalCase legalCase = requireEjd(caseId, tenantId);
     WritingFile file = requireFile(tenantId, legalCase.getId());
     if (file.isFlagBloqueoReenvio() || !PROCESO_REGULAR.equals(file.getEstadoRegularizacion())) {
-      List<String> abiertas = observacionesAbiertas(file, tenantId);
+      List<ObservacionCotejoItem> abiertas = observacionesAbiertas(file, tenantId);
       if (productoVacio(legalCase, file) || !abiertas.isEmpty()) {
         throw new ApiException(
             HttpStatus.UNPROCESSABLE_ENTITY,
@@ -140,7 +141,7 @@ public class RegularizacionEscrituracionService {
   }
 
   private RegularizacionResponse respuesta(LegalCase legalCase, WritingFile file, UUID tenantId) {
-    List<String> abiertas = observacionesAbiertas(file, tenantId);
+    List<ObservacionCotejoItem> abiertas = observacionesAbiertas(file, tenantId);
     boolean puede = file.isFlagBloqueoReenvio() && abiertas.isEmpty() && !productoVacio(legalCase, file);
     return new RegularizacionResponse(
         legalCase.getId(),
@@ -151,15 +152,10 @@ public class RegularizacionEscrituracionService {
         abiertas);
   }
 
-  private List<String> observacionesAbiertas(WritingFile file, UUID tenantId) {
+  private List<ObservacionCotejoItem> observacionesAbiertas(WritingFile file, UUID tenantId) {
     return titleStudies
         .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(file.getId(), tenantId)
-        .map(
-            study ->
-                titleObservations.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(study.getId(), tenantId).stream()
-                    .filter(o -> !"RESOLVED".equals(o.getStatus()))
-                    .map(TitleObservation::getDetail)
-                    .toList())
+        .map(study -> ObservacionesCotejo.pendientes(titleObservations, tenantId, study.getId()))
         .orElse(List.of());
   }
 

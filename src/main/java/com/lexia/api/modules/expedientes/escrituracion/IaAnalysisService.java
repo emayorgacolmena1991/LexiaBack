@@ -323,23 +323,16 @@ public class IaAnalysisService {
     String resumen = dictamen == null ? "" : dictamen.resumen();
     study.applyResult(estado, resumen);
     titleStudies.save(study);
-    titleObservations.deleteByTitleStudyIdAndTenantId(study.getId(), tenantId);
-    if (dictamen == null) {
-      return;
-    }
-    for (Observacion item : dictamen.observaciones()) {
-      if (item == null || !StringUtils.hasText(item.mensaje())) {
-        continue;
+    List<ObservacionesCotejo.Entrada> entradas = new java.util.ArrayList<>();
+    if (dictamen != null && dictamen.observaciones() != null) {
+      for (Observacion item : dictamen.observaciones()) {
+        if (item == null || !StringUtils.hasText(item.mensaje())) {
+          continue;
+        }
+        entradas.add(new ObservacionesCotejo.Entrada(item.codigo(), item.severidad(), item.mensaje()));
       }
-      String detail =
-          "["
-              + (item.severidad() == null ? "MEDIUM" : item.severidad())
-              + "] "
-              + (item.codigo() == null ? "OBS" : item.codigo())
-              + ": "
-              + item.mensaje().trim();
-      titleObservations.save(TitleObservation.create(tenantId, study.getId(), detail));
     }
+    ObservacionesCotejo.reemplazar(titleObservations, tenantId, study.getId(), entradas);
   }
 
   /**

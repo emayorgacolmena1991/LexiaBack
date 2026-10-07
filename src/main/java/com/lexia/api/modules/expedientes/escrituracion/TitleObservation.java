@@ -55,6 +55,10 @@ public class TitleObservation {
     return status;
   }
 
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+
   public void resolve() {
     this.status = "RESOLVED";
   }

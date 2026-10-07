@@ -146,11 +146,11 @@ public class EscrituracionAbogadoService {
     titleStudies.save(study);
 
     if (request.observaciones() != null) {
-      for (String obs : request.observaciones()) {
-        if (obs != null && !obs.isBlank()) {
-          titleObservations.save(TitleObservation.create(tenantId, study.getId(), obs.trim()));
-        }
-      }
+      ObservacionesCotejo.reemplazar(
+          titleObservations,
+          tenantId,
+          study.getId(),
+          ObservacionesCotejo.desdeTextos(request.observaciones()));
     }
     return toEstudio(study, tenantId);
   }
@@ -181,14 +181,10 @@ public class EscrituracionAbogadoService {
   }
 
   private EstudioTituloResponse toEstudio(TitleStudy study, UUID tenantId) {
-    List<String> open =
-        titleObservations
-            .findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(study.getId(), tenantId)
-            .stream()
-            .filter(o -> "OPEN".equals(o.getStatus()))
-            .map(TitleObservation::getDetail)
-            .toList();
-    return new EstudioTituloResponse(study.getId(), study.getStatus(), study.getSummary(), open);
+    List<EscrituracionDtos.ObservacionCotejoItem> abiertas =
+        ObservacionesCotejo.pendientes(titleObservations, tenantId, study.getId());
+    List<String> open = abiertas.stream().map(EscrituracionDtos.ObservacionCotejoItem::mensaje).toList();
+    return new EstudioTituloResponse(study.getId(), study.getStatus(), study.getSummary(), open, abiertas);
   }
 
   private LegalCase requireCase(UUID caseId, UUID tenantId) {

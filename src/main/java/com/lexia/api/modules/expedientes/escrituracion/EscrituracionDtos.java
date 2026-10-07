@@ -5,6 +5,7 @@ import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.DatosExtraidos;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Dictamen;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -36,8 +37,20 @@ public final class EscrituracionDtos {
 
   public record EstudioTituloRequest(String status, String summary, List<String> observaciones) {}
 
+  public record ObservacionCotejoItem(
+      UUID id,
+      String code,
+      String severidad,
+      String mensaje,
+      String estado,
+      Instant createdAt) {}
+
   public record EstudioTituloResponse(
-      java.util.UUID studyId, String status, String summary, List<String> openObservations) {}
+      UUID studyId,
+      String status,
+      String summary,
+      List<String> openObservations,
+      List<ObservacionCotejoItem> observaciones) {}
 
   @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
   public record CrearMinutaRequest(String templateKind, String sessionId) {}
@@ -189,7 +202,7 @@ public final class EscrituracionDtos {
       String estadoRegularizacion,
       boolean flagBloqueoReenvio,
       boolean puedeMarcarRegularizado,
-      List<String> observacionesAbiertas) {}
+      List<ObservacionCotejoItem> observacionesAbiertas) {}
 
   /** Estado consolidado en BD para hidratar el FE al abrir o refrescar. */
   public record EstadoMinutaBorrador(
