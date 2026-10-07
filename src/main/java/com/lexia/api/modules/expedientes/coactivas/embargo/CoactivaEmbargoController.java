@@ -2,12 +2,14 @@ package com.lexia.api.modules.expedientes.coactivas.embargo;
 
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.ExpedienteResponse;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.GuardarRequest;
+import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.LoteEntregado;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.LoteResumen;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.RegistroItem;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.RegistrosResponse;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoService.Descarga;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ContentDisposition;
@@ -53,7 +55,25 @@ public class CoactivaEmbargoController {
 
   @GetMapping("/embargo-excel/descargar")
   public ResponseEntity<byte[]> descargar() {
-    Descarga descarga = service.descargar();
+    return xlsx(service.descargar());
+  }
+
+  @GetMapping("/embargo-excel/lotes/entregados")
+  public List<LoteEntregado> entregados() {
+    return service.entregados();
+  }
+
+  @GetMapping("/embargo-excel/lotes/{loteId}/registros")
+  public RegistrosResponse registrosLote(@PathVariable UUID loteId) {
+    return service.registros(loteId);
+  }
+
+  @GetMapping("/embargo-excel/lotes/{loteId}/descargar")
+  public ResponseEntity<byte[]> descargarLote(@PathVariable UUID loteId) {
+    return xlsx(service.descargar(loteId));
+  }
+
+  private static ResponseEntity<byte[]> xlsx(Descarga descarga) {
     return ResponseEntity.ok()
         .header(
             HttpHeaders.CONTENT_DISPOSITION,

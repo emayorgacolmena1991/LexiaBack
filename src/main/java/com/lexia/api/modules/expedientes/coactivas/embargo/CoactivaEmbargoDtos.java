@@ -39,6 +39,9 @@ public final class CoactivaEmbargoDtos {
   public record LoteResumen(
       UUID id, int numero, String estado, Instant fechaCorte, long totalRegistros, boolean cortePendiente) {}
 
+  public record LoteEntregado(
+      UUID id, int numero, Instant fechaCorte, Instant entregadoAt, long totalRegistros) {}
+
   public record RegistroItem(
       UUID id,
       UUID loteId,

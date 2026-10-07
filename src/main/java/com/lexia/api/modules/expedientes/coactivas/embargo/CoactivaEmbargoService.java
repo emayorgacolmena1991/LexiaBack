@@ -12,6 +12,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficinaRepo
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.Datos;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.ExpedienteResponse;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.GuardarRequest;
+import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.LoteEntregado;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.LoteResumen;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.RegistroItem;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.RegistrosResponse;
@@ -108,9 +109,44 @@ public class CoactivaEmbargoService {
   public RegistrosResponse registros() {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
+    return registros(tenantId, lotes.activo(tenantId));
+  }
+
+  @Transactional(readOnly = true)
+  public RegistrosResponse registros(UUID loteId) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    return registros(tenantId, Optional.of(lote(tenantId, loteId)));
+  }
+
+  /** Más reciente primero. */
+  @Transactional(readOnly = true)
+  public List<LoteEntregado> entregados() {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    // ponytail: un count por lote (≈1 lote/semana); si el historial crece mucho, agrupar en una sola consulta o paginar.
+    return lotes.findByTenantIdAndEstadoOrderByEntregadoAtDescNumeroDesc(tenantId, CoactivaEmbargoLote.ENTREGADO).stream()
+        .map(
+            l ->
+                new LoteEntregado(
+                    l.getId(),
+                    l.getNumero(),
+                    l.getFechaCorte(),
+                    l.getEntregadoAt(),
+                    registros.countByTenantIdAndLoteId(tenantId, l.getId())))
+        .toList();
+  }
+
+  private RegistrosResponse registros(UUID tenantId, Optional<CoactivaEmbargoLote> lote) {
     Instant ahora = Instant.now();
-    Optional<CoactivaEmbargoLote> lote = lotes.activo(tenantId);
     return new RegistrosResponse(resumen(tenantId, lote, ahora), ahora, filas(tenantId, lote));
+  }
+
+  private CoactivaEmbargoLote lote(UUID tenantId, UUID loteId) {
+    return lotes
+        .findByIdAndTenantId(loteId, tenantId)
+        .orElseThrow(
+            () -> new ApiException(HttpStatus.NOT_FOUND, "EMBARGO_LOTE_NO_ENCONTRADO", "No existe ese Data 2."));
   }
 
   @Transactional
@@ -172,7 +208,17 @@ public class CoactivaEmbargoService {
   public Descarga descargar() {
     authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
     UUID tenantId = AuthContext.require().tenantId();
-    Optional<CoactivaEmbargoLote> lote = lotes.activo(tenantId);
+    return descargar(tenantId, lotes.activo(tenantId));
+  }
+
+  @Transactional(readOnly = true)
+  public Descarga descargar(UUID loteId) {
+    authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
+    UUID tenantId = AuthContext.require().tenantId();
+    return descargar(tenantId, Optional.of(lote(tenantId, loteId)));
+  }
+
+  private Descarga descargar(UUID tenantId, Optional<CoactivaEmbargoLote> lote) {
     LoteResumen resumen = resumen(tenantId, lote, Instant.now());
     List<Datos> datos = filas(tenantId, lote).stream().map(RegistroItem::datos).toList();
     try (InputStream plantilla = new ClassPathResource(CoactivaEmbargoExcel.PLANTILLA).getInputStream()) {
@@ -228,7 +274,7 @@ public class CoactivaEmbargoService {
         l.getEstado(),
         l.getFechaCorte(),
         registros.countByTenantIdAndLoteId(tenantId, l.getId()),
-        ahora.isAfter(l.getFechaCorte()));
+        CoactivaEmbargoLote.EN_PREPARACION.equals(l.getEstado()) && ahora.isAfter(l.getFechaCorte()));
   }
 
   /** Única fuente de filas: la usan tanto "Ver Excel" como la descarga. */

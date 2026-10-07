@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.coactivas.embargo;
 
 import jakarta.persistence.LockModeType;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -18,6 +19,10 @@ public interface CoactivaEmbargoLoteRepository extends JpaRepository<CoactivaEmb
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select l from CoactivaEmbargoLote l where l.tenantId = :tenantId and l.estado = 'EN_PREPARACION'")
   Optional<CoactivaEmbargoLote> bloquearActivo(@Param("tenantId") UUID tenantId);
+
+  Optional<CoactivaEmbargoLote> findByIdAndTenantId(UUID id, UUID tenantId);
+
+  List<CoactivaEmbargoLote> findByTenantIdAndEstadoOrderByEntregadoAtDescNumeroDesc(UUID tenantId, String estado);
 
   @Query("select max(l.fechaCorte) from CoactivaEmbargoLote l where l.tenantId = :tenantId")
   Optional<Instant> ultimoCorte(@Param("tenantId") UUID tenantId);
