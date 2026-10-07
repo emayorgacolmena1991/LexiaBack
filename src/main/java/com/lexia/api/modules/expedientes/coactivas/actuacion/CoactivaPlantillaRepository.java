@@ -12,4 +12,6 @@ public interface CoactivaPlantillaRepository extends JpaRepository<CoactivaPlant
       UUID tenantId, Collection<String> etapas);
 
   Optional<CoactivaPlantilla> findByIdAndTenantIdAndActivoTrue(UUID id, UUID tenantId);
+
+  Optional<CoactivaPlantilla> findByTenantIdAndCodigoAndActivoTrue(UUID tenantId, String codigo);
 }

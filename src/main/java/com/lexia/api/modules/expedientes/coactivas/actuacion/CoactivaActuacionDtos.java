@@ -1,11 +1,13 @@
 package com.lexia.api.modules.expedientes.coactivas.actuacion;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -18,7 +20,31 @@ public final class CoactivaActuacionDtos {
    * @param variables etiqueta → valor de la IA o {@code [COMPLETAR: etiqueta]} si no hubo dato
    */
   public record PlantillaItem(
-      UUID id, String nombre, String etapa, boolean generable, Map<String, String> variables) {}
+      UUID id,
+      String nombre,
+      String etapa,
+      boolean generable,
+      Map<String, String> variables,
+      String codigo) {}
+
+  public record VariablesDocumentoResponse(
+      UUID draftId,
+      String actuacionTipo,
+      String nombre,
+      String status,
+      Map<String, String> variables,
+      List<String> variablesPendientes,
+      Map<String, String> origenes,
+      Map<String, String> valoresExtraidos,
+      Map<String, String> etiquetas,
+      boolean liquidacionVigente,
+      String downloadUrl) {}
+
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  public record PreviewDocumentoRequest(Map<String, String> variables, List<String> restaurar) {}
+
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  public record PublicarDocumentoRequest(Boolean permitirIncompleto) {}
 
   /** {@code permitirIncompleto} solo se envía tras la confirmación explícita del usuario. */
   public record GenerarActuacionRequest(@NotNull UUID plantillaId, Boolean permitirIncompleto) {}

@@ -8,10 +8,15 @@ import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDt
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.MedidaItem;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.MedidaRequest;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.PlantillaItem;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.PreviewDocumentoRequest;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.PublicarDocumentoRequest;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ResultadoHttp;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.SolicitudResponse;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.VariablesDocumentoResponse;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionService.DocumentoGenerado;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionService.GenerarResultado;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaGenerationService.Descarga;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaGenerationService.Preview;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -35,9 +40,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class CoactivaActuacionController {
 
   private final CoactivaActuacionService service;
+  private final CoactivaGenerationService generacion;
 
-  public CoactivaActuacionController(CoactivaActuacionService service) {
+  public CoactivaActuacionController(
+      CoactivaActuacionService service, CoactivaGenerationService generacion) {
     this.service = service;
+    this.generacion = generacion;
   }
 
   @GetMapping("/expedientes/{id}/plantillas")
@@ -54,6 +62,48 @@ public class CoactivaActuacionController {
         .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + doc.nombre() + "\"")
         .header("X-Actuacion-Id", doc.actuacionId().toString())
         .contentType(MediaType.parseMediaType(doc.mime()))
+        .body(doc.bytes());
+  }
+
+  @GetMapping("/expedientes/{id}/actuaciones/{tipo}/variables")
+  public VariablesDocumentoResponse variables(@PathVariable UUID id, @PathVariable String tipo) {
+    return generacion.variables(id, tipo);
+  }
+
+  @PostMapping(
+      value = "/expedientes/{id}/actuaciones/{tipo}/preview",
+      produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> preview(
+      @PathVariable UUID id,
+      @PathVariable String tipo,
+      @RequestBody(required = false) PreviewDocumentoRequest request) {
+    Preview preview = generacion.previsualizar(id, tipo, request);
+    return ResponseEntity.ok()
+        .header("X-Draft-Id", preview.draftId().toString())
+        .header(
+            "X-Variables-Pendientes",
+            String.valueOf(preview.variables().variablesPendientes().size()))
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"actuacion-preview.pdf\"")
+        .contentType(MediaType.APPLICATION_PDF)
+        .body(preview.pdf());
+  }
+
+  @PostMapping("/expedientes/{id}/actuaciones/{tipo}/listo")
+  public ActuacionResponse publicar(
+      @PathVariable UUID id,
+      @PathVariable String tipo,
+      @RequestBody(required = false) PublicarDocumentoRequest request) {
+    return generacion.publicar(id, tipo, request);
+  }
+
+  @GetMapping("/actuaciones/{draftId}/download")
+  public ResponseEntity<byte[]> descargar(@PathVariable UUID draftId) {
+    Descarga doc = generacion.descargar(draftId);
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + doc.nombre() + "\"")
+        .contentType(
+            MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
         .body(doc.bytes());
   }
 

@@ -103,7 +103,10 @@ public class CoactivaActuacionService {
     return plantillas
         .findByTenantIdAndEtapaInAndActivoTrueOrderByNombreAsc(principal.tenantId(), etapas)
         .stream()
-        .map(p -> new PlantillaItem(p.getId(), p.getNombre(), p.getEtapa(), p.generable(), variablesDe(p, datos)))
+        .map(
+            p ->
+                new PlantillaItem(
+                    p.getId(), p.getNombre(), p.getEtapa(), p.generable(), variablesDe(p, datos), p.getCodigo()))
         .toList();
   }
 

@@ -15,6 +15,9 @@ public class CoactivaPlantilla {
   @Column(name = "tenant_id", nullable = false)
   private UUID tenantId;
 
+  @Column(nullable = false, length = 64)
+  private String codigo;
+
   @Column(nullable = false, length = 240)
   private String nombre;
 
@@ -30,6 +33,10 @@ public class CoactivaPlantilla {
 
   public UUID getId() {
     return id;
+  }
+
+  public String getCodigo() {
+    return codigo;
   }
 
   public String getRutaDocx() {
