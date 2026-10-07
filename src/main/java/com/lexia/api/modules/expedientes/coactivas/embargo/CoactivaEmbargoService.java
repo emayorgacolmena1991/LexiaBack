@@ -7,6 +7,8 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaEtapa;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaDataMapper;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficina;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficinaRepository;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.Datos;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.ExpedienteResponse;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.GuardarRequest;
@@ -59,6 +61,7 @@ public class CoactivaEmbargoService {
   private final CoactivaEmbargoRegistroRepository registros;
   private final CoactivaPlantillaDataMapper mapper;
   private final CoactivaActaRepository actas;
+  private final CoactivaOficinaRepository oficinas;
   private final ZoneId zona;
 
   public CoactivaEmbargoService(
@@ -68,6 +71,7 @@ public class CoactivaEmbargoService {
       CoactivaEmbargoRegistroRepository registros,
       CoactivaPlantillaDataMapper mapper,
       CoactivaActaRepository actas,
+      CoactivaOficinaRepository oficinas,
       @Value("${lexia.coactivas.plantillas.zona-horaria:America/Guayaquil}") String zonaHoraria) {
     this.authorization = authorization;
     this.expedientes = expedientes;
@@ -75,6 +79,7 @@ public class CoactivaEmbargoService {
     this.registros = registros;
     this.mapper = mapper;
     this.actas = actas;
+    this.oficinas = oficinas;
     this.zona = ZoneId.of(zonaHoraria);
   }
 
@@ -261,7 +266,10 @@ public class CoactivaEmbargoService {
         .anyMatch(embargo::equals);
   }
 
-  /** VALOR TRANSFERIDO, N° OFICIO DE RESPUESTA y N° DOCUMENTO quedan vacíos: los ingresa el usuario. */
+  /**
+   * Los datos estructurados (UEC del acta, oficina del catálogo) priman sobre la IA. VALOR
+   * TRANSFERIDO, N° OFICIO DE RESPUESTA y N° DOCUMENTO quedan vacíos: los ingresa el usuario.
+   */
   private Datos propuesta(CoactivaExpediente expediente, Map<String, Object> v) {
     String uec =
         expediente.getActaEntregaId() == null
@@ -271,9 +279,17 @@ public class CoactivaEmbargoService {
                 .map(CoactivaActa::getUecNombre)
                 .map(CoactivaTexto::blankToNull)
                 .orElse(null);
+    String oficina =
+        expediente.getOficinaCodigo() == null
+            ? null
+            : oficinas
+                .findByTenantIdAndCodigo(expediente.getTenantId(), expediente.getOficinaCodigo())
+                .map(CoactivaOficina::getNombre)
+                .map(CoactivaTexto::blankToNull)
+                .orElse(null);
     return new Datos(
-        firstNonNull(primero(v, "juzgado"), uec, primero(v, "unidad_ejecucion_coactiva")),
-        primero(v, "ciudad_actuacion", "agencia"),
+        firstNonNull(uec, primero(v, "juzgado"), primero(v, "unidad_ejecucion_coactiva")),
+        firstNonNull(oficina, primero(v, "agencia")),
         primero(v, "numero_operacion"),
         primero(v, "numero_juicio_coactivo"),
         primero(v, "nombre_coactivado", "nombre_deudor_principal"),
