@@ -20,6 +20,13 @@ public class CoactivaEmbargoLote {
   @Column(name = "tenant_id", nullable = false)
   private UUID tenantId;
 
+  /** {@code coactiva_delegado.id}. Nulo solo en lotes históricos que no se pudieron inferir. */
+  @Column(name = "delegado_id")
+  private UUID delegadoId;
+
+  @Column(name = "delegado_nombre", length = 200)
+  private String delegadoNombre;
+
   @Column(nullable = false)
   private int numero;
 
@@ -46,6 +53,14 @@ public class CoactivaEmbargoLote {
 
   public UUID getId() {
     return id;
+  }
+
+  public UUID getDelegadoId() {
+    return delegadoId;
+  }
+
+  public String getDelegadoNombre() {
+    return delegadoNombre;
   }
 
   public int getNumero() {

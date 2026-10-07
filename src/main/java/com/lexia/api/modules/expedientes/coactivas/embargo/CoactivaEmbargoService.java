@@ -7,6 +7,8 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaEtapa;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaDataMapper;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficina;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficinaRepository;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.Datos;
@@ -45,8 +47,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Data 2: un solo lote EN_PREPARACION por tenant, compartido por todos los usuarios. El corte del
- * jueves 12:00 es informativo; el lote solo se cierra cuando alguien lo marca como ENTREGADO.
+ * Data 2: un lote EN_PREPARACION por tenant y delegado ({@code coactiva_delegado.id}). El corte del
+ * jueves 12:00 es informativo y propio de cada delegado; el lote solo se cierra cuando alguien lo
+ * marca como ENTREGADO, sin tocar el lote activo de otro delegado.
  */
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -63,6 +66,7 @@ public class CoactivaEmbargoService {
   private final CoactivaPlantillaDataMapper mapper;
   private final CoactivaActaRepository actas;
   private final CoactivaOficinaRepository oficinas;
+  private final CoactivaDelegadoService delegados;
   private final ZoneId zona;
 
   public CoactivaEmbargoService(
@@ -73,6 +77,7 @@ public class CoactivaEmbargoService {
       CoactivaPlantillaDataMapper mapper,
       CoactivaActaRepository actas,
       CoactivaOficinaRepository oficinas,
+      CoactivaDelegadoService delegados,
       @Value("${lexia.coactivas.plantillas.zona-horaria:America/Guayaquil}") String zonaHoraria) {
     this.authorization = authorization;
     this.expedientes = expedientes;
@@ -81,51 +86,67 @@ public class CoactivaEmbargoService {
     this.mapper = mapper;
     this.actas = actas;
     this.oficinas = oficinas;
+    this.delegados = delegados;
     this.zona = ZoneId.of(zonaHoraria);
   }
+
+  /** Identificador estable del delegado del expediente y el nombre para mostrar. */
+  public record DelegadoRef(UUID delegadoId, String delegadoNombre) {}
 
   @Transactional(readOnly = true)
   public ExpedienteResponse expediente(UUID expedienteId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
     Instant ahora = Instant.now();
-    Optional<CoactivaEmbargoLote> lote = lotes.activo(tenantId);
+    Optional<CoactivaEmbargoLote> lote = lotes.activo(tenantId, delegado.delegadoId());
     RegistroItem registro =
         lote.flatMap(l -> registros.findByTenantIdAndLoteIdAndExpedienteId(tenantId, l.getId(), expedienteId))
             .map(CoactivaEmbargoService::item)
             .orElse(null);
     Map<String, Object> valores = mapper.mapear(expediente).valores();
     return new ExpedienteResponse(
-        resumen(tenantId, lote, ahora),
+        resumen(tenantId, lote, ahora, delegado),
         ahora,
         registro != null || contextoEmbargo(expediente),
         registro,
         registro == null ? propuesta(expediente, valores) : null,
-        primero(valores, "monto_retencion", "monto_embargo_total", "monto_embargo_1"));
+        primero(valores, "monto_retencion", "monto_embargo_total", "monto_embargo_1"),
+        delegado.delegadoId(),
+        delegado.delegadoNombre());
   }
 
   @Transactional(readOnly = true)
-  public RegistrosResponse registros() {
+  public RegistrosResponse registros(UUID expedienteId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
-    return registros(tenantId, lotes.activo(tenantId));
+    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    return registros(tenantId, lotes.activo(tenantId, delegado.delegadoId()), delegado);
   }
 
   @Transactional(readOnly = true)
-  public RegistrosResponse registros(UUID loteId) {
+  public RegistrosResponse registros(UUID expedienteId, UUID loteId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
-    return registros(tenantId, Optional.of(lote(tenantId, loteId)));
+    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    return registros(tenantId, Optional.of(loteDelDelegado(tenantId, loteId, delegado)), delegado);
   }
 
-  /** Más reciente primero. */
+  /** Historial del mismo delegado que el expediente. Más reciente primero. */
   @Transactional(readOnly = true)
-  public List<LoteEntregado> entregados() {
+  public List<LoteEntregado> entregados(UUID expedienteId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
-    // ponytail: un count por lote (≈1 lote/semana); si el historial crece mucho, agrupar en una sola consulta o paginar.
-    return lotes.findByTenantIdAndEstadoOrderByEntregadoAtDescNumeroDesc(tenantId, CoactivaEmbargoLote.ENTREGADO).stream()
+    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    // ponytail: un count por lote (≈1 lote/semana por delegado); si el historial crece mucho, agrupar en una sola consulta o paginar.
+    return lotes
+        .findByTenantIdAndDelegadoIdAndEstadoOrderByEntregadoAtDescNumeroDesc(
+            tenantId, delegado.delegadoId(), CoactivaEmbargoLote.ENTREGADO)
+        .stream()
         .map(
             l ->
                 new LoteEntregado(
@@ -137,16 +158,21 @@ public class CoactivaEmbargoService {
         .toList();
   }
 
-  private RegistrosResponse registros(UUID tenantId, Optional<CoactivaEmbargoLote> lote) {
+  private RegistrosResponse registros(UUID tenantId, Optional<CoactivaEmbargoLote> lote, DelegadoRef delegado) {
     Instant ahora = Instant.now();
-    return new RegistrosResponse(resumen(tenantId, lote, ahora), ahora, filas(tenantId, lote));
+    return new RegistrosResponse(resumen(tenantId, lote, ahora, delegado), ahora, filas(tenantId, lote));
   }
 
-  private CoactivaEmbargoLote lote(UUID tenantId, UUID loteId) {
-    return lotes
-        .findByIdAndTenantId(loteId, tenantId)
-        .orElseThrow(
-            () -> new ApiException(HttpStatus.NOT_FOUND, "EMBARGO_LOTE_NO_ENCONTRADO", "No existe ese Data 2."));
+  private CoactivaEmbargoLote loteDelDelegado(UUID tenantId, UUID loteId, DelegadoRef delegado) {
+    CoactivaEmbargoLote lote =
+        lotes
+            .findByIdAndTenantId(loteId, tenantId)
+            .orElseThrow(
+                () -> new ApiException(HttpStatus.NOT_FOUND, "EMBARGO_LOTE_NO_ENCONTRADO", "No existe ese Data 2."));
+    if (lote.getDelegadoId() == null || !lote.getDelegadoId().equals(delegado.delegadoId())) {
+      throw new ApiException(HttpStatus.NOT_FOUND, "EMBARGO_LOTE_NO_ENCONTRADO", "No existe ese Data 2.");
+    }
+    return lote;
   }
 
   @Transactional
@@ -155,7 +181,8 @@ public class CoactivaEmbargoService {
     AuthPrincipal principal = AuthContext.require();
     UUID tenantId = principal.tenantId();
     CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
-    CoactivaEmbargoLote lote = loteParaEscribir(tenantId, principal.userId());
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    CoactivaEmbargoLote lote = loteParaEscribir(tenantId, delegado, principal.userId());
     if (request.loteId() != null && !request.loteId().equals(lote.getId())) {
       throw new ApiException(
           HttpStatus.CONFLICT,
@@ -205,21 +232,25 @@ public class CoactivaEmbargoService {
   public record Descarga(String nombre, byte[] bytes) {}
 
   @Transactional(readOnly = true)
-  public Descarga descargar() {
+  public Descarga descargar(UUID expedienteId) {
     authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
     UUID tenantId = AuthContext.require().tenantId();
-    return descargar(tenantId, lotes.activo(tenantId));
+    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    return descargar(tenantId, lotes.activo(tenantId, delegado.delegadoId()), delegado);
   }
 
   @Transactional(readOnly = true)
-  public Descarga descargar(UUID loteId) {
+  public Descarga descargar(UUID expedienteId, UUID loteId) {
     authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
     UUID tenantId = AuthContext.require().tenantId();
-    return descargar(tenantId, Optional.of(lote(tenantId, loteId)));
+    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
+    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    return descargar(tenantId, Optional.of(loteDelDelegado(tenantId, loteId, delegado)), delegado);
   }
 
-  private Descarga descargar(UUID tenantId, Optional<CoactivaEmbargoLote> lote) {
-    LoteResumen resumen = resumen(tenantId, lote, Instant.now());
+  private Descarga descargar(UUID tenantId, Optional<CoactivaEmbargoLote> lote, DelegadoRef delegado) {
+    LoteResumen resumen = resumen(tenantId, lote, Instant.now(), delegado);
     List<Datos> datos = filas(tenantId, lote).stream().map(RegistroItem::datos).toList();
     try (InputStream plantilla = new ClassPathResource(CoactivaEmbargoExcel.PLANTILLA).getInputStream()) {
       byte[] bytes = CoactivaEmbargoExcel.generar(plantilla, datos);
@@ -237,8 +268,8 @@ public class CoactivaEmbargoService {
     UUID tenantId = principal.tenantId();
     CoactivaEmbargoLote lote =
         lotes
-            .bloquearActivo(tenantId)
-            .filter(l -> l.getId().equals(loteId))
+            .bloquear(loteId, tenantId)
+            .filter(l -> CoactivaEmbargoLote.EN_PREPARACION.equals(l.getEstado()))
             .orElseThrow(
                 () ->
                     new ApiException(
@@ -247,25 +278,78 @@ public class CoactivaEmbargoService {
                         "Ese Data 2 ya no está en preparación. Recarga para ver el lote actual."));
     long total = registros.countByTenantIdAndLoteId(tenantId, lote.getId());
     lote.entregar(principal.userId());
-    return new LoteResumen(lote.getId(), lote.getNumero(), lote.getEstado(), lote.getFechaCorte(), total, false);
+    return new LoteResumen(
+        lote.getId(),
+        lote.getNumero(),
+        lote.getEstado(),
+        lote.getFechaCorte(),
+        total,
+        false,
+        lote.getDelegadoId(),
+        lote.getDelegadoNombre());
   }
 
-  /** Bloquea la fila del lote activo (creándolo si hace falta) hasta el commit. */
-  private CoactivaEmbargoLote loteParaEscribir(UUID tenantId, UUID userId) {
-    Optional<CoactivaEmbargoLote> activo = lotes.bloquearActivo(tenantId);
+  /** Bloquea la fila del lote activo de este delegado (creándolo si hace falta) hasta el commit. */
+  private CoactivaEmbargoLote loteParaEscribir(UUID tenantId, DelegadoRef delegado, UUID userId) {
+    Optional<CoactivaEmbargoLote> activo = lotes.bloquearActivo(tenantId, delegado.delegadoId());
     if (activo.isPresent()) {
       return activo.get();
     }
-    Instant corte = corteNuevoLote(Instant.now(), lotes.ultimoCorte(tenantId).orElse(null), zona);
-    lotes.abrir(UUID.randomUUID(), tenantId, lotes.ultimoNumero(tenantId) + 1, corte, userId);
-    return lotes.bloquearActivo(tenantId).orElseThrow();
+    Instant corte =
+        corteNuevoLote(Instant.now(), lotes.ultimoCorte(tenantId, delegado.delegadoId()).orElse(null), zona);
+    lotes.abrir(
+        UUID.randomUUID(),
+        tenantId,
+        delegado.delegadoId(),
+        delegado.delegadoNombre(),
+        lotes.ultimoNumero(tenantId) + 1,
+        corte,
+        userId);
+    return lotes.bloquearActivo(tenantId, delegado.delegadoId()).orElseThrow();
   }
 
-  private LoteResumen resumen(UUID tenantId, Optional<CoactivaEmbargoLote> lote, Instant ahora) {
+  /**
+   * Delegado del expediente. Primero el {@code delegado_id} persistido; si no hay, el único delegado
+   * vigente de la oficina. No usa el nombre de funcionario del OCR: es texto y no identifica el lote.
+   */
+  DelegadoRef resolverDelegado(UUID tenantId, CoactivaExpediente expediente) {
+    if (expediente.getDelegadoId() != null) {
+      return delegados
+          .buscar(tenantId, expediente.getDelegadoId())
+          .map(CoactivaEmbargoService::ref)
+          .orElseThrow(CoactivaEmbargoService::delegadoNoConfigurado);
+    }
+    return delegados
+        .resolverUnico(tenantId, expediente.getOficinaCodigo(), LocalDate.now(zona))
+        .map(CoactivaEmbargoService::ref)
+        .orElseThrow(CoactivaEmbargoService::delegadoNoConfigurado);
+  }
+
+  private static DelegadoRef ref(CoactivaDelegado delegado) {
+    return new DelegadoRef(delegado.getId(), delegado.getNombre());
+  }
+
+  private static ApiException delegadoNoConfigurado() {
+    return new ApiException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "DELEGADO_NO_CONFIGURADO",
+        "El expediente no tiene un delegado asignado. Asígnalo antes de usar Data 2.");
+  }
+
+  private LoteResumen resumen(
+      UUID tenantId, Optional<CoactivaEmbargoLote> lote, Instant ahora, DelegadoRef delegado) {
     if (lote.isEmpty()) {
-      Instant corte = corteNuevoLote(ahora, lotes.ultimoCorte(tenantId).orElse(null), zona);
+      Instant corte =
+          corteNuevoLote(ahora, lotes.ultimoCorte(tenantId, delegado.delegadoId()).orElse(null), zona);
       return new LoteResumen(
-          null, lotes.ultimoNumero(tenantId) + 1, CoactivaEmbargoLote.EN_PREPARACION, corte, 0, false);
+          null,
+          lotes.ultimoNumero(tenantId) + 1,
+          CoactivaEmbargoLote.EN_PREPARACION,
+          corte,
+          0,
+          false,
+          delegado.delegadoId(),
+          delegado.delegadoNombre());
     }
     CoactivaEmbargoLote l = lote.get();
     return new LoteResumen(
@@ -274,7 +358,9 @@ public class CoactivaEmbargoService {
         l.getEstado(),
         l.getFechaCorte(),
         registros.countByTenantIdAndLoteId(tenantId, l.getId()),
-        CoactivaEmbargoLote.EN_PREPARACION.equals(l.getEstado()) && ahora.isAfter(l.getFechaCorte()));
+        CoactivaEmbargoLote.EN_PREPARACION.equals(l.getEstado()) && ahora.isAfter(l.getFechaCorte()),
+        l.getDelegadoId() != null ? l.getDelegadoId() : delegado.delegadoId(),
+        l.getDelegadoNombre() != null ? l.getDelegadoNombre() : delegado.delegadoNombre());
   }
 
   /** Única fuente de filas: la usan tanto "Ver Excel" como la descarga. */

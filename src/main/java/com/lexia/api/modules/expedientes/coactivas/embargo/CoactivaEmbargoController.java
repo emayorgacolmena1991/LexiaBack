@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -49,28 +50,28 @@ public class CoactivaEmbargoController {
   }
 
   @GetMapping("/embargo-excel/registros")
-  public RegistrosResponse registros() {
-    return service.registros();
+  public RegistrosResponse registros(@RequestParam UUID expedienteId) {
+    return service.registros(expedienteId);
   }
 
   @GetMapping("/embargo-excel/descargar")
-  public ResponseEntity<byte[]> descargar() {
-    return xlsx(service.descargar());
+  public ResponseEntity<byte[]> descargar(@RequestParam UUID expedienteId) {
+    return xlsx(service.descargar(expedienteId));
   }
 
   @GetMapping("/embargo-excel/lotes/entregados")
-  public List<LoteEntregado> entregados() {
-    return service.entregados();
+  public List<LoteEntregado> entregados(@RequestParam UUID expedienteId) {
+    return service.entregados(expedienteId);
   }
 
   @GetMapping("/embargo-excel/lotes/{loteId}/registros")
-  public RegistrosResponse registrosLote(@PathVariable UUID loteId) {
-    return service.registros(loteId);
+  public RegistrosResponse registrosLote(@PathVariable UUID loteId, @RequestParam UUID expedienteId) {
+    return service.registros(expedienteId, loteId);
   }
 
   @GetMapping("/embargo-excel/lotes/{loteId}/descargar")
-  public ResponseEntity<byte[]> descargarLote(@PathVariable UUID loteId) {
-    return xlsx(service.descargar(loteId));
+  public ResponseEntity<byte[]> descargarLote(@PathVariable UUID loteId, @RequestParam UUID expedienteId) {
+    return xlsx(service.descargar(expedienteId, loteId));
   }
 
   private static ResponseEntity<byte[]> xlsx(Descarga descarga) {

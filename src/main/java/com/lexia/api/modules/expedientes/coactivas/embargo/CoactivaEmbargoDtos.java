@@ -37,7 +37,14 @@ public final class CoactivaEmbargoDtos {
 
   /** {@code id} es {@code null} mientras nadie haya guardado un registro en el lote nuevo. */
   public record LoteResumen(
-      UUID id, int numero, String estado, Instant fechaCorte, long totalRegistros, boolean cortePendiente) {}
+      UUID id,
+      int numero,
+      String estado,
+      Instant fechaCorte,
+      long totalRegistros,
+      boolean cortePendiente,
+      UUID delegadoId,
+      String delegadoNombre) {}
 
   public record LoteEntregado(
       UUID id, int numero, Instant fechaCorte, Instant entregadoAt, long totalRegistros) {}
@@ -62,7 +69,9 @@ public final class CoactivaEmbargoDtos {
       boolean aplica,
       RegistroItem registro,
       Datos propuesta,
-      String montoRetenidoIa) {}
+      String montoRetenidoIa,
+      UUID delegadoId,
+      String delegadoNombre) {}
 
   public record RegistrosResponse(LoteResumen lote, Instant horaServidor, List<RegistroItem> registros) {}
 }
