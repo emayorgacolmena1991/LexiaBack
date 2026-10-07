@@ -213,6 +213,11 @@ public final class CoactivaExpedienteDtos {
 
   public record DocumentoDetectado(String tipo, Integer fojaInicio, Integer fojaFin, boolean presente) {}
 
+  public record DocumentoProcesado(
+      String archivoId, String nombreArchivo, String fechaProcesamiento, String tipoPiezaDetectada) {}
+
+  public record HitoAcumulado(String hito, Integer foja, String fechaHito, String origenArchivoId) {}
+
   public record AnalisisResponse(
       String estadoAnalisis,
       UUID analisisId,
@@ -225,11 +230,28 @@ public final class CoactivaExpedienteDtos {
       Map<String, Object> datosExtraidos,
       String siguienteAccionSugerida,
       String error,
-      Instant createdAt) {
+      Instant createdAt,
+      List<DocumentoProcesado> documentosProcesados,
+      List<HitoAcumulado> hitosAcumulados,
+      UUID analisisPadreId) {
 
     public static AnalisisResponse enCurso(UUID archivoId) {
       return new AnalisisResponse(
-          "ANALIZANDO", null, archivoId, null, null, null, List.of(), List.of(), Map.of(), null, null, null);
+          "ANALIZANDO",
+          null,
+          archivoId,
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          Map.of(),
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          null);
     }
   }
 

@@ -15,6 +15,7 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaG
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.PreviewMinutaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.VariablesMinutaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.RegularizacionResponse;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
@@ -52,6 +53,7 @@ public class EscrituracionAbogadoController {
   private final MinutaGenerationService minutaGeneration;
   private final CapturaBiessService capturaBiess;
   private final ExpedienteEstadoService estado;
+  private final RegularizacionEscrituracionService regularizacion;
 
   public EscrituracionAbogadoController(
       ProductoBiessService productos,
@@ -60,13 +62,15 @@ public class EscrituracionAbogadoController {
       IaAnalysisService iaAnalysis,
       MinutaGenerationService minutaGeneration,
       CapturaBiessService capturaBiess,
-      ExpedienteEstadoService estado) {
+      ExpedienteEstadoService estado,
+      RegularizacionEscrituracionService regularizacion) {
     this.productos = productos;
     this.escritura = escritura;
     this.iaAnalysis = iaAnalysis;
     this.minutaGeneration = minutaGeneration;
     this.capturaBiess = capturaBiess;
     this.estado = estado;
+    this.regularizacion = regularizacion;
   }
 
   @GetMapping("/productos-biess")
@@ -84,6 +88,33 @@ public class EscrituracionAbogadoController {
   @GetMapping("/expedientes/{id}/escrituracion/estado")
   public EstadoEscrituracion estado(@PathVariable String id) {
     return estado.estadoFlujo(id);
+  }
+
+  @PostMapping({
+    "/expedientes/{id}/escrituracion/enviar-regularizacion",
+    "/escrituracion/expedientes/{id}/enviar-regularizacion"
+  })
+  public RegularizacionResponse enviarRegularizacion(@PathVariable UUID id) {
+    return regularizacion.enviar(id);
+  }
+
+  @PostMapping("/expedientes/{id}/escrituracion/marcar-corregido")
+  public RegularizacionResponse marcarCorregido(@PathVariable UUID id) {
+    return regularizacion.marcarCorregido(id);
+  }
+
+  @PostMapping({
+    "/expedientes/{id}/escrituracion/marcar-regularizado",
+    "/escrituracion/expedientes/{id}/marcar-regularizado"
+  })
+  public RegularizacionResponse marcarRegularizado(@PathVariable UUID id) {
+    return regularizacion.marcarRegularizado(id);
+  }
+
+  @PostMapping("/expedientes/{id}/escrituracion/observaciones/{observacionId}/resolver")
+  public RegularizacionResponse resolverObservacion(
+      @PathVariable UUID id, @PathVariable UUID observacionId) {
+    return regularizacion.resolverObservacion(id, observacionId);
   }
 
   @GetMapping("/expedientes/{id}/escrituracion")

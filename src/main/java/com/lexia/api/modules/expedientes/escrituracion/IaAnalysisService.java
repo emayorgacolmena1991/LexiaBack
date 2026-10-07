@@ -125,6 +125,18 @@ public class IaAnalysisService {
       throw ApiException.badRequest("El expediente no tiene un producto asignado.");
     }
 
+    if (writingFile != null && writingFile.isFlagBloqueoReenvio()) {
+      ProcesarExpedienteCompletoResult cached =
+          loadCached(expedienteId, tenantId, writingFile, productCode);
+      if (cached != null) {
+        return cached;
+      }
+      throw new ApiException(
+          org.springframework.http.HttpStatus.CONFLICT,
+          "REGULARIZACION_BLOQUEADA",
+          "El expediente está en regularización. El reanálisis queda detenido hasta marcarlo regularizado.");
+    }
+
     boolean force = request != null && Boolean.TRUE.equals(request.forceReanalysis());
     if (!force && borrador != null) {
       ProcesarExpedienteCompletoResult cachedDraft = readDraftStudy(borrador);

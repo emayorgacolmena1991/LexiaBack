@@ -15,6 +15,7 @@ import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser.
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.tenancy.TenantContext;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -37,6 +38,16 @@ public class CoactivaExpedienteAnalisisWorker {
 
   private static final Logger LOG = LoggerFactory.getLogger(CoactivaExpedienteAnalisisWorker.class);
   private static final int MAX_CHARS = 120_000;
+  private static final int MAX_HISTORIAL = 12_000;
+  private static final String HISTORIAL =
+      """
+      Considere el historial de diagnósticos previos del expediente:
+      --- HISTORIAL PREVIO ---
+      %s
+      --- NUEVO DOCUMENTO (OCR) ---
+
+      INSTRUCCIÓN: Fusiona el nuevo texto con los hitos previos. No elimines hitos antiguos previamente confirmados salvo que el nuevo documento sea una revocatoria explícita.
+      """;
   private static final String TIPO_PROMPT = "EXPEDIENTE_UNIFICADO";
   private static final String PROMPT_FALLBACK =
       "Eres un auditor legal de BanEcuador. Diagnostica el expediente coactivo completo.";
@@ -92,9 +103,10 @@ public class CoactivaExpedienteAnalisisWorker {
       return;
     }
     Contexto ctx = cargarContexto(tenantId, archivo.getExpedienteId());
+    Previo previo = cargarPrevio(tenantId, archivo.getExpedienteId());
     try {
-      Resultado resultado = diagnosticar(archivo, ctx);
-      guardar(tenantId, archivoId, resultado);
+      Resultado resultado = diagnosticar(archivo, ctx, previo);
+      guardar(tenantId, archivoId, resultado, previo);
       LOG.info(
           "Diagnóstico expediente={} archivo={} porcentaje={}",
           archivo.getExpedienteId(),
@@ -103,11 +115,11 @@ public class CoactivaExpedienteAnalisisWorker {
     } catch (Exception e) {
       String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
       LOG.warn("Fallo diagnóstico archivo={}: {}", archivoId, msg);
-      guardar(tenantId, archivoId, Resultado.error(ctx.etapa(), null, msg));
+      guardar(tenantId, archivoId, Resultado.error(ctx.etapa(), null, msg), previo);
     }
   }
 
-  private Resultado diagnosticar(CoactivaArchivo archivo, Contexto ctx) {
+  private Resultado diagnosticar(CoactivaArchivo archivo, Contexto ctx, Previo previo) {
     CoactivaPromptCatalog prompt =
         catalog.resolver(TIPO_PROMPT, ctx.etapa()).orElse(null);
     String system =
@@ -133,7 +145,7 @@ public class CoactivaExpedienteAnalisisWorker {
     LOG.info("Paso 2 LLM archivo={} chars={}", archivo.getId(), extraido.caracteres());
     ValidacionDocumentoJson raw =
         analisis.diagnosticarCoactiva(
-            system + CoactivaDiagnosticoParser.FORMATO_JSON, truncate(extraido.texto(), MAX_CHARS));
+            system + CoactivaDiagnosticoParser.FORMATO_JSON, textoConHistorial(extraido.texto(), previo));
     if (raw.esError()) {
       return Resultado.error(ctx.etapa(), promptId, raw.error());
     }
@@ -144,7 +156,7 @@ public class CoactivaExpedienteAnalisisWorker {
     return Resultado.ok(ctx.etapa(), promptId, parsed.diagnostico());
   }
 
-  private void guardar(UUID tenantId, UUID archivoId, Resultado resultado) {
+  private void guardar(UUID tenantId, UUID archivoId, Resultado resultado, Previo previo) {
     tx.executeWithoutResult(
         status -> {
           CoactivaArchivo archivo =
@@ -178,9 +190,26 @@ public class CoactivaExpedienteAnalisisWorker {
             return;
           }
           CoactivaDiagnostico diag = resultado.diagnostico();
+          CoactivaDiagnosticoMerge.Fusion fusion =
+              CoactivaDiagnosticoMerge.fusionar(
+                  previo == null ? null : previo.json(),
+                  previo == null ? null : previo.archivoId(),
+                  previo == null ? null : previo.fecha(),
+                  archivoId,
+                  archivo.getNombreOriginal(),
+                  tipoPieza(diag),
+                  diag);
           analisisRepo.save(
-              CoactivaAnalisis.ok(
-                  tenantId, archivo.getExpedienteId(), archivoId, resultado.promptId(), resultado.etapa(), diag));
+              CoactivaAnalisis.consolidado(
+                  tenantId,
+                  archivo.getExpedienteId(),
+                  archivoId,
+                  resultado.promptId(),
+                  resultado.etapa(),
+                  fusion.json(),
+                  fusion.porcentaje(),
+                  diag.etapaNormalizada() != null ? diag.etapaNormalizada() : fusion.etapa(),
+                  previo == null ? null : previo.id()));
           archivo.registrarResultadoIa(
               CoactivaArchivo.IA_APROBADO, null, diag.porcentajeCompletitud(), checklist(diag.documentos()));
           if (vigente) {
@@ -259,6 +288,36 @@ public class CoactivaExpedienteAnalisisWorker {
     return sb.toString();
   }
 
+  private Previo cargarPrevio(UUID tenantId, UUID expedienteId) {
+    return tx.execute(
+        status ->
+            analisisRepo
+                .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+                    tenantId, expedienteId, CoactivaAnalisis.ANALIZADO)
+                .map(a -> new Previo(a.getId(), a.getArchivoId(), a.getResultado(), a.getCreatedAt()))
+                .orElse(null));
+  }
+
+  private static String textoConHistorial(String ocr, Previo previo) {
+    if (previo == null || previo.json() == null || previo.json().isBlank() || "{}".equals(previo.json())) {
+      return truncate(ocr, MAX_CHARS);
+    }
+    String prefix = HISTORIAL.formatted(truncate(previo.json(), MAX_HISTORIAL));
+    int room = Math.max(1_000, MAX_CHARS - prefix.length());
+    return prefix + "\n" + truncate(ocr, room);
+  }
+
+  private static String tipoPieza(CoactivaDiagnostico diag) {
+    if (diag == null) {
+      return null;
+    }
+    return diag.documentos().stream()
+        .filter(Documento::presente)
+        .map(Documento::tipo)
+        .findFirst()
+        .orElse(diag.etapaNormalizada());
+  }
+
   private static String contextualizar(String prompt, Contexto ctx) {
     String etapa =
         "*".equals(ctx.etapa())
@@ -318,6 +377,8 @@ public class CoactivaExpedienteAnalisisWorker {
   }
 
   private record Contexto(String etapa, String juicio, String operacion, String deudor) {}
+
+  private record Previo(UUID id, UUID archivoId, String json, Instant fecha) {}
 
   private record Resultado(
       String etapa, Long promptId, CoactivaDiagnostico diagnostico, String error, boolean calidad) {

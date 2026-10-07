@@ -178,7 +178,9 @@ public class ExpedienteEstadoService {
         wizardStep(etapaCodigo, etapaIndex, hasDraft, hasEstudio, hasDatos),
         escrituracionId,
         biess,
-        hasDraft);
+        hasDraft,
+        file == null ? "PROCESO_REGULAR" : file.getEstadoRegularizacion(),
+        file != null && file.isFlagBloqueoReenvio());
   }
 
   private ProcessStageDef resolveStage(

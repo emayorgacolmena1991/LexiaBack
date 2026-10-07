@@ -98,6 +98,25 @@ public class CoactivaDelegadoService {
   }
 
   @Transactional
+  public DelegadoItem actualizarResolucion(UUID id, String resolucionNumero, LocalDate resolucionFecha) {
+    authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
+    AuthPrincipal principal = AuthContext.require();
+    CoactivaDelegado delegado = require(principal.tenantId(), id);
+    delegado.update(
+        delegado.getNombre(),
+        delegado.getIdentificacion(),
+        delegado.getCargo(),
+        CoactivaTexto.blankToNull(resolucionNumero),
+        resolucionFecha,
+        delegado.getVigenteDesde(),
+        delegado.getVigenteHasta(),
+        delegado.getEmail(),
+        delegado.isActivo(),
+        principal.userId());
+    return toItem(delegado, codigosDe(principal.tenantId(), id));
+  }
+
+  @Transactional
   public void eliminarDelegado(UUID id) {
     authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
     AuthPrincipal principal = AuthContext.require();

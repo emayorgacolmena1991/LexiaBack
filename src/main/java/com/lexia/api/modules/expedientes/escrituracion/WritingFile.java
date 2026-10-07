@@ -48,6 +48,12 @@ public class WritingFile implements Persistable<UUID> {
   @Column(name = "ingestion_mode", length = 32)
   private String ingestionMode;
 
+  @Column(name = "estado_regularizacion", nullable = false, length = 50)
+  private String estadoRegularizacion = "PROCESO_REGULAR";
+
+  @Column(name = "flag_bloqueo_reenvio", nullable = false)
+  private boolean flagBloqueoReenvio;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -120,6 +126,32 @@ public class WritingFile implements Persistable<UUID> {
     if (canton != null && !canton.isBlank()) {
       this.municipality = canton;
     }
+    this.updatedAt = Instant.now();
+  }
+
+  public String getEstadoRegularizacion() {
+    return estadoRegularizacion == null ? "PROCESO_REGULAR" : estadoRegularizacion;
+  }
+
+  public boolean isFlagBloqueoReenvio() {
+    return flagBloqueoReenvio;
+  }
+
+  public void enviarRegularizacion() {
+    this.estadoRegularizacion = "EN_REGULARIZACION";
+    this.flagBloqueoReenvio = true;
+    this.updatedAt = Instant.now();
+  }
+
+  public void marcarCorregido() {
+    this.estadoRegularizacion = "CORREGIDO_POR_USUARIO";
+    this.flagBloqueoReenvio = true;
+    this.updatedAt = Instant.now();
+  }
+
+  public void marcarRegularizado() {
+    this.estadoRegularizacion = "PROCESO_REGULAR";
+    this.flagBloqueoReenvio = false;
     this.updatedAt = Instant.now();
   }
 }

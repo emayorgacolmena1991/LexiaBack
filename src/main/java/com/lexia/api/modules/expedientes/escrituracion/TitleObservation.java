@@ -43,6 +43,10 @@ public class TitleObservation {
     return id;
   }
 
+  public UUID getTitleStudyId() {
+    return titleStudyId;
+  }
+
   public String getDetail() {
     return detail;
   }

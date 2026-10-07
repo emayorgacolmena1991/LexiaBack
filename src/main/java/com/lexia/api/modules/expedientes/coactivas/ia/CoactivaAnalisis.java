@@ -53,6 +53,12 @@ public class CoactivaAnalisis implements Persistable<UUID> {
   @Column(columnDefinition = "text")
   private String error;
 
+  @Column(name = "es_consolidado", nullable = false)
+  private boolean esConsolidado = true;
+
+  @Column(name = "analisis_padre_id")
+  private UUID analisisPadreId;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -68,6 +74,27 @@ public class CoactivaAnalisis implements Persistable<UUID> {
     row.porcentajeCompletitud = (short) diagnostico.porcentajeCompletitud();
     row.etapaDetectada = recortar(diagnostico.etapaNormalizada(), 32);
     row.resultado = diagnostico.json();
+    row.esConsolidado = true;
+    return row;
+  }
+
+  public static CoactivaAnalisis consolidado(
+      UUID tenantId,
+      UUID expedienteId,
+      UUID archivoId,
+      Long promptId,
+      String etapa,
+      String resultadoJson,
+      int porcentaje,
+      String etapaDetectada,
+      UUID padreId) {
+    CoactivaAnalisis row = base(tenantId, expedienteId, archivoId, promptId, etapa);
+    row.estado = ANALIZADO;
+    row.porcentajeCompletitud = (short) Math.max(0, Math.min(100, porcentaje));
+    row.etapaDetectada = recortar(etapaDetectada, 32);
+    row.resultado = resultadoJson == null ? "{}" : resultadoJson;
+    row.esConsolidado = true;
+    row.analisisPadreId = padreId;
     return row;
   }
 
@@ -77,6 +104,7 @@ public class CoactivaAnalisis implements Persistable<UUID> {
     row.estado = ERROR;
     row.resultado = "{}";
     row.error = recortar(motivo, 2000);
+    row.esConsolidado = false;
     return row;
   }
 
@@ -150,5 +178,13 @@ public class CoactivaAnalisis implements Persistable<UUID> {
 
   public Instant getCreatedAt() {
     return createdAt;
+  }
+
+  public UUID getAnalisisPadreId() {
+    return analisisPadreId;
+  }
+
+  public boolean isEsConsolidado() {
+    return esConsolidado;
   }
 }

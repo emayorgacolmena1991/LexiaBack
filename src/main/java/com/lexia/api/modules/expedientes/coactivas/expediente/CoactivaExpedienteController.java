@@ -1,7 +1,9 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoRequest;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.ResolucionDelegadoRequest;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
@@ -68,6 +70,17 @@ public class CoactivaExpedienteController {
   @GetMapping("/delegados")
   public List<DelegadoItem> delegados() {
     return delegados.delegadosActivos();
+  }
+
+  @PutMapping("/delegados/{id}")
+  public DelegadoItem actualizarDelegado(@PathVariable UUID id, @Valid @RequestBody DelegadoRequest request) {
+    return delegados.actualizarDelegado(id, request);
+  }
+
+  @PutMapping("/delegados/{id}/resolucion")
+  public DelegadoItem actualizarResolucion(
+      @PathVariable UUID id, @Valid @RequestBody ResolucionDelegadoRequest request) {
+    return delegados.actualizarResolucion(id, request.resolucionNumero(), request.resolucionFecha());
   }
 
   @GetMapping("/oficinas")

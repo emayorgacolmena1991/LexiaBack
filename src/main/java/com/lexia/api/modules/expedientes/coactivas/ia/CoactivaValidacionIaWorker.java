@@ -36,6 +36,7 @@ public class CoactivaValidacionIaWorker {
   private final AnalisisDocumentoService analisis;
   private final CoactivaPromptCatalogRepository catalog;
   private final CoactivaIaResultadoParser parser;
+  private final CoactivaAnalisisRepository analisisRepo;
   private final boolean dummy;
   private final TransactionTemplate tx;
 
@@ -46,6 +47,7 @@ public class CoactivaValidacionIaWorker {
       AnalisisDocumentoService analisis,
       CoactivaPromptCatalogRepository catalog,
       CoactivaIaResultadoParser parser,
+      CoactivaAnalisisRepository analisisRepo,
       PlatformTransactionManager txManager,
       @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy) {
     this.archivos = archivos;
@@ -54,6 +56,7 @@ public class CoactivaValidacionIaWorker {
     this.analisis = analisis;
     this.catalog = catalog;
     this.parser = parser;
+    this.analisisRepo = analisisRepo;
     this.dummy = dummy;
     this.tx = new TransactionTemplate(txManager);
   }
@@ -109,7 +112,40 @@ public class CoactivaValidacionIaWorker {
             return;
           }
           row.registrarResultadoIa(estado, motivo, confianza, checklist);
+          if (row.getExpedienteId() != null && !CoactivaArchivo.IA_ERROR.equals(estado)) {
+            acumular(row, estado, checklist);
+          }
         });
+  }
+
+  private void acumular(CoactivaArchivo archivo, String estado, String checklist) {
+    CoactivaAnalisis previo =
+        analisisRepo
+            .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+                archivo.getTenantId(), archivo.getExpedienteId(), CoactivaAnalisis.ANALIZADO)
+            .orElse(null);
+    CoactivaDiagnosticoMerge.Fusion fusion =
+        CoactivaDiagnosticoMerge.pieza(
+            previo == null ? null : previo.getResultado(),
+            previo == null ? null : previo.getArchivoId(),
+            previo == null ? null : previo.getCreatedAt(),
+            archivo.getId(),
+            archivo.getNombreOriginal(),
+            archivo.getTipo(),
+            estado,
+            checklist);
+    String etapa = archivo.getEtapaIa() == null ? "*" : archivo.getEtapaIa();
+    analisisRepo.save(
+        CoactivaAnalisis.consolidado(
+            archivo.getTenantId(),
+            archivo.getExpedienteId(),
+            archivo.getId(),
+            null,
+            etapa,
+            fusion.json(),
+            fusion.porcentaje(),
+            fusion.etapa() == null ? etapa : fusion.etapa(),
+            previo == null ? null : previo.getId()));
   }
 
   private CoactivaIaResultado analizar(CoactivaArchivo archivo) {

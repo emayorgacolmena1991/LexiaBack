@@ -19,9 +19,12 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.DocumentoDetectado;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.OverrideIaRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.DocumentoProcesado;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.HitoAcumulado;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaAnalisis;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaAnalisisRepository;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoMerge;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
@@ -537,6 +540,7 @@ public class CoactivaExpedienteService {
       throw ApiException.notFound("El expediente aún no tiene diagnóstico.");
     }
     if (CoactivaAnalisis.ERROR.equals(ultimo.getEstado())) {
+      Acumulado acumulado = acumulado(ultimo);
       return new AnalisisResponse(
           expediente.getEstadoAnalisis(),
           ultimo.getId(),
@@ -549,10 +553,14 @@ public class CoactivaExpedienteService {
           Map.of(),
           null,
           ultimo.getError(),
-          ultimo.getCreatedAt());
+          ultimo.getCreatedAt(),
+          acumulado.piezas(),
+          acumulado.hitos(),
+          ultimo.getAnalisisPadreId());
     }
     CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(ultimo.getResultado());
     CoactivaDiagnostico diag = parsed.diagnostico();
+    Acumulado acumulado = acumulado(ultimo);
     if (diag == null) {
       return new AnalisisResponse(
           expediente.getEstadoAnalisis(),
@@ -566,7 +574,10 @@ public class CoactivaExpedienteService {
           Map.of(),
           null,
           parsed.error(),
-          ultimo.getCreatedAt());
+          ultimo.getCreatedAt(),
+          acumulado.piezas(),
+          acumulado.hitos(),
+          ultimo.getAnalisisPadreId());
     }
     return new AnalisisResponse(
         expediente.getEstadoAnalisis(),
@@ -582,8 +593,49 @@ public class CoactivaExpedienteService {
         diag.datosExtraidos(),
         diag.siguienteAccion(),
         null,
-        ultimo.getCreatedAt());
+        ultimo.getCreatedAt(),
+        acumulado.piezas(),
+        acumulado.hitos(),
+        ultimo.getAnalisisPadreId());
   }
+
+  private static Acumulado acumulado(CoactivaAnalisis analisis) {
+    CoactivaDiagnosticoMerge.Vista vista = CoactivaDiagnosticoMerge.vista(analisis.getResultado());
+    List<DocumentoProcesado> piezas =
+        vista.documentosProcesados().stream()
+            .map(
+                m ->
+                    new DocumentoProcesado(
+                        texto(m.get("archivo_id")),
+                        texto(m.get("nombre_archivo")),
+                        texto(m.get("fecha_procesamiento")),
+                        texto(m.get("tipo_pieza_detectada"))))
+            .toList();
+    List<HitoAcumulado> hitos =
+        vista.hitosAcumulados().stream()
+            .map(
+                m ->
+                    new HitoAcumulado(
+                        texto(m.get("hito")),
+                        foja(m.get("foja")),
+                        texto(m.get("fecha_hito")),
+                        texto(m.get("origen_archivo_id"))))
+            .toList();
+    return new Acumulado(piezas, hitos);
+  }
+
+  private static String texto(Object value) {
+    return value == null ? null : String.valueOf(value);
+  }
+
+  private static Integer foja(Object value) {
+    if (value instanceof Number n) {
+      return n.intValue();
+    }
+    return null;
+  }
+
+  private record Acumulado(List<DocumentoProcesado> piezas, List<HitoAcumulado> hitos) {}
 
   /**
    * Vuelve a encolar el diagnóstico IA sobre el PDF ya analizado o, si no hay, sobre el último

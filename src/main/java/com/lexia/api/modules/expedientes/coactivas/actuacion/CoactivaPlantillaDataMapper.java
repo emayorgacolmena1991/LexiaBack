@@ -306,6 +306,11 @@ public class CoactivaPlantillaDataMapper {
     r.copiarSiAusente("ciudad_actuacion", "unidad_ejecucion_coactiva");
     r.copiarSiAusente("fecha_liquidacion", "fecha_liquidacion_actualizada");
     r.copiarSiAusente("fecha_acta", "fecha_auto_designacion");
+    r.copiar("numero_resolucion_delegacion", "NUMERO_RESOLUCION_DELEGACION");
+    r.copiar("fecha_resolucion_delegacion", "FECHA_RESOLUCION_DELEGACION");
+    r.copiar("numero_juicio_coactivo", "NUMERO_JUICIO");
+    r.copiar("numero_operacion", "NUMERO_OPERACION");
+    r.copiar("nombre_deudor_principal", "DEUDOR_NOMBRE");
     partirFecha(r, "fecha_embargo", "dia_embargo", "mes_embargo", "anio_embargo");
     desglosarHonorarios(r);
   }

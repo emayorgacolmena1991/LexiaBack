@@ -179,7 +179,17 @@ public final class EscrituracionDtos {
       int wizardStep,
       UUID escrituracionId,
       DatosBiessMinuta datosBiess,
-      boolean hasDraft) {}
+      boolean hasDraft,
+      String estadoRegularizacion,
+      boolean flagBloqueoReenvio) {}
+
+  public record RegularizacionResponse(
+      UUID expedienteId,
+      UUID escrituracionId,
+      String estadoRegularizacion,
+      boolean flagBloqueoReenvio,
+      boolean puedeMarcarRegularizado,
+      List<String> observacionesAbiertas) {}
 
   /** Estado consolidado en BD para hidratar el FE al abrir o refrescar. */
   public record EstadoMinutaBorrador(
