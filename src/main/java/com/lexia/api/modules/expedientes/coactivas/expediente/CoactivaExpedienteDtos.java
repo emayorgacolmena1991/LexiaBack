@@ -253,6 +253,26 @@ public final class CoactivaExpedienteDtos {
           List.of(),
           null);
     }
+
+    /** Expediente anterior al análisis: 200 con listas vacías, sin 404. */
+    public static AnalisisResponse sinDiagnostico(String estado) {
+      return new AnalisisResponse(
+          estado == null || estado.isBlank() ? "NO_APLICA" : estado,
+          null,
+          null,
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          Map.of(),
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          null);
+    }
   }
 
   public record TimelineItem(

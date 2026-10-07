@@ -537,7 +537,7 @@ public class CoactivaExpedienteService {
       return AnalisisResponse.enCurso(expediente.getAnalisisArchivoId());
     }
     if (ultimo == null) {
-      throw ApiException.notFound("El expediente aún no tiene diagnóstico.");
+      return AnalisisResponse.sinDiagnostico(expediente.getEstadoAnalisis());
     }
     if (CoactivaAnalisis.ERROR.equals(ultimo.getEstado())) {
       Acumulado acumulado = acumulado(ultimo);

@@ -83,7 +83,7 @@ public class CoactivaActuacionController {
         .header(
             "X-Variables-Pendientes",
             String.valueOf(preview.variables().variablesPendientes().size()))
-        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"actuacion-preview.pdf\"")
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
         .contentType(MediaType.APPLICATION_PDF)
         .body(preview.pdf());
   }

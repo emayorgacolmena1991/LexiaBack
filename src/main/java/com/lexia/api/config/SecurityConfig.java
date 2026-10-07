@@ -160,6 +160,7 @@ public class SecurityConfig {
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(
+                        paths.matcher("/error"),
                         paths.matcher("/api/v1/health"),
                         paths.matcher("/actuator/health"),
                         paths.matcher("/actuator/info"),
