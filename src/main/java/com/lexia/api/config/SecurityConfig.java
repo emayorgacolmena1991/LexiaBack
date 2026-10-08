@@ -154,6 +154,7 @@ public class SecurityConfig {
                         paths.matcher(HttpMethod.POST, "/api/v1/documents/reupload"),
                         paths.matcher(
                             HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text"),
+                        paths.matcher("/api/v1/escrituracion/ingesta-masiva/**"),
                         // Coactivas: la SPA en :4200 manda la cookie de sesión; el CSRF se desincroniza en PATCH.
                         paths.matcher("/api/v1/coactivas/**")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
@@ -184,6 +185,7 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/expedientes/**"),
                         paths.matcher("/api/v1/minutas/**"),
                         paths.matcher("/api/v1/escrituracion"),
+                        paths.matcher("/api/v1/escrituracion/**"),
                         paths.matcher("/api/v1/ia/**"),
                         paths.matcher("/api/v1/ocr/**"),
                         paths.matcher("/api/v1/documents/**"),
