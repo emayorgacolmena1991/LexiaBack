@@ -10,6 +10,7 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Actualiza
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
+import com.lexia.api.modules.expedientes.documentos.CaseDocumentoStore;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
 import com.lexia.api.modules.expedientes.documentos.IngestionMode;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.CrearBorradorRequest;
@@ -55,6 +56,7 @@ public class IngestaMasivaEscrituracionService {
   private static final int TEXTO_PREVIEW = 1500;
 
   private final CargaDocumentoService carga;
+  private final CaseDocumentoStore casos;
   private final ExpedienteBorradorStore borradores;
   private final BorradorPromocionService promocion;
   private final OcrAzureBatchService ocr;
@@ -72,12 +74,14 @@ public class IngestaMasivaEscrituracionService {
 
   public IngestaMasivaEscrituracionService(
       CargaDocumentoService carga,
+      CaseDocumentoStore casos,
       ExpedienteBorradorStore borradores,
       BorradorPromocionService promocion,
       OcrAzureBatchService ocr,
       IaAnalysisService ia,
       ProductoBiessService productos) {
     this.carga = carga;
+    this.casos = casos;
     this.borradores = borradores;
     this.promocion = promocion;
     this.ocr = ocr;
@@ -109,7 +113,7 @@ public class IngestaMasivaEscrituracionService {
 
   public LoteStatus subir(UUID batchId, AsignacionesPayload payload, List<MultipartFile> files) {
     Lote lote = require(batchId);
-    AuthPrincipal principal = AuthContext.require();
+    AuthContext.require();
     List<AsignacionArchivo> asignaciones = payload == null ? List.of() : payload.archivos();
     List<MultipartFile> binarios = files == null ? List.of() : files;
     if (asignaciones.isEmpty() || asignaciones.size() != binarios.size()) {
@@ -120,9 +124,10 @@ public class IngestaMasivaEscrituracionService {
       AsignacionArchivo asignacion = asignaciones.get(i);
       MultipartFile file = binarios.get(i);
       Fila fila = fila(lote, asignacion.clientRowId());
-      String sesion = exigirBorrador(fila, asignacion.borradorId());
+      exigirBorrador(fila, asignacion.borradorId());
+      String sesion = exigirExpediente(fila);
       if (file == null || file.isEmpty()) {
-        throw ApiException.badRequest("Archivo vacío en la fila " + fila.clientRowId + ". No se llama a OCR.");
+        throw ApiException.badRequest("Archivo vacío en la fila " + fila.clientRowId + ".");
       }
       String tipo = tipoDe(fila, asignacion.tipoDocumento());
       DocumentoCargadoDTO doc = carga.subir(sesion, file);
@@ -131,7 +136,7 @@ public class IngestaMasivaEscrituracionService {
       }
       synchronized (fila) {
         fila.archivos.add(Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo));
-        fila.ocrEstado = "PROCESANDO";
+        fila.ocrEstado = "PENDIENTE";
         fila.semaforo = "GRIS";
         fila.observaciones = null;
       }
@@ -139,10 +144,82 @@ public class IngestaMasivaEscrituracionService {
         tocadas.add(fila);
       }
     }
+    if (tocadas.isEmpty()) {
+      throw ApiException.badRequest("No se guardó ningún archivo.");
+    }
+    synchronized (lote) {
+      lote.fase = "ARCHIVOS";
+    }
+    return lote.snapshot();
+  }
+
+  public LoteStatus ejecutarOcr(UUID batchId) {
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    List<Fila> objetivo = new ArrayList<>();
+    for (Fila fila : lote.filas) {
+      synchronized (fila) {
+        if (fila.expedienteId == null || fila.archivos.isEmpty()) {
+          fila.ocrEstado = "ERROR";
+          fila.semaforo = "ROJO";
+          fila.observaciones = "Sin archivos guardados. No se llama a OCR.";
+          continue;
+        }
+        if ("LISTO".equals(fila.ocrEstado) && !"ROJO".equals(fila.semaforo)) {
+          continue;
+        }
+        fila.ocrEstado = "PROCESANDO";
+        fila.semaforo = "GRIS";
+        fila.observaciones = null;
+        objetivo.add(fila);
+      }
+    }
+    if (objetivo.isEmpty()) {
+      throw ApiException.badRequest("No hay archivos guardados para OCR.");
+    }
     synchronized (lote) {
       lote.fase = "OCR";
     }
-    for (Fila fila : tocadas) {
+    for (Fila fila : objetivo) {
+      encolarOcr(lote, fila, principal);
+    }
+    return lote.snapshot();
+  }
+
+  public LoteStatus reintentar(UUID batchId, String clientRowId) {
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    Fila fila = fila(lote, clientRowId);
+    boolean soloIa;
+    synchronized (fila) {
+      soloIa =
+          "ERROR".equals(fila.iaEstado)
+              && "LISTO".equals(fila.ocrEstado)
+              && !"ROJO".equals(fila.semaforo);
+      if (soloIa) {
+        fila.iaEstado = "EN_PROCESO";
+        fila.iaResumen = null;
+      } else if (fila.expedienteId == null || fila.archivos.isEmpty()) {
+        throw ApiException.badRequest("La fila no tiene archivos guardados. No se llama a OCR.");
+      } else {
+        for (Archivo archivo : fila.archivos) {
+          if (!archivo.ocrListo || "ROJO".equals(archivo.semaforo)) {
+            archivo.reset();
+          }
+        }
+        fila.ocrEstado = "PROCESANDO";
+        fila.semaforo = "GRIS";
+        fila.iaEstado = "PENDIENTE";
+        fila.iaResumen = null;
+        fila.observaciones = null;
+      }
+    }
+    synchronized (lote) {
+      lote.fase = soloIa ? "IA" : "OCR";
+    }
+    if (soloIa) {
+      encolarIa(lote, fila, principal);
+    } else {
       encolarOcr(lote, fila, principal);
     }
     return lote.snapshot();
@@ -159,7 +236,7 @@ public class IngestaMasivaEscrituracionService {
     if (file == null || file.isEmpty()) {
       throw ApiException.badRequest("Adjunta el archivo de reemplazo.");
     }
-    String sesion = exigirBorrador(fila, fila.borradorId.toString());
+    String sesion = exigirExpediente(fila);
     String tipo = tipoDe(fila, tipoDocumento);
     DocumentoCargadoDTO doc = carga.subir(sesion, file);
     if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
@@ -191,18 +268,18 @@ public class IngestaMasivaEscrituracionService {
     AuthPrincipal principal = AuthContext.require();
     List<Fila> objetivo = new ArrayList<>();
     synchronized (lote) {
-      if (!lote.cotejoHabilitado()) {
-        throw ApiException.badRequest(
-            "El cotejo espera OCR terminado y ninguna fila en rojo. Corrige o reemplaza los archivos rojos.");
-      }
       for (Fila fila : lote.filas) {
-        if ("VERDE".equals(fila.semaforo) || "NARANJA".equals(fila.semaforo)) {
+        if (("VERDE".equals(fila.semaforo) || "NARANJA".equals(fila.semaforo))
+            && "LISTO".equals(fila.ocrEstado)
+            && !"OK".equals(fila.iaEstado)
+            && !"EN_PROCESO".equals(fila.iaEstado)) {
           fila.iaEstado = "EN_PROCESO";
           fila.iaResumen = null;
           objetivo.add(fila);
-        } else {
-          fila.iaEstado = "OMITIDO";
         }
+      }
+      if (objetivo.isEmpty()) {
+        throw ApiException.badRequest("No hay filas con OCR listo para analizar.");
       }
       lote.fase = "IA";
     }
@@ -258,13 +335,13 @@ public class IngestaMasivaEscrituracionService {
           try {
             List<String> faltantes = documentosFaltantes(fila);
             synchronized (fila) {
-              String sesion = fila.borradorId == null ? null : fila.borradorId.toString();
+              String sesion = fila.expedienteId == null ? null : fila.expedienteId.toString();
               for (Archivo archivo : fila.archivos) {
                 if (archivo.ocrListo) {
                   continue;
                 }
                 if (sesion == null) {
-                  archivo.fallo("Sin borrador. No se llama a OCR.");
+                  archivo.fallo("Sin expediente. No se llama a OCR.");
                   continue;
                 }
                 try {
@@ -311,7 +388,7 @@ public class IngestaMasivaEscrituracionService {
               }
               return;
             }
-            String sessionId = fila.borradorId.toString();
+            String sessionId = fila.expedienteId.toString();
             ocr.consolidate(new ConsolidateRequest(sessionId, texto));
             ProcesarExpedienteCompletoResult resultado =
                 ia.analizarExpedienteConPromptProducto(
@@ -362,6 +439,25 @@ public class IngestaMasivaEscrituracionService {
       throw ApiException.badRequest("El borrador " + esperado + " no existe. No se procesa OCR.");
     }
     return esperado.toString();
+  }
+
+  private String exigirExpediente(Fila fila) {
+    UUID expedienteId = fila.expedienteId;
+    LOG.info(
+        "ingesta-masiva upload fila={} expedienteCreado={} borradorCreado={}",
+        fila.clientRowId,
+        expedienteId,
+        fila.borradorId);
+    if (expedienteId == null) {
+      throw ApiException.badRequest("La fila no tiene expediente. Vuelve a crear el lote.");
+    }
+    String id = expedienteId.toString();
+    boolean existe = casos.context(id) != null;
+    LOG.info("ingesta-masiva upload expediente={} existeEnBd={}", expedienteId, existe);
+    if (!existe) {
+      throw ApiException.badRequest("El expediente " + expedienteId + " no existe. No se procesa OCR.");
+    }
+    return id;
   }
 
   private List<String> documentosFaltantes(Fila fila) {
@@ -646,6 +742,15 @@ public class IngestaMasivaEscrituracionService {
       texto = respuesta.textoExtraido();
       semaforo = semaforoDe(false, legible, confianza);
       ocrListo = true;
+    }
+
+    private void reset() {
+      semaforo = "GRIS";
+      confianza = 0;
+      legible = false;
+      mensaje = null;
+      texto = null;
+      ocrListo = false;
     }
 
     private void fallo(String error) {

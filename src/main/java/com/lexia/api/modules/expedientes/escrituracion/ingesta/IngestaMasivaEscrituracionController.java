@@ -50,6 +50,16 @@ public class IngestaMasivaEscrituracionController {
     return ingesta.reemplazar(batchId, clientRowId, file, tipoDocumento, fileId);
   }
 
+  @PostMapping("/{batchId}/ejecutar-ocr")
+  public LoteStatus ejecutarOcr(@PathVariable UUID batchId) {
+    return ingesta.ejecutarOcr(batchId);
+  }
+
+  @PostMapping("/{batchId}/filas/{clientRowId}/reintentar")
+  public LoteStatus reintentar(@PathVariable UUID batchId, @PathVariable String clientRowId) {
+    return ingesta.reintentar(batchId, clientRowId);
+  }
+
   @GetMapping("/{batchId}/status")
   public LoteStatus status(@PathVariable UUID batchId) {
     return ingesta.status(batchId);
