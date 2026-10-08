@@ -29,6 +29,7 @@ import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeSingleRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeSingleResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateRequest;
+import com.lexia.api.modules.tenancy.TenantContext;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -332,6 +333,7 @@ public class IngestaMasivaEscrituracionService {
     workers.submit(
         () -> {
           AuthContext.set(principal);
+          TenantContext.setTenantId(principal.tenantId());
           try {
             List<String> faltantes = documentosFaltantes(fila);
             synchronized (fila) {
@@ -364,6 +366,7 @@ public class IngestaMasivaEscrituracionService {
             }
           } finally {
             AuthContext.clear();
+            TenantContext.clear();
           }
         });
   }
@@ -372,6 +375,7 @@ public class IngestaMasivaEscrituracionService {
     workers.submit(
         () -> {
           AuthContext.set(principal);
+          TenantContext.setTenantId(principal.tenantId());
           try {
             String texto = fila.textoConsolidado();
             if (!StringUtils.hasText(texto)) {
@@ -411,6 +415,7 @@ public class IngestaMasivaEscrituracionService {
             }
           } finally {
             AuthContext.clear();
+            TenantContext.clear();
             synchronized (lote) {
               lote.refrescarFaseIa();
             }

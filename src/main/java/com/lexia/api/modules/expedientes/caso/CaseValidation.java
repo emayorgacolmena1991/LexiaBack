@@ -55,7 +55,7 @@ public class CaseValidation {
     validation.validationDefId = validationDefId;
     validation.label = label;
     validation.kind = kind;
-    validation.result = result;
+    validation.result = normalizar(result);
     validation.ruleVersion = ruleVersion;
     validation.createdAt = Instant.now();
     return validation;
@@ -94,8 +94,23 @@ public class CaseValidation {
   }
 
   public void applyEvaluation(String result, String evidence, String ruleVersion) {
-    this.result = result;
+    this.result = normalizar(result);
     this.evidence = evidence;
     this.ruleVersion = ruleVersion;
+  }
+
+  /** CHECK case_validation_result_check: PASS, FAIL, REVIEW_REQUIRED, NOT_APPLICABLE, NOT_RUN. */
+  private static String normalizar(String result) {
+    if (result == null || result.isBlank()) {
+      return "NOT_RUN";
+    }
+    return switch (result.trim().toUpperCase(java.util.Locale.ROOT)) {
+      case "PASS", "PASSED", "OK", "LEGIBLE" -> "PASS";
+      case "FAIL", "FAILED", "ERROR" -> "FAIL";
+      case "NOT_APPLICABLE", "NA" -> "NOT_APPLICABLE";
+      case "NOT_RUN", "PENDING", "PENDIENTE" -> "NOT_RUN";
+      case "REVIEW_REQUIRED", "OBSERVATION", "WARNING" -> "REVIEW_REQUIRED";
+      default -> "REVIEW_REQUIRED";
+    };
   }
 }
