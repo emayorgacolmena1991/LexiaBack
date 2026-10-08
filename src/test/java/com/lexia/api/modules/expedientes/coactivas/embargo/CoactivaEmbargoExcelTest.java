@@ -50,6 +50,25 @@ class CoactivaEmbargoExcelTest {
   }
 
   @Test
+  void completoExigeLasOnceColumnas() {
+    Datos lleno =
+        new Datos(
+            "UEC MANTA", "PORTOVIEJO", "0012345", "13001-2024-00012", "PEREZ JUAN", "PEREZ JUAN",
+            new BigDecimal("1.00"), LocalDate.of(2026, 10, 7), "ANA", "0007", "000123");
+    assertTrue(CoactivaEmbargoService.completo(lleno));
+    assertFalse(
+        CoactivaEmbargoService.completo(
+            new Datos(
+                "UEC MANTA", "PORTOVIEJO", "0012345", "13001-2024-00012", "PEREZ JUAN", "PEREZ JUAN",
+                null, LocalDate.of(2026, 10, 7), "ANA", "0007", "000123")));
+    assertFalse(
+        CoactivaEmbargoService.completo(
+            new Datos(
+                "UEC MANTA", "PORTOVIEJO", "0012345", "13001-2024-00012", "PEREZ JUAN", "PEREZ JUAN",
+                new BigDecimal("1.00"), LocalDate.of(2026, 10, 7), "ANA", "0007", "  ")));
+  }
+
+  @Test
   void rellenaCopiaDeLaPlantillaSinTocarElOriginal() throws Exception {
     ClassPathResource recurso = new ClassPathResource(CoactivaEmbargoExcel.PLANTILLA);
     byte[] original;

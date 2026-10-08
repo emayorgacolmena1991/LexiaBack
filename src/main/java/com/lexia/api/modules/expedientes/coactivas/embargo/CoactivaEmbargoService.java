@@ -8,10 +8,12 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaDataMapper;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficina;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficinaRepository;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.Datos;
+import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.DelegadoResumen;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.ExpedienteResponse;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.GuardarRequest;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.LoteEntregado;
@@ -34,6 +36,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -117,31 +120,48 @@ public class CoactivaEmbargoService {
         delegado.delegadoNombre());
   }
 
+  /** Sin {@code loteId}: el lote en preparación del delegado. */
   @Transactional(readOnly = true)
-  public RegistrosResponse registros(UUID expedienteId) {
+  public RegistrosResponse registros(UUID expedienteId, UUID delegadoId, UUID loteId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
-    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
-    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
-    return registros(tenantId, lotes.activo(tenantId, delegado.delegadoId()), delegado);
+    DelegadoRef delegado = delegado(tenantId, expedienteId, delegadoId);
+    return registros(tenantId, lote(tenantId, loteId, delegado), delegado);
   }
 
+  /** Delegados activos (o con lote abierto) y el avance de su lote en preparación. */
   @Transactional(readOnly = true)
-  public RegistrosResponse registros(UUID expedienteId, UUID loteId) {
+  public List<DelegadoResumen> delegados() {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
-    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
-    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
-    return registros(tenantId, Optional.of(loteDelDelegado(tenantId, loteId, delegado)), delegado);
+    Instant ahora = Instant.now();
+    List<DelegadoResumen> resultado = new ArrayList<>();
+    // ponytail: 3 consultas por delegado (lote, filas, conteo); si llegan a decenas, agrupar en una sola consulta.
+    for (DelegadoItem d : delegados.catalogos().delegados()) {
+      DelegadoRef ref = new DelegadoRef(d.id(), d.nombre());
+      Optional<CoactivaEmbargoLote> lote = lotes.activo(tenantId, d.id());
+      if (lote.isEmpty() && !d.activo()) {
+        continue;
+      }
+      List<RegistroItem> filas = filas(tenantId, lote);
+      long completos = filas.stream().filter(r -> completo(r.datos())).count();
+      resultado.add(
+          new DelegadoResumen(
+              d.id(),
+              d.nombre(),
+              lote.isPresent() ? resumen(tenantId, lote, ahora, ref) : null,
+              completos,
+              filas.size() - completos));
+    }
+    return resultado;
   }
 
-  /** Historial del mismo delegado que el expediente. Más reciente primero. */
+  /** Historial del delegado (explícito o el del expediente). Más reciente primero. */
   @Transactional(readOnly = true)
-  public List<LoteEntregado> entregados(UUID expedienteId) {
+  public List<LoteEntregado> entregados(UUID expedienteId, UUID delegadoId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
-    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
-    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
+    DelegadoRef delegado = delegado(tenantId, expedienteId, delegadoId);
     // ponytail: un count por lote (≈1 lote/semana por delegado); si el historial crece mucho, agrupar en una sola consulta o paginar.
     return lotes
         .findByTenantIdAndDelegadoIdAndEstadoOrderByEntregadoAtDescNumeroDesc(
@@ -161,6 +181,12 @@ public class CoactivaEmbargoService {
   private RegistrosResponse registros(UUID tenantId, Optional<CoactivaEmbargoLote> lote, DelegadoRef delegado) {
     Instant ahora = Instant.now();
     return new RegistrosResponse(resumen(tenantId, lote, ahora, delegado), ahora, filas(tenantId, lote));
+  }
+
+  private Optional<CoactivaEmbargoLote> lote(UUID tenantId, UUID loteId, DelegadoRef delegado) {
+    return loteId == null
+        ? lotes.activo(tenantId, delegado.delegadoId())
+        : Optional.of(loteDelDelegado(tenantId, loteId, delegado));
   }
 
   private CoactivaEmbargoLote loteDelDelegado(UUID tenantId, UUID loteId, DelegadoRef delegado) {
@@ -231,22 +257,13 @@ public class CoactivaEmbargoService {
 
   public record Descarga(String nombre, byte[] bytes) {}
 
+  /** Sin {@code loteId}: el lote en preparación del delegado. */
   @Transactional(readOnly = true)
-  public Descarga descargar(UUID expedienteId) {
+  public Descarga descargar(UUID expedienteId, UUID delegadoId, UUID loteId) {
     authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
     UUID tenantId = AuthContext.require().tenantId();
-    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
-    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
-    return descargar(tenantId, lotes.activo(tenantId, delegado.delegadoId()), delegado);
-  }
-
-  @Transactional(readOnly = true)
-  public Descarga descargar(UUID expedienteId, UUID loteId) {
-    authorization.requirePermission(CoactivaPermisos.GENERAR_DOCUMENTOS);
-    UUID tenantId = AuthContext.require().tenantId();
-    CoactivaExpediente expediente = expedientes.require(tenantId, expedienteId);
-    DelegadoRef delegado = resolverDelegado(tenantId, expediente);
-    return descargar(tenantId, Optional.of(loteDelDelegado(tenantId, loteId, delegado)), delegado);
+    DelegadoRef delegado = delegado(tenantId, expedienteId, delegadoId);
+    return descargar(tenantId, lote(tenantId, loteId, delegado), delegado);
   }
 
   private Descarga descargar(UUID tenantId, Optional<CoactivaEmbargoLote> lote, DelegadoRef delegado) {
@@ -323,6 +340,37 @@ public class CoactivaEmbargoService {
         .resolverUnico(tenantId, expediente.getOficinaCodigo(), LocalDate.now(zona))
         .map(CoactivaEmbargoService::ref)
         .orElseThrow(CoactivaEmbargoService::delegadoNoConfigurado);
+  }
+
+  /** {@code delegadoId} explícito (vista por delegado) o el delegado del expediente. */
+  private DelegadoRef delegado(UUID tenantId, UUID expedienteId, UUID delegadoId) {
+    if (delegadoId != null) {
+      return delegados
+          .buscar(tenantId, delegadoId)
+          .map(CoactivaEmbargoService::ref)
+          .orElseThrow(() -> ApiException.notFound("Delegado no encontrado."));
+    }
+    if (expedienteId == null) {
+      throw ApiException.badRequest("Indica el expediente o el delegado.");
+    }
+    return resolverDelegado(tenantId, expedientes.require(tenantId, expedienteId));
+  }
+
+  /** Mismo criterio que {@code embargoFaltantes} del front: las 11 columnas con valor. */
+  static boolean completo(Datos d) {
+    return Stream.of(
+            d.juzgado(),
+            d.oficinaOrigenCredito(),
+            d.operacion(),
+            d.numeroJuicio(),
+            d.nombreCoactivado(),
+            d.nombreTitularOperacion(),
+            d.valorTransferido(),
+            d.fechaProceso(),
+            d.nombreDerSac(),
+            d.numeroOficioRespuesta(),
+            d.numeroDocumento())
+        .allMatch(v -> v != null && !v.toString().isBlank());
   }
 
   private static DelegadoRef ref(CoactivaDelegado delegado) {

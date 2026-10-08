@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.coactivas.embargo;
 
+import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.DelegadoResumen;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.ExpedienteResponse;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.GuardarRequest;
 import com.lexia.api.modules.expedientes.coactivas.embargo.CoactivaEmbargoDtos.LoteEntregado;
@@ -49,29 +50,45 @@ public class CoactivaEmbargoController {
     return service.guardar(id, request);
   }
 
+  @GetMapping("/embargo-excel/delegados")
+  public List<DelegadoResumen> delegados() {
+    return service.delegados();
+  }
+
+  // Lecturas por delegado: con `delegadoId` explícito o el delegado de `expedienteId`.
+
   @GetMapping("/embargo-excel/registros")
-  public RegistrosResponse registros(@RequestParam UUID expedienteId) {
-    return service.registros(expedienteId);
+  public RegistrosResponse registros(
+      @RequestParam(required = false) UUID expedienteId, @RequestParam(required = false) UUID delegadoId) {
+    return service.registros(expedienteId, delegadoId, null);
   }
 
   @GetMapping("/embargo-excel/descargar")
-  public ResponseEntity<byte[]> descargar(@RequestParam UUID expedienteId) {
-    return xlsx(service.descargar(expedienteId));
+  public ResponseEntity<byte[]> descargar(
+      @RequestParam(required = false) UUID expedienteId, @RequestParam(required = false) UUID delegadoId) {
+    return xlsx(service.descargar(expedienteId, delegadoId, null));
   }
 
   @GetMapping("/embargo-excel/lotes/entregados")
-  public List<LoteEntregado> entregados(@RequestParam UUID expedienteId) {
-    return service.entregados(expedienteId);
+  public List<LoteEntregado> entregados(
+      @RequestParam(required = false) UUID expedienteId, @RequestParam(required = false) UUID delegadoId) {
+    return service.entregados(expedienteId, delegadoId);
   }
 
   @GetMapping("/embargo-excel/lotes/{loteId}/registros")
-  public RegistrosResponse registrosLote(@PathVariable UUID loteId, @RequestParam UUID expedienteId) {
-    return service.registros(expedienteId, loteId);
+  public RegistrosResponse registrosLote(
+      @PathVariable UUID loteId,
+      @RequestParam(required = false) UUID expedienteId,
+      @RequestParam(required = false) UUID delegadoId) {
+    return service.registros(expedienteId, delegadoId, loteId);
   }
 
   @GetMapping("/embargo-excel/lotes/{loteId}/descargar")
-  public ResponseEntity<byte[]> descargarLote(@PathVariable UUID loteId, @RequestParam UUID expedienteId) {
-    return xlsx(service.descargar(expedienteId, loteId));
+  public ResponseEntity<byte[]> descargarLote(
+      @PathVariable UUID loteId,
+      @RequestParam(required = false) UUID expedienteId,
+      @RequestParam(required = false) UUID delegadoId) {
+    return xlsx(service.descargar(expedienteId, delegadoId, loteId));
   }
 
   private static ResponseEntity<byte[]> xlsx(Descarga descarga) {

@@ -74,4 +74,8 @@ public final class CoactivaEmbargoDtos {
       String delegadoNombre) {}
 
   public record RegistrosResponse(LoteResumen lote, Instant horaServidor, List<RegistroItem> registros) {}
+
+  /** @param lote lote EN_PREPARACION del delegado; {@code null} si no tiene lote activo */
+  public record DelegadoResumen(
+      UUID delegadoId, String delegadoNombre, LoteResumen lote, long completos, long pendientes) {}
 }
