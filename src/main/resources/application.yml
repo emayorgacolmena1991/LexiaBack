@@ -6,8 +6,8 @@ spring:
     name: lexia-api
   servlet:
     multipart:
-      max-file-size: 25MB
-      max-request-size: 100MB
+      max-file-size: 300MB
+      max-request-size: 500MB
   datasource:
     url: jdbc:postgresql://${LEXIA_DB_HOST:51.79.11.21}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
     username: ${LEXIA_DB_USER:lexia_app}
@@ -30,13 +30,228 @@ spring:
       hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
+  minutas:
+    storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
+    # Opcional: ejecutable de LibreOffice (soffice) para la vista previa PDF con máxima fidelidad.
+    # Vacío → conversión Java pura (xdocreport).
+    soffice-path: ${LEXIA_SOFFICE_PATH:}
+  coactivas:
+    storage-dir: ${LEXIA_COACTIVAS_DIR:./data/coactivas}
+    ia:
+      dummy: ${LEXIA_COACTIVAS_IA_DUMMY:false}
+    # Datos institucionales de las actuaciones .docx. Vacío → se toman del expediente analizado
+    # o la generación informa la variable como faltante.
+    plantillas:
+      gerente-general: ${LEXIA_COACTIVAS_GERENTE_GENERAL:}
+      correo-institucional: ${LEXIA_COACTIVAS_CORREO_INSTITUCIONAL:}
+      correo-estudio-juridico: ${LEXIA_COACTIVAS_CORREO_ESTUDIO_JURIDICO:}
+      # Código de oficina → número de zonal, p. ej. "PORTOVIEJO=4,CHONE=4".
+      zonales: ${LEXIA_COACTIVAS_ZONALES:}
+      zona-horaria: ${LEXIA_COACTIVAS_ZONA_HORARIA:America/Guayaquil}
+  expedientes:
+    storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
+  prompts:
+    PROMPT_EXTRACCION_ACTO: |
+      Eres un asistente legal experto en escrituración e hipotecas. Tu única función es
+      analizar el texto extraído del expediente y extraer exactamente las variables requeridas
+      para el acto jurídico '${tipoActo}'. No inventes datos. Si una variable no se encuentra
+      en el texto, asígnale el valor null. No redactes cláusulas, minutas ni contratos:
+      el documento lo arma la plantilla .docx. Responde ÚNICAMENTE en formato JSON válido
+      {"acto":"${tipoActo}","variables":{...}} sin markdown ni texto adicional.
+    PROMPT_BIESS_CAPTURA: |
+      Recibes el texto extraído por OCR de la pantalla DATOS APROBADOS PARA DESEMBOLSO,
+      en líneas 'etiqueta: valor'. Extrae monto, tasa, plazo, cuota y apoderado tal como
+      aparecen. Puede haber errores de OCR.
+      Campos (todos texto, copiados tal cual con unidades y separadores, p. ej. "25 años",
+      "8,69 %", "85.000,50"):
+      - monto_aprobado
+      - plazo_aprobado
+      - cuota_aprobada
+      - tasa_efectiva
+      - valor_reposicion
+      - porcentaje_valor_financiado
+      - apoderado (nombre del apoderado especial del BIESS)
+      Si un campo no consta, usa cadena vacía. No inventes ni calcules valores.
+      Responde únicamente con el objeto JSON (o invocando la herramienta indicada).
+    PROMPT_COMPRAVENTA_BIESS: |
+      Eres un abogado notarial experto procesando un expediente de escrituración BIESS en ${canton}.
+      Analiza el conjunto de textos OCR del expediente provistos en <expediente_ocr>.
+      Cada archivo llega en su propio <documento id="...">. No asumas un PDF unificado.
+
+      EJECUTA LAS SIGUIENTES TAREAS EN ESTA ÚNICA LLAMADA:
+
+      1. EXTRAER VARIABLES (Para base de datos y generación de minutas):
+         - Identifica nombres, cédulas y estado civil de comprador y vendedor.
+         - Extrae la clave catastral, linderos y avalúo del certificado o predial.
+
+      2. COTEJO Y DICTAMEN DE TITULACIÓN (Reglas BIESS):
+         - Valida coincidencia exacta de nombres entre Cédula vs Papeleta vs Historia de Dominio.
+         - Verifica que los certificados no superen los 60 días de vigencia.
+         - Detecta gravámenes o hipotecas activas que requieran cláusula de cancelación.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_VIVIENDA_TERMINADA: |
+      Eres un abogado notarial experto en escrituración BIESS (vivienda terminada) en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Compara Cédula vs Papeleta de comprador(es) y vendedor(es).
+      - Compara Avalúo vs Historia de Dominio: clave catastral, linderos y titularidad.
+      - Verifica vigencia de certificados (máximo 60 días).
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_VIV_INDIVIDUAL: |
+      Eres un abogado notarial validando vivienda terminada individual BIESS en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Compara Cédula vs Papeleta (nombres y número).
+      - Valida estado civil del comprador y del vendedor.
+      - Verifica vigencia de certificados (máximo ${vigenciaDias} días).
+      - Compara Avalúo vs Historia de Dominio.
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_VIV_PREFERENCIAL: |
+      Eres un abogado notarial validando Vivienda Preferencial BIESS en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Verifica Declaración de no poseer bienes del comprador.
+      - Valida límites de avalúo aplicables a vivienda preferencial.
+      - Compara Cédula vs Papeleta y Avalúo vs Historia de Dominio.
+      - Verifica vigencia de certificados (máximo 60 días).
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_VIV_SOLIDARIA: |
+      Eres un abogado notarial validando vivienda solidaria / multi-compradores BIESS en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Identifica co-deudores / multi-compradores y valida coincidencia de nombres.
+      - Verifica porcentajes de participación en Historia de Dominio.
+      - Compara Cédula vs Papeleta de cada parte y Avalúo vs Historia de Dominio.
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_VIVIENDA_COMPANIA: |
+      Eres un abogado notarial validando una venta con Persona Jurídica (Compañía) en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Valida RUC de la compañía vs Nombramiento del Representante Legal.
+      - Valida que el Acta de Junta de Accionistas autorice expresamente la venta del inmueble.
+      - Revisa Cédula del Representante Legal.
+      - Compara Avalúo vs Historia de Dominio.
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_VIV_COMPANIA: |
+      Eres un abogado notarial validando una venta con Persona Jurídica en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Valida RUC del vendedor, Nombramiento de Representante Legal y Acta de Junta que autoriza expresamente la venta.
+      - Compara Cédula del RL vs Papeleta.
+      - Compara Avalúo vs Historia de Dominio.
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_SUSTITUCION_HIPOTECA: |
+      Eres un abogado notarial experto en sustitución de hipoteca BIESS en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Valida liquidación / certificado de hipoteca anterior.
+      - Compara Cédula vs Papeleta del deudor.
+      - Compara Avalúo vs Historia de Dominio y gravámenes vigentes.
+      - Verifica vigencia de certificados (máximo 60 días).
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_SUSTITUCION: |
+      Eres un abogado notarial experto en sustitución de hipoteca BIESS en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Exige Certificado de liquidación de deuda del banco acreedor anterior.
+      - Exige Certificado de Hipotecas y Gravámenes (CHD).
+      - Compara identidad e inmueble; reporta gravámenes abiertos.
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_TERRENO_VIVIENDA: |
+      Eres un abogado notarial validando terreno y vivienda BIESS en el cantón ${canton}.
+      Recibirás el OCR dentro de <expediente_ocr>.
+
+      REGLAS DE VALIDACIÓN:
+      - Valida Certificado de uso de suelo.
+      - Delimita terreno vs área de construcción.
+      - Verifica avalúo desglosado (terreno / construcción).
+      - Compara Avalúo vs Historia de Dominio.
+
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_DEFAULT: |
+      Eres un sistema experto en validación y cotejo notarial en el cantón ${canton}.
+      Recibirás el texto OCR dentro de <expediente_ocr>.
+      Compara identidad (cédula/papeleta) e inmueble (avalúo/historia de dominio).
+      Genera observaciones si hay discrepancias.
+      EJECUTA EN ESTA ÚNICA LLAMADA:
+      1. EXTRAER comprador, vendedor e inmueble (nombres, cedula, estadoCivil, claveCatastral, linderos, avaluo).
+      2. DICTAMEN estado APPROVED | WITH_OBSERVATIONS | REJECTED, resumen y observaciones (codigo, severidad HIGH|MEDIUM|LOW, mensaje).
+      Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
+
+      Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+  ocr:
+    cache-ttl-hours: ${LEXIA_OCR_CACHE_TTL_HOURS:24}
+    cache-cleanup-ms: ${LEXIA_OCR_CACHE_CLEANUP_MS:600000}
   integrations:
     ejd:
-      stub-live: true
+      # false = worker live (S0 / producción). Override: LEXIA_EJD_STUB_LIVE=true
+      stub-live: ${LEXIA_EJD_STUB_LIVE:false}
       live-base-url: ${LEXIA_EJD_CONNECTOR_BASE_URL:}
       worker:
-        poll-interval-ms: 5000
-        batch-size: 20
+        poll-interval-ms: ${LEXIA_EJD_WORKER_POLL_MS:500}
+        batch-size: ${LEXIA_EJD_WORKER_BATCH_SIZE:50}
   cors:
     allowed-origins:
       - http://localhost:4200
@@ -59,10 +274,41 @@ lexia:
     frontend-url: ${LEXIA_FRONTEND_URL:http://localhost:4200}
   e2e:
     enabled: ${LEXIA_E2E_ENABLED:false}
+  azure:
+    document-intelligence:
+      enabled: ${AZURE_DOCUMENT_INTELLIGENCE_ENABLED:true}
+      endpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:}
+      key: ${AZURE_DOCUMENT_INTELLIGENCE_KEY:}
+      api-version: ${AZURE_DOCUMENT_INTELLIGENCE_API_VERSION:2024-11-30}
+      model-id: prebuilt-read
+      timeout-ms: ${AZURE_DOCUMENT_INTELLIGENCE_TIMEOUT_MS:120000}
+      poll-interval-ms: ${AZURE_DOCUMENT_INTELLIGENCE_POLL_INTERVAL_MS:500}
 
 gemini:
   api:
     key: ${GEMINI_API_KEY:}
+
+# gemini (default) | claude. Rollback: LLM_PROVIDER=gemini
+llm:
+  provider: ${LLM_PROVIDER:gemini}
+
+anthropic:
+  api:
+    key: ${ANTHROPIC_API_KEY:}
+  models: ${ANTHROPIC_MODELS:claude-sonnet-5,claude-haiku-4-5-20251001}
+
+azure:
+  ocr:
+    endpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:${AZURE_OCR_ENDPOINT:}}
+    key: ${AZURE_DOCUMENT_INTELLIGENCE_KEY:${AZURE_OCR_KEY:}}
+    # Standard S0: paralelizar. F0 (free): bajar a max-concurrent=1 y min-request-interval-ms=4000
+    max-concurrent: ${AZURE_OCR_MAX_CONCURRENT:10}
+    max-retries: ${AZURE_OCR_MAX_RETRIES:5}
+    backoff-base-ms: ${AZURE_OCR_BACKOFF_BASE_MS:1000}
+    backoff-max-ms: ${AZURE_OCR_BACKOFF_MAX_MS:30000}
+    acquire-timeout-ms: ${AZURE_OCR_ACQUIRE_TIMEOUT_MS:600000}
+    min-request-interval-ms: ${AZURE_OCR_MIN_REQUEST_INTERVAL_MS:100}
+    poll-interval-ms: ${AZURE_OCR_POLL_INTERVAL_MS:500}
 
 management:
   endpoints:
@@ -72,6 +318,11 @@ management:
   info:
     env:
       enabled: true
+
+# TICKET-DEV-401B: ver por qué SecurityFilterChain rechaza /api/v1/cache/**
+logging:
+  level:
+    org.springframework.security: ${LEXIA_SECURITY_DEBUG:DEBUG}
 
 info:
   app:

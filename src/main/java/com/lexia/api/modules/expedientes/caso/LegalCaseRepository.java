@@ -1,0 +1,24 @@
+package com.lexia.api.modules.expedientes.caso;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+public interface LegalCaseRepository
+    extends JpaRepository<LegalCase, UUID>, JpaSpecificationExecutor<LegalCase> {
+
+  List<LegalCase> findByTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(UUID tenantId);
+
+  long countByTenantIdAndDeletedAtIsNull(UUID tenantId);
+
+  Optional<LegalCase> findByIdAndTenantIdAndDeletedAtIsNull(UUID id, UUID tenantId);
+
+  Optional<LegalCase> findByTenantIdAndCodeIgnoreCaseAndDeletedAtIsNull(UUID tenantId, String code);
+
+  boolean existsByTenantIdAndCodeAndDeletedAtIsNull(UUID tenantId, String code);
+
+  long countByTenantIdAndCaseTypeAndDeletedAtIsNullAndProcessConfigVersionIsNot(
+      UUID tenantId, String caseType, int configVersion);
+}

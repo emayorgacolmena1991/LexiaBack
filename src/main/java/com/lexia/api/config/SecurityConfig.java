@@ -18,6 +18,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -33,6 +34,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @EnableWebSecurity
 @EnableConfigurationProperties(AuthProperties.class)
 public class SecurityConfig {
+
+  static {
+    SecurityContextHolder.setStrategyName(SecurityContextHolder.MODE_INHERITABLETHREADLOCAL);
+  }
 
   @Bean
   @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -91,22 +96,77 @@ public class SecurityConfig {
                     .csrfTokenRequestHandler(requestHandler)
                     .ignoringRequestMatchers(
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/login"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/logout"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/e2e/session"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/mfa/verify"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/forgot"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset"),
-                        // Multipart: CsrfFilter no lee bien FormData; sesión va en cookie SameSite=Lax.
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos")))
+                        // Flujo carga/tipificación + OCR + escrituración abogado: cookie + Bearer; CSRF rompe mutaciones.
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/promover-borrador"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/borrador"),
+                        paths.matcher(
+                            HttpMethod.PUT,
+                            "/api/v1/expedientes/{id}/escrituracion/producto"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/estudio-titulo"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/minutas"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/minutas/{tipoMinuta}/generar-borrador"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/captura-biess"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/extract-biess-screenshot"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/stages/advance"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/analizar-ia"),
+                        paths.matcher(
+                            HttpMethod.POST, "/api/v1/expedientes/{id}/procesar-completo"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{idExpediente}/iniciar-procesamiento"),
+                        paths.matcher(
+                            HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/procesar-ia"),
+                        paths.matcher(
+                            HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/validar-ia"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{idExpediente}/documentos/upload"),
+                        paths.matcher(
+                            HttpMethod.PATCH,
+                            "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}/tipo"),
+                        paths.matcher(
+                            HttpMethod.DELETE,
+                            "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ia/calidad-documento"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-batch"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-single"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/documents/reupload"),
+                        paths.matcher(
+                            HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text"),
+                        paths.matcher("/api/v1/escrituracion/ingesta-masiva/**"),
+                        // Coactivas: la SPA en :4200 manda la cookie de sesión; el CSRF se desincroniza en PATCH.
+                        paths.matcher("/api/v1/coactivas/**")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(
+                        paths.matcher("/error"),
                         paths.matcher("/api/v1/health"),
                         paths.matcher("/actuator/health"),
                         paths.matcher("/actuator/info"),
                         paths.matcher("/api/v1/auth/login"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/logout"),
                         paths.matcher("/api/v1/auth/e2e/session"),
                         paths.matcher("/api/v1/auth/mfa/verify"),
                         paths.matcher("/api/v1/auth/refresh"),
@@ -115,8 +175,23 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/password/forgot"),
                         paths.matcher("/api/v1/auth/password/reset"))
                     .permitAll()
-                    .requestMatchers(paths.matcher("/api/v1/expedientes/**"))
-                    .authenticated()
+                    // TICKET-DEV-401B: /api/v1/cache/** (E03 consolidate + E04 cotejo) requiere sesión.
+                    .requestMatchers(
+                        paths.matcher("/api/v1/actos-notariales"),
+                        paths.matcher("/api/v1/actos-notariales/**"),
+                        paths.matcher("/api/v1/productos-biess"),
+                        paths.matcher("/api/v1/productos-biess/**"),
+                        paths.matcher("/api/v1/expedientes"),
+                        paths.matcher("/api/v1/expedientes/**"),
+                        paths.matcher("/api/v1/minutas/**"),
+                        paths.matcher("/api/v1/escrituracion"),
+                        paths.matcher("/api/v1/escrituracion/**"),
+                        paths.matcher("/api/v1/ia/**"),
+                        paths.matcher("/api/v1/ocr/**"),
+                        paths.matcher("/api/v1/documents/**"),
+                        paths.matcher("/api/v1/cache/**"),
+                        paths.matcher("/api/v1/cache/cotejo/**"))
+                    .hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "USER")
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(

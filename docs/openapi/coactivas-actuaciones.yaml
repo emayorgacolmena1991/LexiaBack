@@ -1,0 +1,101 @@
+openapi: 3.0.3
+info:
+  title: LEXIA coactivas — actuaciones
+  version: 1.0.0
+paths:
+  /api/v1/coactivas/expedientes/{id}/etapa:
+    post:
+      summary: Confirma la etapa procesal
+      responses:
+        '200':
+          description: Expediente actualizado
+        '409':
+          description: Transición inválida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransicionInvalida'
+  /api/v1/coactivas/expedientes/{id}/timeline:
+    get:
+      summary: Historial. archivoId es null si el evento no tiene documento
+      responses:
+        '200':
+          description: Eventos
+  /api/v1/coactivas/expedientes/{id}/plantillas:
+    get:
+      parameters:
+        - in: query
+          name: etapa
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Plantillas de la etapa
+  /api/v1/coactivas/expedientes/{id}/actuaciones:
+    post:
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, maxLength: 120 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plantillaId]
+              properties:
+                plantillaId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Actuación creada en estado GENERADO
+        '200':
+          description: Reintento idempotente
+  /api/v1/coactivas/actuaciones/{id}/firma:
+    post:
+      responses:
+        '422':
+          description: FIRMA_PROVEEDOR_NO_CONFIGURADO. No hay proveedor; la actuación no cambia de estado
+  /api/v1/coactivas/expedientes/{id}/medidas-cautelares:
+    get:
+      responses:
+        '200': { description: Medidas del expediente }
+    post:
+      responses:
+        '201': { description: Medida creada }
+        '409': { description: MEDIDA_ETAPA si la etapa verificada no es EMBARGO }
+  /api/v1/coactivas/expedientes/{id}/honorarios:
+    get:
+      responses:
+        '200':
+          description: Lectura. disponible es false mientras no exista regla de cálculo
+  /api/v1/coactivas/expedientes/{id}/solicitudes-carga:
+    post:
+      responses:
+        '201': { description: Solicitud registrada }
+  /api/v1/coactivas/expedientes/{id}/traslado:
+    post:
+      responses:
+        '201': { description: Traslado registrado }
+        '403': { description: Sin permiso de confirmar diagnóstico }
+  /api/v1/coactivas/expedientes/{id}/datadoc/sync:
+    post:
+      responses:
+        '502': { description: DATADOC_NO_CONFIGURADO. No hay integración externa }
+components:
+  schemas:
+    TransicionInvalida:
+      type: object
+      required: [code, message, allowedNext]
+      properties:
+        code: { type: string, example: COA_TRANSICION_INVALIDA }
+        message: { type: string }
+        allowedNext:
+          type: array
+          items: { type: string }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }

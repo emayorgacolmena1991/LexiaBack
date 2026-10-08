@@ -1,0 +1,149 @@
+package com.lexia.api.modules.expedientes.escrituracion;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import java.time.Instant;
+import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+@Entity
+@Table(schema = "app", name = "minuta_draft")
+public class MinutaDraft {
+
+  @Id private UUID id;
+
+  @Column(name = "tenant_id", nullable = false)
+  private UUID tenantId;
+
+  @Column(name = "writing_file_id", nullable = false)
+  private UUID writingFileId;
+
+  @Column(name = "document_version_id")
+  private UUID documentVersionId;
+
+  @Column(nullable = false, length = 32)
+  private String status = "DRAFT";
+
+  @Column(name = "template_kind", length = 32)
+  private String templateKind;
+
+  @Column(name = "product_code", length = 64)
+  private String productCode;
+
+  @Column(name = "storage_path", length = 1024)
+  private String storagePath;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  private String payload;
+
+  /** TICKET-INT-102: overrides manuales (tag canónico → valor); mandan sobre LLM y BIESS. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  private String overrides;
+
+  /** Capa IA + expediente, sin BIESS ni overrides (origen de cada variable y "Restaurar"). */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "datos_extraidos", columnDefinition = "jsonb")
+  private String datosExtraidos;
+
+  @Column(name = "edited_manually", nullable = false)
+  private boolean editedManually;
+
+  @Column(name = "created_at", nullable = false)
+  private Instant createdAt;
+
+  @Column(name = "updated_at", nullable = false)
+  private Instant updatedAt;
+
+  public static MinutaDraft create(
+      UUID tenantId, UUID writingFileId, String productCode, String templateKind) {
+    MinutaDraft draft = new MinutaDraft();
+    draft.id = UUID.randomUUID();
+    draft.tenantId = tenantId;
+    draft.writingFileId = writingFileId;
+    draft.productCode = productCode;
+    draft.templateKind = templateKind;
+    draft.status = "DRAFT";
+    Instant now = Instant.now();
+    draft.createdAt = now;
+    draft.updatedAt = now;
+    return draft;
+  }
+
+  public UUID getId() {
+    return id;
+  }
+
+  public UUID getWritingFileId() {
+    return writingFileId;
+  }
+
+  public String getStatus() {
+    return status;
+  }
+
+  public String getTemplateKind() {
+    return templateKind;
+  }
+
+  public String getProductCode() {
+    return productCode;
+  }
+
+  public String getStoragePath() {
+    return storagePath;
+  }
+
+  public String getPayload() {
+    return payload;
+  }
+
+  public void setPayload(String payload) {
+    this.payload = payload;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getOverrides() {
+    return overrides;
+  }
+
+  public void setOverrides(String overrides) {
+    this.overrides = overrides;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getDatosExtraidos() {
+    return datosExtraidos;
+  }
+
+  public void setDatosExtraidos(String datosExtraidos) {
+    this.datosExtraidos = datosExtraidos;
+    this.updatedAt = Instant.now();
+  }
+
+  public UUID getTenantId() {
+    return tenantId;
+  }
+
+  public boolean isEditedManually() {
+    return editedManually;
+  }
+
+  public void markEditedManually() {
+    this.editedManually = true;
+    this.updatedAt = Instant.now();
+  }
+
+  /** El DOCX ya existe en almacenamiento: el editor y la descarga pueden consumirlo. */
+  public void markGenerated(String storagePath) {
+    this.storagePath = storagePath;
+    this.status = STATUS_DRAFT_GENERATED;
+    this.updatedAt = Instant.now();
+  }
+
+  public static final String STATUS_DRAFT_GENERATED = "DRAFT_GENERATED";
+}

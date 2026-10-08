@@ -19,4 +19,9 @@ public interface CatalogItemRepository extends JpaRepository<CatalogItem, UUID> 
 
   boolean existsByCatalogIdAndTenantIdAndCodeIgnoreCaseAndIdNot(
       UUID catalogId, UUID tenantId, String code, UUID id);
+
+  Optional<CatalogItem> findByCatalogIdAndTenantIdAndCodeIgnoreCaseAndActiveTrue(
+      UUID catalogId, UUID tenantId, String code);
+
+  List<CatalogItem> findByTenantIdAndIdIn(UUID tenantId, List<UUID> ids);
 }

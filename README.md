@@ -73,7 +73,9 @@ Cookies `HttpOnly` + `SameSite=Lax` (`LEXIA_SID`, `LEXIA_RT`). CSRF en cookie `X
 | `POST /api/v1/auth/mfa/confirm` | Activa 2FA y entrega códigos de recuperación |
 | `POST /api/v1/auth/mfa/disable` | Apaga 2FA (pide un código) |
 
-Usuario demo: `laura.gomez@lexia.demo`. Contraseña: `LEXIA_DEMO_PASSWORD` (por defecto `Lexia-Demo-2026!`). En producción define `LEXIA_CRYPTO_KEY` y `LEXIA_COOKIE_SECURE=true`.
+Usuario demo: `laura.gomez@lexia.demo` (rol `ABOGADO_SENIOR`). Contraseña: `LEXIA_DEMO_PASSWORD` (por defecto `Lexia-Demo-2026!`). En producción define `LEXIA_CRYPTO_KEY` y `LEXIA_COOKIE_SECURE=true`.
+
+Para ver un expediente coactivo: con este API en `8081` y el frontend en `4200`, inicia sesión en `/login` y abre `/coactivas`. El detalle está en `/coactivas/expedientes/{id}`. El frontend no omite el guard de sesión.
 
 ## Pruebas
 
