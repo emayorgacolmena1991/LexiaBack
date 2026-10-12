@@ -37,6 +37,7 @@ public final class CoactivaExpedienteDtos {
       String etapaReportadaTexto,
       String etapaVerificada,
       String etapaLabel,
+      String etapaSugeridaIa,
       String semaforo,
       String semaforoMotivo,
       String siguienteAccion,
@@ -52,7 +53,8 @@ public final class CoactivaExpedienteDtos {
       long total,
       Map<String, Long> porSemaforo,
       Map<String, Long> porEtapa,
-      Map<String, Long> porEstado) {}
+      Map<String, Long> porEstado,
+      long sugerenciasIa) {}
 
   public record ParticipanteItem(
       UUID id,

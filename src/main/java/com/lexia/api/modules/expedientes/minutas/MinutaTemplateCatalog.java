@@ -8,10 +8,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * Catálogo de plantillas .docx por producto BIESS. Generables hoy: {@code SUSTITUCION_HIPOTECA},
- * {@code VIV_TERMINADA_PREF}, {@code TERRENO_Y_VIVIENDA} y {@code VIV_HIPOTECADA_BIESS}. Las
- * plantillas propias de {@code VIV_TERMINADA_IND} y {@code VIV_TERMINADA_SOLID} están registradas
- * pero sin conectar hasta habilitarlas.
+ * Catálogo de plantillas .docx por producto BIESS. {@code VIV_TERMINADA_IND} y {@code
+ * VIV_TERMINADA_SOLID} comparten el mismo par de archivos. {@code VIV_TERMINADA_COMPANIA} no tiene
+ * plantilla.
  */
 @Component
 public class MinutaTemplateCatalog {
@@ -129,14 +128,7 @@ public class MinutaTemplateCatalog {
               "CONTRATO_MUTUO",
               TEMPLATE_HIPOTECADA_CONTRATO_MUTUO,
               "contrato_mutuo_vivienda_hipotecada.docx",
-              CRITICOS_CONTRATO));
-
-  /**
-   * Plantillas propias del producto, registradas pero aún no generables: no se resuelven con {@link
-   * #find} ni {@link #require}.
-   */
-  private static final List<MinutaTemplateDescriptor> SIN_CONECTAR =
-      List.of(
+              CRITICOS_CONTRATO),
           new MinutaTemplateDescriptor(
               PRODUCT_VIV_TERMINADA_IND,
               "MINUTA_COMPRAVENTA",
@@ -169,25 +161,16 @@ public class MinutaTemplateCatalog {
   public MinutaTemplateDescriptor require(String productCode, String templateKind) {
     return find(productCode, templateKind)
         .orElseThrow(
-            () -> {
-              if (buscar(SIN_CONECTAR, productCode, templateKind).isPresent()) {
-                return ApiException.badRequest(
-                    "La plantilla "
-                        + templateKind
-                        + " de "
+            () ->
+                ApiException.badRequest(
+                    "Generación DOCX no implementada aún para producto="
                         + productCode
-                        + " está registrada pero aún no es generable: tiene campos sin"
-                        + " equivalencia en el expediente.");
-              }
-              return ApiException.badRequest(
-                  "Generación DOCX no implementada aún para producto="
-                      + productCode
-                      + " plantilla="
-                      + templateKind
-                      + ". Disponible: SUSTITUCION_HIPOTECA (MINUTA_HIPOTECA, CONTRATO_MUTUO),"
-                      + " VIV_TERMINADA_PREF, TERRENO_Y_VIVIENDA y VIV_HIPOTECADA_BIESS"
-                      + " (MINUTA_COMPRAVENTA, CONTRATO_MUTUO).");
-            });
+                        + " plantilla="
+                        + templateKind
+                        + ". Disponible: SUSTITUCION_HIPOTECA (MINUTA_HIPOTECA, CONTRATO_MUTUO),"
+                        + " VIV_TERMINADA_PREF, VIV_TERMINADA_IND, VIV_TERMINADA_SOLID,"
+                        + " TERRENO_Y_VIVIENDA y VIV_HIPOTECADA_BIESS"
+                        + " (MINUTA_COMPRAVENTA, CONTRATO_MUTUO)."));
   }
 
   public boolean supports(String productCode, String templateKind) {
@@ -196,11 +179,6 @@ public class MinutaTemplateCatalog {
 
   public List<MinutaTemplateDescriptor> all() {
     return TEMPLATES;
-  }
-
-  /** Plantillas registradas que todavía no se pueden generar. */
-  public List<MinutaTemplateDescriptor> sinConectar() {
-    return SIN_CONECTAR;
   }
 
   private static Optional<MinutaTemplateDescriptor> buscar(

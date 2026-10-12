@@ -39,6 +39,10 @@ public class MinutaViviendaData {
   @JsonProperty("descripcion_inmuebles_antecedentes")
   private String descripcionInmueblesAntecedentes = "";
 
+  /** Tradición / historia de dominio que pide la minuta de vivienda terminada. */
+  @JsonProperty("detalle_antecedentes_dominio")
+  private String detalleAntecedentesDominio = "";
+
   @JsonProperty("descripcion_inmueble_hipoteca")
   private String descripcionInmuebleHipoteca = "";
 
@@ -77,6 +81,15 @@ public class MinutaViviendaData {
 
   @JsonProperty("area_comun")
   private String areaComun = "";
+
+  @JsonProperty("area_comun_2")
+  private String areaComun2 = "";
+
+  @JsonProperty("area_total_desglose")
+  private String areaTotalDesglose = "";
+
+  @JsonProperty("subtotal_area")
+  private String subtotalArea = "";
 
   @JsonProperty("alicuota")
   private String alicuota = "";
@@ -146,6 +159,10 @@ public class MinutaViviendaData {
 
   @JsonProperty("profesion_vendedor")
   private String profesionVendedor = "";
+
+  /** Profesión del segundo vendedor (cónyuge / compareciente 2). */
+  @JsonProperty("profesion_vendedor_2")
+  private String profesionVendedor2 = "";
 
   @JsonProperty("direccion_vendedor")
   private String direccionVendedor = "";
@@ -300,6 +317,7 @@ public class MinutaViviendaData {
     ETIQUETAS.put("canton_domicilio", "Cantón de domicilio del deudor");
     ETIQUETAS.put("nombre_afiliado", "Nombre del afiliado BIESS");
     ETIQUETAS.put("descripcion_inmuebles_antecedentes", "Descripción del inmueble (antecedentes)");
+    ETIQUETAS.put("detalle_antecedentes_dominio", "Detalle de antecedentes de dominio");
     ETIQUETAS.put("descripcion_inmueble_hipoteca", "Descripción del inmueble hipotecado");
     ETIQUETAS.put("parroquia_inmueble", "Parroquia del inmueble");
     ETIQUETAS.put("canton_inmueble", "Cantón del inmueble");
@@ -313,6 +331,9 @@ public class MinutaViviendaData {
     ETIQUETAS.put("area_construccion", "Área de construcción (m2)");
     ETIQUETAS.put("area_util", "Área útil (m2)");
     ETIQUETAS.put("area_comun", "Área común (m2)");
+    ETIQUETAS.put("area_comun_2", "Área común 2 (m2)");
+    ETIQUETAS.put("area_total_desglose", "Desglose del área total");
+    ETIQUETAS.put("subtotal_area", "Subtotal de área");
     ETIQUETAS.put("alicuota", "Alícuota");
     ETIQUETAS.put("estado_civil", "Estado civil del comprador");
     ETIQUETAS.put("monto_prestamo", "Monto del préstamo");
@@ -334,6 +355,7 @@ public class MinutaViviendaData {
     ETIQUETAS.put("nombre_conyuge_vendedor", "Nombre del cónyuge del vendedor");
     ETIQUETAS.put("cedula_conyuge_vendedor", "Cédula del cónyuge del vendedor");
     ETIQUETAS.put("profesion_vendedor", "Profesión del vendedor");
+    ETIQUETAS.put("profesion_vendedor_2", "Profesión del segundo vendedor");
     ETIQUETAS.put("direccion_vendedor", "Dirección del vendedor");
     ETIQUETAS.put("telefono_vendedor", "Teléfono del vendedor");
     ETIQUETAS.put("correo_vendedor", "Correo del vendedor");
@@ -438,6 +460,14 @@ public class MinutaViviendaData {
     this.descripcionInmueblesAntecedentes = nullToEmpty(descripcionInmueblesAntecedentes);
   }
 
+  public String getDetalleAntecedentesDominio() {
+    return detalleAntecedentesDominio;
+  }
+
+  public void setDetalleAntecedentesDominio(String detalleAntecedentesDominio) {
+    this.detalleAntecedentesDominio = nullToEmpty(detalleAntecedentesDominio);
+  }
+
   public String getDescripcionInmuebleHipoteca() {
     return descripcionInmuebleHipoteca;
   }
@@ -540,6 +570,30 @@ public class MinutaViviendaData {
 
   public void setAreaComun(String areaComun) {
     this.areaComun = nullToEmpty(areaComun);
+  }
+
+  public String getAreaComun2() {
+    return areaComun2;
+  }
+
+  public void setAreaComun2(String areaComun2) {
+    this.areaComun2 = nullToEmpty(areaComun2);
+  }
+
+  public String getAreaTotalDesglose() {
+    return areaTotalDesglose;
+  }
+
+  public void setAreaTotalDesglose(String areaTotalDesglose) {
+    this.areaTotalDesglose = nullToEmpty(areaTotalDesglose);
+  }
+
+  public String getSubtotalArea() {
+    return subtotalArea;
+  }
+
+  public void setSubtotalArea(String subtotalArea) {
+    this.subtotalArea = nullToEmpty(subtotalArea);
   }
 
   public String getAlicuota() {
@@ -710,6 +764,14 @@ public class MinutaViviendaData {
     this.profesionVendedor = nullToEmpty(profesionVendedor);
   }
 
+  public String getProfesionVendedor2() {
+    return profesionVendedor2;
+  }
+
+  public void setProfesionVendedor2(String profesionVendedor2) {
+    this.profesionVendedor2 = nullToEmpty(profesionVendedor2);
+  }
+
   public String getDireccionVendedor() {
     return direccionVendedor;
   }
@@ -851,6 +913,7 @@ public class MinutaViviendaData {
     map.put("canton_domicilio", blankToNodata(cantonDomicilio));
     map.put("nombre_afiliado", blankToNodata(nombreAfiliado));
     map.put("descripcion_inmuebles_antecedentes", blankToNodata(descripcionInmueblesAntecedentes));
+    map.put("detalle_antecedentes_dominio", blankToNodata(detalleAntecedentesDominio));
     map.put("descripcion_inmueble_hipoteca", blankToNodata(descripcionInmuebleHipoteca));
     map.put("parroquia_inmueble", blankToNodata(parroquiaInmueble));
     map.put("canton_inmueble", blankToNodata(cantonInmueble));
@@ -864,6 +927,9 @@ public class MinutaViviendaData {
     map.put("area_construccion", blankToNodata(areaConstruccion));
     map.put("area_util", blankToNodata(areaUtil));
     map.put("area_comun", blankToNodata(areaComun));
+    map.put("area_comun_2", blankToNodata(areaComun2));
+    map.put("area_total_desglose", blankToNodata(areaTotalDesglose));
+    map.put("subtotal_area", blankToNodata(subtotalArea));
     map.put("alicuota", blankToNodata(alicuota));
     map.put("estado_civil", blankToNodata(estadoCivil));
     map.put("monto_prestamo", blankToNodata(cifra(montoPrestamo)));
@@ -885,6 +951,7 @@ public class MinutaViviendaData {
     map.put("nombre_conyuge_vendedor", blankToNodata(nombreConyugeVendedor));
     map.put("cedula_conyuge_vendedor", blankToNodata(cedulaConyugeVendedor));
     map.put("profesion_vendedor", blankToNodata(profesionVendedor));
+    map.put("profesion_vendedor_2", blankToNodata(profesionVendedor2));
     map.put("direccion_vendedor", blankToNodata(direccionVendedor));
     map.put("telefono_vendedor", blankToNodata(telefonoVendedor));
     map.put("correo_vendedor", blankToNodata(correoVendedor));

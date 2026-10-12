@@ -96,9 +96,11 @@ public class CoactivaExpedienteController {
       @RequestParam(required = false) String semaforo,
       @RequestParam(required = false) String estadoOperativo,
       @RequestParam(required = false) String q,
+      @RequestParam(required = false) Boolean sugerenciaIa,
       @RequestParam(defaultValue = "0") int page,
       @RequestParam(defaultValue = "25") int size) {
-    return bandeja.listar(new Filtro(oficina, delegadoId, etapa, semaforo, estadoOperativo, q), page, size);
+    return bandeja.listar(
+        new Filtro(oficina, delegadoId, etapa, semaforo, estadoOperativo, q, sugerenciaIa), page, size);
   }
 
   @GetMapping("/expedientes/selector")
