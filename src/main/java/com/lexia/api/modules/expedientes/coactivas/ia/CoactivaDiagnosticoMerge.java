@@ -42,18 +42,46 @@ public final class CoactivaDiagnosticoMerge {
       String tipoPieza,
       CoactivaDiagnostico nuevo) {
     List<Documento> docs = nuevo == null ? List.of() : nuevo.documentos();
-    return fusionar(
-        previoJson,
-        previoArchivoId,
-        previoFecha,
-        archivoId,
-        nombreArchivo,
-        tipoPieza,
-        docs,
-        nuevo == null ? List.of() : nuevo.alertas(),
-        nuevo == null ? Map.of() : nuevo.datosExtraidos(),
-        nuevo == null ? null : nuevo.etapaNormalizada() != null ? nuevo.etapaNormalizada() : nuevo.etapaDetectada(),
-        nuevo == null ? null : nuevo.siguienteAccion());
+    Fusion fusion =
+        fusionar(
+            previoJson,
+            previoArchivoId,
+            previoFecha,
+            archivoId,
+            nombreArchivo,
+            tipoPieza,
+            docs,
+            nuevo == null ? List.of() : nuevo.alertas(),
+            nuevo == null ? Map.of() : nuevo.datosExtraidos(),
+            nuevo == null ? null : nuevo.etapaNormalizada() != null ? nuevo.etapaNormalizada() : nuevo.etapaDetectada(),
+            nuevo == null ? null : nuevo.siguienteAccion());
+    return adjuntarTentativa(fusion, nuevo == null ? null : nuevo.json());
+  }
+
+  /** Conserva la tentativa (evidencia, suficiencia, acciones) que el merge de hitos no reconstruye. */
+  private static Fusion adjuntarTentativa(Fusion fusion, String diagnosticoJson) {
+    JsonNode extra = leer(diagnosticoJson);
+    JsonNode root = leer(fusion.json());
+    if (extra == null || root == null || !root.isObject()) {
+      return fusion;
+    }
+    ObjectNode obj = (ObjectNode) root;
+    boolean cambio = false;
+    for (String key : List.of("etapa_sugerida", "suficiencia_documental", "acciones_sugeridas")) {
+      JsonNode n = extra.get(key);
+      if (n != null && !n.isNull() && !n.isMissingNode()) {
+        obj.set(key, n);
+        cambio = true;
+      }
+    }
+    if (!cambio) {
+      return fusion;
+    }
+    try {
+      return new Fusion(JSON.writeValueAsString(obj), fusion.porcentaje(), fusion.etapa());
+    } catch (Exception e) {
+      return fusion;
+    }
   }
 
   public static Fusion pieza(

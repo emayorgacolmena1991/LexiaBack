@@ -445,10 +445,42 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     datosProps.putObject("deudor").put("type", "string");
     datosProps.putObject("monto_mora").put("type", "number");
     props.putObject("siguiente_accion_sugerida").put("type", "string");
+    ObjectNode evidencia = objectMapper.createObjectNode();
+    evidencia.put("type", "object");
+    ObjectNode evProps = evidencia.putObject("properties");
+    evProps.putObject("documento_origen").put("type", "string");
+    evProps.putObject("foja_pagina").put("type", "integer");
+    evProps.putObject("fecha_documento").put("type", "string");
+    evProps.putObject("extracto_texto").put("type", "string");
+    ObjectNode etapa = props.putObject("etapa_sugerida");
+    etapa.put("type", "object");
+    ObjectNode etapaProps = etapa.putObject("properties");
+    etapaProps.putObject("codigo").put("type", "string");
+    etapaProps.putObject("nombre").put("type", "string");
+    etapaProps.putObject("justificacion_juridica").put("type", "string");
+    etapaProps.set("evidencia", evidencia);
+    etapa.putArray("required").add("codigo").add("justificacion_juridica").add("evidencia");
+    ObjectNode suf = props.putObject("suficiencia_documental");
+    suf.put("type", "object");
+    ObjectNode sufProps = suf.putObject("properties");
+    sufProps.putObject("porcentaje_completitud").put("type", "integer");
+    sufProps.putObject("estado_diagnostico").put("type", "string");
+    sufProps.putObject("requisitos_faltantes").put("type", "array").putObject("items").put("type", "string");
+    ObjectNode accionItem = objectMapper.createObjectNode();
+    accionItem.put("type", "object");
+    ObjectNode accionProps = accionItem.putObject("properties");
+    accionProps.putObject("codigo_accion").put("type", "string");
+    accionProps.putObject("titulo").put("type", "string");
+    accionProps.putObject("descripcion").put("type", "string");
+    accionProps.putObject("prioridad").put("type", "string");
+    ObjectNode acciones = props.putObject("acciones_sugeridas");
+    acciones.put("type", "array");
+    acciones.set("items", accionItem);
     schema
         .putArray("required")
         .add("porcentaje_completitud")
         .add("etapa_procesal_detectada")
+        .add("etapa_sugerida")
         .add("documentos_identificados")
         .add("alertas_inconsistencias")
         .add("datos_extraidos")
@@ -467,7 +499,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     msg.put("role", "user");
     msg.put(
         "content",
-        "Diagnostica este expediente. No inventes documentos ni fojas.\n\n<expediente_ocr>\n"
+        "Diagnostica la etapa procesal tentativa con este OCR consolidado. No inventes documentos, fojas ni extractos.\n\n<expediente_ocr>\n"
             + truncate(texto, MAX_CHARS_DIAGNOSTICO)
             + "\n</expediente_ocr>");
     return objectMapper.writeValueAsString(body);

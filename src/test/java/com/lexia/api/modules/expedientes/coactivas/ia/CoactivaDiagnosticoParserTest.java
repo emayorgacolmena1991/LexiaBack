@@ -83,6 +83,40 @@ class CoactivaDiagnosticoParserTest {
   }
 
   @Test
+  void tentativaUsaEtapaSugeridaYSuficiencia() {
+    Parse r =
+        parser.parse(
+            """
+            {"suficiencia_documental": {
+               "porcentaje_completitud": 88,
+               "requisitos_faltantes": ["Respuesta de la Superintendencia de Bancos"]
+             },
+             "etapa_sugerida": {
+               "codigo": "ETAPA_2_MEDIDAS_CAUTELARES",
+               "nombre": "Medidas Cautelares",
+               "justificacion_juridica": "Providencia de ratificación y oficios a la Superintendencia de Bancos.",
+               "evidencia": {
+                 "documento_origen": "Providencia_0901-2024-00452.pdf",
+                 "foja_pagina": 3,
+                 "fecha_documento": "2026-09-28",
+                 "extracto_texto": "Se decreta la retención de cuentas"
+               }
+             },
+             "acciones_sugeridas": [
+               {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "Solicitar liquidación actualizada", "prioridad": "ALTA"}
+             ]}
+            """);
+    assertTrue(r.ok());
+    assertEquals("MEDIDAS_CAUTELARES", r.diagnostico().etapaNormalizada());
+    assertEquals(88, r.diagnostico().porcentajeCompletitud());
+    assertEquals("Solicitar liquidación actualizada", r.diagnostico().siguienteAccion());
+    assertTrue(r.diagnostico().alertas().contains("Respuesta de la Superintendencia de Bancos"));
+    assertTrue(r.diagnostico().json().contains("Se decreta la retención de cuentas"));
+    assertTrue(r.diagnostico().json().contains("AMARILLO"));
+    assertTrue(r.diagnostico().json().contains("\"codigo\":\"MEDIDAS_CAUTELARES\""));
+  }
+
+  @Test
   void vacioEsError() {
     assertFalse(parser.parse("").ok());
     assertFalse(parser.parse("no es json").ok());

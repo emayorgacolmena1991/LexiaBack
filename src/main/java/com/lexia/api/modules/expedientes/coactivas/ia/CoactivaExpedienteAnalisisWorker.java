@@ -145,7 +145,10 @@ public class CoactivaExpedienteAnalisisWorker {
     LOG.info("Paso 2 LLM archivo={} chars={}", archivo.getId(), extraido.caracteres());
     ValidacionDocumentoJson raw =
         analisis.diagnosticarCoactiva(
-            system + CoactivaDiagnosticoParser.FORMATO_JSON, textoConHistorial(extraido.texto(), previo));
+            system
+                + CoactivaDiagnosticoParser.REGLAS_ETAPA
+                + CoactivaDiagnosticoParser.FORMATO_JSON,
+            textoConHistorial(extraido.texto(), previo));
     if (raw.esError()) {
       return Resultado.error(ctx.etapa(), promptId, raw.error());
     }

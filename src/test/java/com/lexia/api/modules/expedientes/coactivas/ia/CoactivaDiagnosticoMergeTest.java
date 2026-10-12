@@ -61,4 +61,34 @@ class CoactivaDiagnosticoMergeTest {
     assertTrue(fusion.json().contains("9988"));
     assertEquals("OPI_EMITIDA", fusion.etapa());
   }
+
+  @Test
+  void conservaEvidenciaDeLaTentativa() {
+    String json =
+        """
+        {"etapa_sugerida":{"codigo":"MEDIDAS_CAUTELARES","evidencia":{"extracto_texto":"Se decreta la retención"}},
+         "suficiencia_documental":{"estado_diagnostico":"AMARILLO"},
+         "acciones_sugeridas":[{"titulo":"Solicitar liquidación"}]}
+        """;
+    CoactivaDiagnosticoMerge.Fusion fusion =
+        CoactivaDiagnosticoMerge.fusionar(
+            null,
+            null,
+            null,
+            UUID.randomUUID(),
+            "proceso.pdf",
+            "PROVIDENCIA",
+            new CoactivaDiagnostico(
+                88,
+                "MEDIDAS_CAUTELARES",
+                "MEDIDAS_CAUTELARES",
+                List.of(new Documento("PROVIDENCIA", 3, 3, true)),
+                List.of(),
+                Map.of(),
+                "Solicitar liquidación",
+                json));
+    assertTrue(fusion.json().contains("Se decreta la retención"));
+    assertTrue(fusion.json().contains("AMARILLO"));
+    assertTrue(fusion.json().contains("Solicitar liquidación"));
+  }
 }

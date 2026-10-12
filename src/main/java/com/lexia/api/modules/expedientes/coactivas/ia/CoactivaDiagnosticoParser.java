@@ -17,12 +17,57 @@ import org.springframework.util.StringUtils;
 @Component
 public final class CoactivaDiagnosticoParser {
 
+  /** Reglas de etapa del flujo coactivo. Van con el OCR consolidado, después del prompt de catálogo. */
+  public static final String REGLAS_ETAPA =
+      """
+
+      TENTATIVA DE ETAPA. El mensaje de usuario es el OCR consolidado del PDF único (marcas --- FOJA n ---).
+      La etapa del contexto es la reportada por el banco. etapa_sugerida se decide solo con el OCR y estas reglas.
+      Gana el hito más avanzado que tenga extracto literal y foja. Sin esa evidencia, no avances.
+      Citación válida: 1 notificación personal, o 2 boletas por persona, o correo fijado.
+      Liquidación usada en providencia: alerta si pasaron más de 3 días desde su emisión.
+      - PREVIA: pagaré a la orden, aviso de vencimiento, liquidación previa u orden de cobro con número de operación.
+      - RPV: requerimiento de pago voluntario (10 días) con citación válida. Si está notificado y venció el término, puede seguir OPI.
+      - OPI_EMITIDA: hay orden de pago inmediato (3 días) y no hay razón de notificación válida. Alerta crítica. No pasa a medidas.
+      - NOTIFICACION_COA: la OPI consta notificada, con fecha en la razón. Si vencieron los 3 días, el siguiente hito posible es medidas, no antes.
+      - MEDIDAS_CAUTELARES: providencia de ratificación o imposición, u oficio/matriz a Superintendencia de Bancos, SEPS, Ministerio del Trabajo, registrador o tránsito (ATM, Portovial, ANT). No inventes números de oficio.
+      - ESCRITO: escrito del coactivado. Levantamiento solo por sueldo, pensión jubilar, alimentos o bonos del Estado.
+      - EMBARGO: el banco informa valor retenido, o hay oficio de embargo y transferencia. La providencia de honorarios (10% + IVA) es previa a la transferencia.
+      - HONORARIOS: respuesta de transferencia, matriz DataDoc, print COVIS de aplicación al crédito, o providencia/factura del SAE por el 10% recuperado + IVA.
+      - AVALUO: informe con bien, perito, valor y fecha.
+      - REMATE: convocatoria, postura, acta de remate o adjudicación.
+      - CONVENIO: facilidad de pago a 36, 48 o 60 meses. Un solo convenio por proceso. 3 letras en mora inhabilitan.
+      - ARCHIVADO: pago total, cancelación o archivo. No reabras etapas salvo deuda vigente explícita.
+      """;
+
   public static final String FORMATO_JSON =
       """
 
-      Responde ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto adicional:
+      Responde ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto adicional.
+      etapa_sugerida es la tentativa. etapa_procesal_detectada debe ser igual a etapa_sugerida.codigo.
+      Códigos: PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO.
+      evidencia.extracto_texto es cita literal del OCR. Si no hay foja o fecha, usa null.
       {"porcentaje_completitud": 0,
-       "etapa_procesal_detectada": "PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO",
+       "etapa_procesal_detectada": "MEDIDAS_CAUTELARES",
+       "etapa_sugerida": {
+         "codigo": "MEDIDAS_CAUTELARES",
+         "nombre": "Medidas cautelares",
+         "justificacion_juridica": "por qué esta etapa y no la anterior",
+         "evidencia": {
+           "documento_origen": "nombre del PDF",
+           "foja_pagina": 3,
+           "fecha_documento": "2026-09-28",
+           "extracto_texto": "cita literal corta"
+         }
+       },
+       "suficiencia_documental": {
+         "porcentaje_completitud": 0,
+         "estado_diagnostico": "VERDE|AMARILLO|ROJO",
+         "requisitos_faltantes": ["documento que el OCR no contiene"]
+       },
+       "acciones_sugeridas": [
+         {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "acción concreta", "descripcion": "por qué", "prioridad": "ALTA|MEDIA|BAJA"}
+       ],
        "documentos_identificados": [{"tipo": "PAGARE", "foja_inicio": 1, "foja_fin": 4, "presente": true}],
        "alertas_inconsistencias": ["motivo concreto"],
        "datos_extraidos": {
@@ -81,15 +126,33 @@ public final class CoactivaDiagnosticoParser {
     }
     List<Documento> documentos = documentos(root);
     int porcentaje = porcentaje(root, documentos);
-    String etapaDetectada = texto(root, "etapa_procesal_detectada", "etapaProcesalDetectada", "etapa");
+    JsonNode sugeridaIn = objeto(root, "etapa_sugerida");
+    String etapaDetectada = sugeridaIn == null ? null : texto(sugeridaIn, "codigo", "code");
+    if (!StringUtils.hasText(etapaDetectada)) {
+      etapaDetectada = texto(root, "etapa_procesal_detectada", "etapaProcesalDetectada", "etapa");
+    }
     String etapaNormalizada =
         CoactivaEtapa.fromTextoLibre(etapaDetectada).map(Enum::name).orElse(null);
-    List<String> alertas = textos(root, "alertas_inconsistencias", "alertasInconsistencias", "alertas");
+    List<String> alertas = new ArrayList<>(textos(root, "alertas_inconsistencias", "alertasInconsistencias", "alertas"));
+    JsonNode sufIn = objeto(root, "suficiencia_documental");
+    if (sufIn != null) {
+      for (String req : textos(sufIn, "requisitos_faltantes", "requisitosFaltantes")) {
+        if (!alertas.contains(req)) {
+          alertas.add(req);
+        }
+      }
+    }
     Map<String, Object> datos = datos(root);
     String accion = texto(root, "siguiente_accion_sugerida", "siguienteAccionSugerida", "siguiente_accion");
+    if (!StringUtils.hasText(accion)) {
+      accion = primeraAccion(root);
+    }
     ObjectNode canon = objectMapper.createObjectNode();
     canon.put("porcentaje_completitud", porcentaje);
     canon.put("etapa_procesal_detectada", etapaNormalizada != null ? etapaNormalizada : etapaDetectada);
+    canon.set("etapa_sugerida", etapaSugerida(sugeridaIn, etapaNormalizada));
+    canon.set("suficiencia_documental", suficiencia(sufIn, porcentaje));
+    canon.set("acciones_sugeridas", acciones(root));
     canon.set("documentos_identificados", objectMapper.valueToTree(documentos));
     canon.set("alertas_inconsistencias", objectMapper.valueToTree(alertas));
     canon.set("datos_extraidos", objectMapper.valueToTree(datos));
@@ -119,10 +182,65 @@ public final class CoactivaDiagnosticoParser {
     }
   }
 
+  private ObjectNode etapaSugerida(JsonNode in, String etapaNormalizada) {
+    ObjectNode node = in != null && in.isObject() ? (ObjectNode) in.deepCopy() : objectMapper.createObjectNode();
+    if (etapaNormalizada != null) {
+      node.put("codigo", etapaNormalizada);
+      if (!StringUtils.hasText(texto(node, "nombre"))) {
+        node.put("nombre", CoactivaEtapa.parse(etapaNormalizada).map(CoactivaEtapa::label).orElse(etapaNormalizada));
+      }
+    }
+    return node;
+  }
+
+  private ObjectNode suficiencia(JsonNode in, int porcentaje) {
+    ObjectNode node = in != null && in.isObject() ? (ObjectNode) in.deepCopy() : objectMapper.createObjectNode();
+    node.put("porcentaje_completitud", porcentaje);
+    node.put("estado_diagnostico", porcentaje > 90 ? "VERDE" : porcentaje >= 70 ? "AMARILLO" : "ROJO");
+    if (!node.has("requisitos_faltantes") || !node.get("requisitos_faltantes").isArray()) {
+      node.putArray("requisitos_faltantes");
+    }
+    return node;
+  }
+
+  private JsonNode acciones(JsonNode root) {
+    JsonNode n = root.get("acciones_sugeridas");
+    if (n == null) {
+      n = root.get("accionesSugeridas");
+    }
+    return n != null && n.isArray() ? n.deepCopy() : objectMapper.createArrayNode();
+  }
+
+  private static String primeraAccion(JsonNode root) {
+    JsonNode n = root.get("acciones_sugeridas");
+    if (n == null) {
+      n = root.get("accionesSugeridas");
+    }
+    if (n == null || !n.isArray() || n.isEmpty()) {
+      return null;
+    }
+    String titulo = texto(n.get(0), "titulo");
+    return StringUtils.hasText(titulo) ? titulo : texto(n.get(0), "descripcion");
+  }
+
+  private static JsonNode objeto(JsonNode root, String key) {
+    JsonNode n = root.get(key);
+    return n != null && n.isObject() ? n : null;
+  }
+
   private static int porcentaje(JsonNode root, List<Documento> documentos) {
     JsonNode n = root.get("porcentaje_completitud");
-    if (n == null) {
+    if (n == null || n.isNull()) {
       n = root.get("porcentajeCompletitud");
+    }
+    if (n == null || n.isNull()) {
+      JsonNode suf = objeto(root, "suficiencia_documental");
+      if (suf != null) {
+        n = suf.get("porcentaje_completitud");
+        if (n == null || n.isNull()) {
+          n = suf.get("porcentajeCompletitud");
+        }
+      }
     }
     if (n != null && !n.isNull()) {
       double v = n.isNumber() ? n.asDouble() : parseNumero(n.asText());
