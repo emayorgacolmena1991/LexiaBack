@@ -1,9 +1,16 @@
 package com.lexia.api.modules.expedientes.escrituracion.ingesta;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
+import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
+import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisService;
 import com.lexia.api.modules.tenancy.RlsConnectionProvider;
 import com.lexia.api.modules.tenancy.TenantContext;
 import jakarta.annotation.PreDestroy;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -25,6 +32,9 @@ public class IngestaJobWorker {
   private final IngestaJobQueue cola;
   private final IngestaMasivaEscrituracionService ingesta;
   private final ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas;
+  private final ObjectProvider<IaAnalysisService> escrituracion;
+  private final BatchEventPublisherService sse;
+  private final ObjectMapper json;
   private final ScheduledExecutorService latido =
       Executors.newSingleThreadScheduledExecutor(r -> {
         Thread hilo = new Thread(r, "jobs-latido");
@@ -35,10 +45,16 @@ public class IngestaJobWorker {
   public IngestaJobWorker(
       IngestaJobQueue cola,
       IngestaMasivaEscrituracionService ingesta,
-      ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas) {
+      ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas,
+      ObjectProvider<IaAnalysisService> escrituracion,
+      BatchEventPublisherService sse,
+      ObjectMapper json) {
     this.cola = cola;
     this.ingesta = ingesta;
     this.coactivas = coactivas;
+    this.escrituracion = escrituracion;
+    this.sse = sse;
+    this.json = json;
     latido.scheduleAtFixedRate(this::renovar, 30, 30, TimeUnit.SECONDS);
   }
 
@@ -62,6 +78,8 @@ public class IngestaJobWorker {
           throw new IllegalStateException("Diagnóstico coactivo no disponible");
         }
         worker.ejecutar(actual.tenantId(), archivoId(actual.payload()));
+      } else if ("ESCRITURACION_ANALISIS".equals(actual.tipo())) {
+        correrEscrituracion(actual);
       } else {
         ingesta.ejecutarJob(actual);
       }
@@ -70,8 +88,47 @@ public class IngestaJobWorker {
       LOG.warn("job {} falló: {}", actual.id(), ex.getMessage());
       cola.fallar(actual.id(), NODE, ex.getMessage());
     } finally {
+      AuthContext.clear();
       TenantContext.clear();
     }
+  }
+
+  private void correrEscrituracion(IngestaJobQueue.Job job) {
+    JsonNode nodo;
+    try {
+      nodo = json.readTree(job.payload());
+    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+      throw new IllegalArgumentException("payload de análisis ilegible");
+    }
+    UUID expedienteId = UUID.fromString(nodo.path("expedienteId").asText());
+    AuthContext.set(
+        new AuthPrincipal(
+            uuid(nodo, "userId"), uuid(nodo, "sessionId"), job.tenantId(), uuid(nodo, "membershipId")));
+    IaAnalysisService servicio = escrituracion.getIfAvailable();
+    if (servicio == null) {
+      throw new IllegalStateException("Análisis de escrituración no disponible");
+    }
+    sse.publicar(expedienteId, "ANALYSIS_STARTED", Map.of("jobId", job.id().toString()));
+    try {
+      var resultado =
+          servicio.analizarExpedienteConPromptProducto(
+              expedienteId,
+              new AnalysisRequestDTO(
+                  nodo.path("forceReanalysis").asBoolean(false), nodo.path("sessionIdOcr").asText("")));
+      sse.publicar(expedienteId, "ANALYSIS_COMPLETED", resultado);
+    } catch (RuntimeException ex) {
+      String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+      sse.publicar(expedienteId, "ANALYSIS_FAILED", Map.of("error", msg));
+      throw ex;
+    }
+  }
+
+  private static UUID uuid(JsonNode nodo, String campo) {
+    String value = nodo.path(campo).asText("");
+    if (value.isBlank()) {
+      return null;
+    }
+    return UUID.fromString(value);
   }
 
   private void renovar() {

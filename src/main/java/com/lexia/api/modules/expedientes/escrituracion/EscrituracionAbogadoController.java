@@ -19,14 +19,24 @@ import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.Regular
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
+import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalisisEncolado;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
 import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -43,6 +53,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -55,6 +66,9 @@ public class EscrituracionAbogadoController {
   private final CapturaBiessService capturaBiess;
   private final ExpedienteEstadoService estado;
   private final RegularizacionEscrituracionService regularizacion;
+  private final IngestaJobQueue jobs;
+  private final BatchEventPublisherService sse;
+  private final ObjectMapper json;
 
   public EscrituracionAbogadoController(
       ProductoBiessService productos,
@@ -64,7 +78,10 @@ public class EscrituracionAbogadoController {
       MinutaGenerationService minutaGeneration,
       CapturaBiessService capturaBiess,
       ExpedienteEstadoService estado,
-      RegularizacionEscrituracionService regularizacion) {
+      RegularizacionEscrituracionService regularizacion,
+      IngestaJobQueue jobs,
+      BatchEventPublisherService sse,
+      ObjectMapper json) {
     this.productos = productos;
     this.escritura = escritura;
     this.iaAnalysis = iaAnalysis;
@@ -72,6 +89,9 @@ public class EscrituracionAbogadoController {
     this.capturaBiess = capturaBiess;
     this.estado = estado;
     this.regularizacion = regularizacion;
+    this.jobs = jobs;
+    this.sse = sse;
+    this.json = json;
   }
 
   @GetMapping("/productos-biess")
@@ -157,9 +177,31 @@ public class EscrituracionAbogadoController {
   }
 
   @PostMapping("/expedientes/{id}/escrituracion/analizar-ia")
-  public ResponseEntity<ProcesarExpedienteCompletoResult> analizarIa(
+  public ResponseEntity<AnalisisEncolado> analizarIa(
       @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
-    return ResponseEntity.ok(iaAnalysis.analizarExpedienteConPromptProducto(id, request));
+    iaAnalysis.exigirExpediente(id);
+    AuthPrincipal principal = AuthContext.require();
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("expedienteId", id.toString());
+    payload.put("forceReanalysis", request != null && Boolean.TRUE.equals(request.forceReanalysis()));
+    payload.put("sessionIdOcr", request == null || request.sessionId() == null ? "" : request.sessionId());
+    payload.put("userId", principal.userId() == null ? "" : principal.userId().toString());
+    payload.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
+    payload.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
+    String cuerpo;
+    try {
+      cuerpo = json.writeValueAsString(payload);
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo encolar el análisis.");
+    }
+    UUID jobId = jobs.encolar(principal.tenantId(), "ESCRITURACION_ANALISIS", cuerpo);
+    return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "ENCOLADO"));
+  }
+
+  @GetMapping(value = "/expedientes/{id}/escrituracion/analizar-ia/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter streamAnalisis(@PathVariable UUID id) {
+    iaAnalysis.exigirExpediente(id);
+    return sse.abrir(id);
   }
 
   /** Mismo single-pass que analizar-ia. Sin forceReanalysis devuelve lo persistido en BD. */

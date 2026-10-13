@@ -100,6 +100,17 @@ public class IaAnalysisService {
     this.sanitizer = sanitizer;
   }
 
+  public void exigirExpediente(UUID expedienteId) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    UUID tenantId = AuthContext.require().tenantId();
+    if (borradores.find(expedienteId, tenantId).isPresent()) {
+      return;
+    }
+    legalCases
+        .findByIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
+        .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+  }
+
   @Transactional
   public ProcesarExpedienteCompletoResult analizarExpedienteConPromptProducto(
       UUID expedienteId, AnalysisRequestDTO request) {

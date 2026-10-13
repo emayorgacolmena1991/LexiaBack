@@ -25,18 +25,20 @@ public class IngestaJobQueue {
   }
 
   @Transactional
-  public void encolar(UUID tenantId, String tipo, String payload) {
+  public UUID encolar(UUID tenantId, String tipo, String payload) {
+    UUID id = UUID.randomUUID();
     entityManager
         .createNativeQuery(
             """
             INSERT INTO app.jobs (id, tenant_id, tipo, payload)
             VALUES (:id, :tenantId, :tipo, CAST(:payload AS jsonb))
             """)
-        .setParameter("id", UUID.randomUUID())
+        .setParameter("id", id)
         .setParameter("tenantId", tenantId)
         .setParameter("tipo", tipo)
         .setParameter("payload", payload)
         .executeUpdate();
+    return id;
   }
 
   @Transactional

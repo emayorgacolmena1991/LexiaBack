@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.LlmTimeoutException;
 import com.lexia.api.modules.ia.llm.IaConsumoLog;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
@@ -82,7 +83,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private final IaConsumoLog consumo;
   private final ThreadLocal<List<String>> modelosForzados = new ThreadLocal<>();
   private final HttpClient http =
-      HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+      HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
   public ClaudeAnalysisService(
       @Value("${anthropic.api.key:}") String apiKey,
@@ -225,6 +226,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         } catch (InterruptedException ie) {
           Thread.currentThread().interrupt();
           return ExtraccionExpedienteCompleto.error("Procesamiento interrumpido.");
+        } catch (LlmTimeoutException timeout) {
+          throw timeout;
         } catch (Exception e) {
           String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
           ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
@@ -282,6 +285,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         } catch (InterruptedException ie) {
           Thread.currentThread().interrupt();
           return ExtraccionMinutaVivienda.error("Extracción de minuta interrumpida.");
+        } catch (LlmTimeoutException timeout) {
+          throw timeout;
         } catch (Exception e) {
           String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
           ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
@@ -335,6 +340,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         } catch (InterruptedException ie) {
           Thread.currentThread().interrupt();
           return ValidacionDocumentoJson.error("Validación documental interrumpida.");
+        } catch (LlmTimeoutException timeout) {
+          throw timeout;
         } catch (Exception e) {
           String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
           ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
@@ -388,6 +395,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         } catch (InterruptedException ie) {
           Thread.currentThread().interrupt();
           return ValidacionDocumentoJson.error("Diagnóstico coactivo interrumpido.");
+        } catch (LlmTimeoutException timeout) {
+          throw timeout;
         } catch (Exception e) {
           String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
           ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
@@ -433,6 +442,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         } catch (InterruptedException ie) {
           Thread.currentThread().interrupt();
           return ExtraccionCapturaBiess.error("Extracción de captura BIESS interrumpida.");
+        } catch (LlmTimeoutException timeout) {
+          throw timeout;
         } catch (Exception e) {
           String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
           ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
@@ -686,13 +697,18 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     long inicio = System.nanoTime();
     HttpRequest req =
         HttpRequest.newBuilder(URI.create(API_URL))
-            .timeout(Duration.ofSeconds(180))
+            .timeout(Duration.ofSeconds(30))
             .header("x-api-key", apiKey)
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build();
-    HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+    HttpResponse<String> res;
+    try {
+      res = http.send(req, HttpResponse.BodyHandlers.ofString());
+    } catch (java.net.http.HttpTimeoutException timeout) {
+      throw new LlmTimeoutException("Claude no respondió en 30 segundos.", timeout);
+    }
     anotarUso(body, res.body(), (System.nanoTime() - inicio) / 1_000_000L);
     return res;
   }

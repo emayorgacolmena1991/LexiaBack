@@ -10,6 +10,8 @@ public final class IaAnalysisDtos {
 
   public record AnalysisRequestDTO(Boolean forceReanalysis, String sessionId) {}
 
+  public record AnalisisEncolado(UUID jobId, String estado) {}
+
   public record ObservationItem(String code, String severity, String message) {}
 
   public record AnalysisResultDTO(

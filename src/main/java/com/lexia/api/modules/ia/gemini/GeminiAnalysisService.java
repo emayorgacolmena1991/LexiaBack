@@ -2,6 +2,8 @@ package com.lexia.api.modules.ia.gemini;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.genai.Client;
+import com.google.genai.types.HttpOptions;
+import com.lexia.api.modules.ia.llm.LlmTimeoutException;
 import com.google.genai.types.Content;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
@@ -126,7 +128,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = Client.builder().apiKey(apiKey).build()) {
+    try (Client client = cliente()) {
       for (String modelo : modelosForzados.get() == null ? MODELOS_FREE : modelosForzados.get()) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -157,7 +159,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " JSON sin datosConsolidados/dictamen";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -213,7 +220,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = Client.builder().apiKey(apiKey).build()) {
+    try (Client client = cliente()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -227,7 +234,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
                 MinutaVariableBinder.bind(
                     objectMapper.readTree(GeminiJsonSanitizer.limpiar(raw)), objectMapper);
             return ExtraccionMinutaVivienda.ok(data);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -270,7 +282,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = Client.builder().apiKey(apiKey).build()) {
+    try (Client client = cliente()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -281,7 +293,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -338,7 +355,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .maxOutputTokens(maxTokens)
             .build();
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = Client.builder().apiKey(apiKey).build()) {
+    try (Client client = cliente()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -349,7 +366,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -388,7 +410,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = Client.builder().apiKey(apiKey).build()) {
+    try (Client client = cliente()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= 2; intento++) {
           try {
@@ -401,7 +423,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -434,6 +461,13 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
       return "UNAVAILABLE";
     }
     return "OTHER";
+  }
+
+  private Client cliente() {
+    return Client.builder()
+        .apiKey(apiKey)
+        .httpOptions(HttpOptions.builder().timeout(30_000).build())
+        .build();
   }
 
   private static void sleepBackoff(int intento, boolean rateLimit) {
