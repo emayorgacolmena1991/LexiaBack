@@ -1,46 +1,95 @@
 package com.lexia.api.modules.expedientes.escrituracion.ingesta;
 
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
+import com.lexia.api.modules.tenancy.RlsConnectionProvider;
+import com.lexia.api.modules.tenancy.TenantContext;
+import jakarta.annotation.PreDestroy;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Saca trabajos de {@code app.jobs}. Al arrancar, lo que quedó EN_PROCESO vuelve a la cola. */
+/** Saca trabajos de {@code app.jobs}. El latido renueva el candado mientras corre OCR o el LLM. */
 @Component
 public class IngestaJobWorker {
 
   private static final Logger LOG = LoggerFactory.getLogger(IngestaJobWorker.class);
+  private static final String NODE = UUID.randomUUID().toString();
 
   private final IngestaJobQueue cola;
   private final IngestaMasivaEscrituracionService ingesta;
-  private final AtomicBoolean arranque = new AtomicBoolean(true);
+  private final ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas;
+  private final ScheduledExecutorService latido =
+      Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread hilo = new Thread(r, "jobs-latido");
+        hilo.setDaemon(true);
+        return hilo;
+      });
 
-  public IngestaJobWorker(IngestaJobQueue cola, IngestaMasivaEscrituracionService ingesta) {
+  public IngestaJobWorker(
+      IngestaJobQueue cola,
+      IngestaMasivaEscrituracionService ingesta,
+      ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas) {
     this.cola = cola;
     this.ingesta = ingesta;
+    this.coactivas = coactivas;
+    latido.scheduleAtFixedRate(this::renovar, 30, 30, TimeUnit.SECONDS);
+  }
+
+  @PreDestroy
+  void cerrar() {
+    latido.shutdownNow();
   }
 
   @Scheduled(fixedDelay = 1000)
   public void tick() {
-    if (arranque.compareAndSet(true, false)) {
-      int reanudados = cola.reanudarInterrumpidos();
-      if (reanudados > 0) {
-        LOG.info("ingesta jobs reanudados={}", reanudados);
-      }
-    }
-    Optional<IngestaJobQueue.Job> job = cola.reclamar();
+    Optional<IngestaJobQueue.Job> job = cola.reclamar(NODE);
     if (job.isEmpty()) {
       return;
     }
     IngestaJobQueue.Job actual = job.get();
+    RlsConnectionProvider.setTenantId(actual.tenantId());
     try {
-      ingesta.ejecutarJob(actual);
-      cola.completar(actual.id());
+      if ("COACTIVA_DIAGNOSTICO".equals(actual.tipo())) {
+        CoactivaExpedienteAnalisisWorker worker = coactivas.getIfAvailable();
+        if (worker == null) {
+          throw new IllegalStateException("Diagnóstico coactivo no disponible");
+        }
+        worker.ejecutar(actual.tenantId(), archivoId(actual.payload()));
+      } else {
+        ingesta.ejecutarJob(actual);
+      }
+      cola.completar(actual.id(), NODE);
     } catch (RuntimeException ex) {
-      LOG.warn("ingesta job {} falló: {}", actual.id(), ex.getMessage());
-      cola.fallar(actual.id(), ex.getMessage());
+      LOG.warn("job {} falló: {}", actual.id(), ex.getMessage());
+      cola.fallar(actual.id(), NODE, ex.getMessage());
+    } finally {
+      TenantContext.clear();
     }
+  }
+
+  private void renovar() {
+    try {
+      cola.latido(NODE);
+    } catch (RuntimeException ex) {
+      LOG.warn("latido de jobs falló: {}", ex.getMessage());
+    }
+  }
+
+  private static UUID archivoId(String payload) {
+    String key = "\"archivoId\":\"";
+    int i = payload == null ? -1 : payload.indexOf(key);
+    if (i < 0) {
+      throw new IllegalArgumentException("payload sin archivoId");
+    }
+    int start = i + key.length();
+    int end = payload.indexOf('"', start);
+    return UUID.fromString(payload.substring(start, end));
   }
 }

@@ -5,6 +5,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.ResolucionDelegadoRequest;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
@@ -48,6 +49,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1/coactivas")
@@ -57,12 +59,17 @@ public class CoactivaExpedienteController {
   private final CoactivaExpedienteService service;
   private final CoactivaBandejaService bandeja;
   private final CoactivaDelegadoService delegados;
+  private final BatchEventPublisherService sse;
 
   public CoactivaExpedienteController(
-      CoactivaExpedienteService service, CoactivaBandejaService bandeja, CoactivaDelegadoService delegados) {
+      CoactivaExpedienteService service,
+      CoactivaBandejaService bandeja,
+      CoactivaDelegadoService delegados,
+      BatchEventPublisherService sse) {
     this.service = service;
     this.bandeja = bandeja;
     this.delegados = delegados;
+    this.sse = sse;
   }
 
   @GetMapping("/catalogos")
@@ -123,6 +130,12 @@ public class CoactivaExpedienteController {
   @GetMapping("/expedientes/{id}")
   public ExpedienteDetalle detalle(@PathVariable UUID id) {
     return service.detalle(id);
+  }
+
+  @GetMapping(value = "/expedientes/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter stream(@PathVariable UUID id) {
+    service.detalle(id);
+    return sse.abrir(id);
   }
 
   @PatchMapping("/expedientes/{id}")

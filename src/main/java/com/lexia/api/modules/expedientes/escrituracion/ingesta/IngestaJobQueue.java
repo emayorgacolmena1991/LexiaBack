@@ -11,7 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Cola en Postgres. {@code app.jobs} no tiene RLS: el worker reclama de cualquier tenant
  * y luego fija {@code app.current_tenant_id}.
- * ponytail: al arrancar, todo EN_PROCESO vuelve a PENDIENTE. Con dos nodos se pisarían.
+ * El candado {@code locked_until} evita que otro nodo reclame un job vivo.
  */
 @Repository
 public class IngestaJobQueue {
@@ -40,7 +40,7 @@ public class IngestaJobQueue {
   }
 
   @Transactional
-  public Optional<Job> reclamar() {
+  public Optional<Job> reclamar(String workerId) {
     @SuppressWarnings("unchecked")
     List<Object[]> rows =
         entityManager
@@ -48,7 +48,8 @@ public class IngestaJobQueue {
                 """
                 SELECT id, tenant_id, tipo, CAST(payload AS text), intentos
                 FROM app.jobs
-                WHERE estado = 'PENDIENTE' AND run_at <= now()
+                WHERE (estado = 'PENDIENTE' AND run_at <= now())
+                   OR (estado = 'EN_PROCESO' AND (locked_until IS NULL OR locked_until < now()))
                 ORDER BY created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -63,10 +64,15 @@ public class IngestaJobQueue {
         .createNativeQuery(
             """
             UPDATE app.jobs
-            SET estado = 'EN_PROCESO', intentos = intentos + 1, run_at = now()
+            SET estado = 'EN_PROCESO',
+                worker_id = :worker,
+                locked_until = now() + interval '2 minutes',
+                intentos = intentos + 1,
+                run_at = now()
             WHERE id = :id
             """)
         .setParameter("id", id)
+        .setParameter("worker", workerId)
         .executeUpdate();
     return Optional.of(
         new Job(
@@ -78,34 +84,48 @@ public class IngestaJobQueue {
   }
 
   @Transactional
-  public void completar(UUID id) {
+  public void completar(UUID id, String workerId) {
     entityManager
-        .createNativeQuery("UPDATE app.jobs SET estado = 'COMPLETADO', run_at = now() WHERE id = :id")
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET estado = 'COMPLETADO', run_at = now(), locked_until = NULL
+            WHERE id = :id AND worker_id = :worker
+            """)
         .setParameter("id", id)
+        .setParameter("worker", workerId)
         .executeUpdate();
   }
 
   @Transactional
-  public void fallar(UUID id, String error) {
+  public void fallar(UUID id, String workerId, String error) {
     entityManager
         .createNativeQuery(
             """
             UPDATE app.jobs
             SET estado = CASE WHEN intentos >= 3 THEN 'ERROR' ELSE 'PENDIENTE' END,
                 error_log = :error,
+                worker_id = NULL,
+                locked_until = NULL,
                 run_at = now() + interval '15 seconds'
-            WHERE id = :id
+            WHERE id = :id AND worker_id = :worker
             """)
         .setParameter("id", id)
+        .setParameter("worker", workerId)
         .setParameter("error", error == null ? "error" : error.substring(0, Math.min(error.length(), 800)))
         .executeUpdate();
   }
 
   @Transactional
-  public int reanudarInterrumpidos() {
-    return entityManager
+  public void latido(String workerId) {
+    entityManager
         .createNativeQuery(
-            "UPDATE app.jobs SET estado = 'PENDIENTE', run_at = now() WHERE estado = 'EN_PROCESO'")
+            """
+            UPDATE app.jobs
+            SET locked_until = now() + interval '2 minutes'
+            WHERE worker_id = :worker AND estado = 'EN_PROCESO'
+            """)
+        .setParameter("worker", workerId)
         .executeUpdate();
   }
 

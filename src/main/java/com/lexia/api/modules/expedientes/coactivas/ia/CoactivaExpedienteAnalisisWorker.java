@@ -14,17 +14,19 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipan
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipanteRepository;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico.Documento;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser.Parse;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
-import com.lexia.api.modules.tenancy.TenantContext;
+import com.lexia.api.modules.tenancy.RlsConnectionProvider;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -43,12 +45,11 @@ public class CoactivaExpedienteAnalisisWorker {
   private static final int MAX_HISTORIAL = 12_000;
   private static final String HISTORIAL =
       """
-      Considere el historial de diagnósticos previos del expediente:
-      --- HISTORIAL PREVIO ---
+      === HISTORIAL DE DIAGNÓSTICO PREVIO ===
       %s
-      --- NUEVO DOCUMENTO (OCR) ---
+      === NUEVA PIEZA PROCESAL ===
 
-      INSTRUCCIÓN: Fusiona el nuevo texto con los hitos previos. No elimines hitos antiguos previamente confirmados salvo que el nuevo documento sea una revocatoria explícita.
+      INSTRUCCIÓN: La pieza nueva puede cambiar la etapa, cerrar observaciones ya resueltas o agregar tareas. Actualiza etapa_sugerida, resuelve observaciones que el documento cierre y suma acciones nuevas. No elimines hitos confirmados salvo revocatoria explícita.
       """;
   private static final String TIPO_PROMPT = "EXPEDIENTE_UNIFICADO";
   private static final String PROMPT_FALLBACK =
@@ -65,6 +66,8 @@ public class CoactivaExpedienteAnalisisWorker {
   private final CoactivaPromptCatalogRepository catalog;
   private final CoactivaDiagnosticoParser parser;
   private final CoactivaTareaSugeridaRepository tareas;
+  private final IngestaJobQueue jobs;
+  private final BatchEventPublisherService sse;
   private final boolean dummy;
   private final TransactionTemplate tx;
 
@@ -80,6 +83,8 @@ public class CoactivaExpedienteAnalisisWorker {
       CoactivaPromptCatalogRepository catalog,
       CoactivaDiagnosticoParser parser,
       CoactivaTareaSugeridaRepository tareas,
+      IngestaJobQueue jobs,
+      BatchEventPublisherService sse,
       PlatformTransactionManager txManager,
       @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy) {
     this.archivos = archivos;
@@ -93,25 +98,32 @@ public class CoactivaExpedienteAnalisisWorker {
     this.catalog = catalog;
     this.parser = parser;
     this.tareas = tareas;
+    this.jobs = jobs;
+    this.sse = sse;
     this.dummy = dummy;
     this.tx = new TransactionTemplate(txManager);
   }
 
-  @Async("taskExecutor")
+  /** Encola el diagnóstico en {@code app.jobs}. Lo corre {@code IngestaJobWorker}. */
   public void analizarAsync(UUID tenantId, UUID archivoId) {
-    if (TenantContext.getTenantId() == null) {
-      TenantContext.setTenantId(tenantId);
-    }
+    jobs.encolar(tenantId, "COACTIVA_DIAGNOSTICO", "{\"archivoId\":\"" + archivoId + "\"}");
+  }
+
+  public void ejecutar(UUID tenantId, UUID archivoId) {
+    RlsConnectionProvider.setTenantId(tenantId);
     CoactivaArchivo archivo = cargarArchivo(tenantId, archivoId);
     if (archivo == null || !archivo.analizando() || archivo.getExpedienteId() == null) {
       LOG.warn("Diagnóstico sin archivo en análisis archivo={} tenant={}", archivoId, tenantId);
       return;
     }
-    Contexto ctx = cargarContexto(tenantId, archivo.getExpedienteId());
-    Previo previo = cargarPrevio(tenantId, archivo.getExpedienteId());
+    UUID expedienteId = archivo.getExpedienteId();
+    avisar(expedienteId, "ANALYSIS_STARTED");
+    Contexto ctx = cargarContexto(tenantId, expedienteId);
+    Previo previo = cargarPrevio(tenantId, expedienteId);
     try {
       Resultado resultado = diagnosticar(archivo, ctx, previo);
       guardar(tenantId, archivoId, resultado, previo);
+      avisar(expedienteId, "ANALYSIS_COMPLETED");
       LOG.info(
           "Diagnóstico expediente={} archivo={} porcentaje={}",
           archivo.getExpedienteId(),
@@ -121,6 +133,7 @@ public class CoactivaExpedienteAnalisisWorker {
       String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
       LOG.warn("Fallo diagnóstico archivo={}: {}", archivoId, msg);
       guardar(tenantId, archivoId, Resultado.error(ctx.etapa(), null, msg), previo);
+      avisar(expedienteId, "ANALYSIS_COMPLETED");
     }
   }
 
@@ -244,11 +257,23 @@ public class CoactivaExpedienteAnalisisWorker {
 
   private void poblarTareas(UUID tenantId, UUID expedienteId, UUID analisisId, String json) {
     tareas.deleteByTenantIdAndExpedienteIdAndEstado(tenantId, expedienteId, CoactivaTareaSugerida.SUGERIDA);
+    int creadas = 0;
     for (var accion : parser.tentativaDe(json).acciones()) {
+      creadas++;
       tareas.save(
           CoactivaTareaSugerida.nueva(
               tenantId, expedienteId, analisisId, accion.titulo(), accion.descripcion(), accion.prioridad()));
     }
+    if (creadas > 0) {
+      avisar(expedienteId, "TASK_SUGGESTED");
+    }
+  }
+
+  private void avisar(UUID expedienteId, String evento) {
+    if (expedienteId == null) {
+      return;
+    }
+    sse.publicar(expedienteId, evento, Map.of("expedienteId", expedienteId.toString()));
   }
 
   private CoactivaArchivo cargarArchivo(UUID tenantId, UUID archivoId) {
