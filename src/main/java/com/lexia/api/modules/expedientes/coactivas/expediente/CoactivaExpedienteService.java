@@ -14,7 +14,15 @@ import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoStora
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AccionSugeridaIa;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.EtapaSugeridaIa;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.EvidenciaEtapa;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.SuficienciaDocumental;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ConfirmarEtapaRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TareaSugeridaItem;
+import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.DocumentoDetectado;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
@@ -85,6 +93,8 @@ public class CoactivaExpedienteService {
   private final CoactivaExpedienteAnalisisWorker diagnostico;
   private final CoactivaAnalisisRepository analisisRepo;
   private final CoactivaDiagnosticoParser diagnosticoParser;
+  private final CoactivaTareaSugeridaRepository tareas;
+  private final AppUserRepository usuarios;
 
   private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
 
@@ -103,7 +113,9 @@ public class CoactivaExpedienteService {
       CoactivaValidacionIaWorker validacionIa,
       CoactivaExpedienteAnalisisWorker diagnostico,
       CoactivaAnalisisRepository analisisRepo,
-      CoactivaDiagnosticoParser diagnosticoParser) {
+      CoactivaDiagnosticoParser diagnosticoParser,
+      CoactivaTareaSugeridaRepository tareas,
+      AppUserRepository usuarios) {
     this.expedientes = expedientes;
     this.participantes = participantes;
     this.notificaciones = notificaciones;
@@ -119,6 +131,8 @@ public class CoactivaExpedienteService {
     this.diagnostico = diagnostico;
     this.analisisRepo = analisisRepo;
     this.diagnosticoParser = diagnosticoParser;
+    this.tareas = tareas;
+    this.usuarios = usuarios;
   }
 
   // ---------------------------------------------------------------------------
@@ -322,6 +336,89 @@ public class CoactivaExpedienteService {
     caseSync.sincronizarEtapa(tenantId, expediente.getCaseId(), nueva);
     recalcular(expediente);
     return detalle(tenantId, expediente);
+  }
+
+  @Transactional(readOnly = true)
+  public List<TareaSugeridaItem> tareasSugeridas(UUID id) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    require(tenantId, id);
+    return tareas.findByTenantIdAndExpedienteIdOrderByCreadoEnAsc(tenantId, id).stream()
+        .map(CoactivaExpedienteService::aTarea)
+        .toList();
+  }
+
+  @Transactional
+  public TareaSugeridaItem incorporarTarea(UUID id, UUID tareaId) {
+    return cerrarTarea(id, tareaId, true);
+  }
+
+  @Transactional
+  public TareaSugeridaItem descartarTarea(UUID id, UUID tareaId) {
+    return cerrarTarea(id, tareaId, false);
+  }
+
+  private TareaSugeridaItem cerrarTarea(UUID id, UUID tareaId, boolean incorporar) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    require(tenantId, id);
+    CoactivaTareaSugerida tarea =
+        tareas
+            .findByIdAndTenantIdAndExpedienteId(tareaId, tenantId, id)
+            .orElseThrow(() -> ApiException.notFound("Tarea sugerida no encontrada."));
+    if (!CoactivaTareaSugerida.SUGERIDA.equals(tarea.getEstado())) {
+      throw new ApiException(
+          HttpStatus.CONFLICT, "TAREA_YA_RESUELTA", "La tarea ya fue " + tarea.getEstado().toLowerCase(Locale.ROOT) + ".");
+    }
+    if (incorporar) {
+      tarea.incorporar();
+    } else {
+      tarea.descartar();
+    }
+    registrarEvento(
+        tenantId,
+        id,
+        incorporar ? "TAREA_INCORPORADA" : "TAREA_DESCARTADA",
+        tarea.getTitulo(),
+        tarea.getDescripcion(),
+        principal.userId());
+    return aTarea(tarea);
+  }
+
+  @Transactional
+  public ExpedienteDetalle confirmarEtapa(UUID id, ConfirmarEtapaRequest request) {
+    return cambiarEtapa(
+        id, new CambioEtapaRequest(request.etapaConfirmadaId(), request.observaciones(), false));
+  }
+
+  @Transactional
+  public List<ExpedienteDetalle> batchConfirmar(BatchConfirmarRequest request) {
+    for (var item : request.items()) {
+      CoactivaLoteEvidencia.exigir(item.evidencia().documentoOrigen(), item.evidencia().justificacionJuridica());
+    }
+    List<ExpedienteDetalle> confirmados = new ArrayList<>();
+    for (var item : request.items()) {
+      String nota =
+          item.observaciones() == null || item.observaciones().isBlank()
+              ? item.evidencia().justificacionJuridica()
+              : item.observaciones();
+      confirmados.add(cambiarEtapa(item.expedienteId(), new CambioEtapaRequest(item.etapaConfirmadaId(), nota, false)));
+    }
+    return confirmados;
+  }
+
+  private static TareaSugeridaItem aTarea(CoactivaTareaSugerida tarea) {
+    return new TareaSugeridaItem(
+        tarea.getId(),
+        tarea.getExpedienteId(),
+        tarea.getAnalisisId(),
+        tarea.getTitulo(),
+        tarea.getDescripcion(),
+        tarea.getPrioridad(),
+        tarea.getEstado(),
+        tarea.isOrigenIa(),
+        tarea.getCreadoEn());
   }
 
   @Transactional(readOnly = true)
@@ -556,7 +653,10 @@ public class CoactivaExpedienteService {
           ultimo.getCreatedAt(),
           acumulado.piezas(),
           acumulado.hitos(),
-          ultimo.getAnalisisPadreId());
+          ultimo.getAnalisisPadreId(),
+          null,
+          null,
+          List.of());
     }
     CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(ultimo.getResultado());
     CoactivaDiagnostico diag = parsed.diagnostico();
@@ -577,8 +677,12 @@ public class CoactivaExpedienteService {
           ultimo.getCreatedAt(),
           acumulado.piezas(),
           acumulado.hitos(),
-          ultimo.getAnalisisPadreId());
+          ultimo.getAnalisisPadreId(),
+          null,
+          null,
+          List.of());
     }
+    CoactivaDiagnosticoParser.Tentativa tentativa = diagnosticoParser.tentativaDe(diag.json());
     return new AnalisisResponse(
         expediente.getEstadoAnalisis(),
         ultimo.getId(),
@@ -596,7 +700,20 @@ public class CoactivaExpedienteService {
         ultimo.getCreatedAt(),
         acumulado.piezas(),
         acumulado.hitos(),
-        ultimo.getAnalisisPadreId());
+        ultimo.getAnalisisPadreId(),
+        new EtapaSugeridaIa(
+            tentativa.codigo(),
+            tentativa.nombre(),
+            tentativa.justificacion(),
+            new EvidenciaEtapa(
+                tentativa.documentoOrigen(),
+                tentativa.fojaPagina(),
+                tentativa.fechaDocumento(),
+                tentativa.extractoTexto())),
+        new SuficienciaDocumental(tentativa.estadoDiagnostico(), tentativa.requisitosFaltantes()),
+        tentativa.acciones().stream()
+            .map(a -> new AccionSugeridaIa(a.codigo(), a.titulo(), a.descripcion(), a.prioridad()))
+            .toList());
   }
 
   private static Acumulado acumulado(CoactivaAnalisis analisis) {
@@ -941,7 +1058,42 @@ public class CoactivaExpedienteService {
         permitidas,
         expediente.getCreatedAt(),
         expediente.getUpdatedAt(),
-        expediente.getRowVersion());
+        expediente.getRowVersion(),
+        completitudIa(tenantId, expediente.getId()),
+        expediente.getEtapaVerificada() == null ? "PENDIENTE_REVISION" : "VERIFICADO",
+        nombreVerificador(expediente.getEtapaConfirmadaPor()),
+        expediente.getEtapaConfirmadaAt(),
+        justificacionIa(tenantId, expediente.getId()));
+  }
+
+  private Integer completitudIa(UUID tenantId, UUID expedienteId) {
+    if (analisisRepo == null) {
+      return null;
+    }
+    return analisisRepo
+        .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+            tenantId, expedienteId, CoactivaAnalisis.ANALIZADO)
+        .map(CoactivaAnalisis::getPorcentajeCompletitud)
+        .map(Short::intValue)
+        .orElse(null);
+  }
+
+  private String justificacionIa(UUID tenantId, UUID expedienteId) {
+    if (analisisRepo == null || diagnosticoParser == null) {
+      return null;
+    }
+    return analisisRepo
+        .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+            tenantId, expedienteId, CoactivaAnalisis.ANALIZADO)
+        .map(a -> diagnosticoParser.tentativaDe(a.getResultado()).justificacion())
+        .orElse(null);
+  }
+
+  private String nombreVerificador(UUID userId) {
+    if (userId == null || usuarios == null) {
+      return null;
+    }
+    return usuarios.findById(userId).map(u -> u.getDisplayName()).orElse(userId.toString());
   }
 
   private void aplicarParticipante(

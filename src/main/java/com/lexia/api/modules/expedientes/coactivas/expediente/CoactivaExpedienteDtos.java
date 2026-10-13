@@ -1,8 +1,12 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -180,7 +184,12 @@ public final class CoactivaExpedienteDtos {
       List<String> etapasPermitidas,
       Instant createdAt,
       Instant updatedAt,
-      Long rowVersion) {}
+      Long rowVersion,
+      Integer completitudIa,
+      String estadoVerificacion,
+      String verificadoPorUsuario,
+      Instant fechaVerificacion,
+      String justificacionJuridica) {}
 
   public record CreateExpedienteRequest(
       @NotBlank @Size(max = 40) String nroJuicio,
@@ -220,6 +229,46 @@ public final class CoactivaExpedienteDtos {
 
   public record HitoAcumulado(String hito, Integer foja, String fechaHito, String origenArchivoId) {}
 
+  public record EvidenciaEtapa(
+      String documentoOrigen, Integer fojaPagina, String fechaDocumento, String extractoTexto) {}
+
+  public record EtapaSugeridaIa(
+      String codigo, String nombre, String justificacionJuridica, EvidenciaEtapa evidencia) {}
+
+  public record SuficienciaDocumental(String estadoDiagnostico, List<String> requisitosFaltantes) {}
+
+  public record AccionSugeridaIa(String codigoAccion, String titulo, String descripcion, String prioridad) {}
+
+  public record TareaSugeridaItem(
+      UUID id,
+      UUID expedienteId,
+      UUID analisisId,
+      String titulo,
+      String descripcion,
+      String prioridad,
+      String estado,
+      boolean origenIa,
+      Instant creadoEn) {}
+
+  public record ConfirmarEtapaRequest(
+      @JsonAlias("etapa_confirmada_id") @NotBlank @Size(max = 32) String etapaConfirmadaId,
+      @Size(max = 600) String observaciones) {}
+
+  public record EvidenciaLote(
+      @JsonAlias("documento_origen") @NotBlank @Size(max = 240) String documentoOrigen,
+      @JsonAlias("foja_pagina") Integer fojaPagina,
+      @JsonAlias("fecha_documento") @Size(max = 40) String fechaDocumento,
+      @JsonAlias("extracto_texto") @Size(max = 500) String extractoTexto,
+      @JsonAlias("justificacion_juridica") @NotBlank @Size(max = 600) String justificacionJuridica) {}
+
+  public record BatchConfirmarItem(
+      @JsonAlias("expediente_id") @NotNull UUID expedienteId,
+      @JsonAlias("etapa_confirmada_id") @NotBlank @Size(max = 32) String etapaConfirmadaId,
+      @Size(max = 600) String observaciones,
+      @NotNull @Valid EvidenciaLote evidencia) {}
+
+  public record BatchConfirmarRequest(@NotEmpty @Size(max = 50) @Valid List<BatchConfirmarItem> items) {}
+
   public record AnalisisResponse(
       String estadoAnalisis,
       UUID analisisId,
@@ -235,7 +284,10 @@ public final class CoactivaExpedienteDtos {
       Instant createdAt,
       List<DocumentoProcesado> documentosProcesados,
       List<HitoAcumulado> hitosAcumulados,
-      UUID analisisPadreId) {
+      UUID analisisPadreId,
+      EtapaSugeridaIa etapaSugerida,
+      SuficienciaDocumental suficienciaDocumental,
+      List<AccionSugeridaIa> accionesSugeridas) {
 
     public static AnalisisResponse enCurso(UUID archivoId) {
       return new AnalisisResponse(
@@ -253,7 +305,10 @@ public final class CoactivaExpedienteDtos {
           null,
           List.of(),
           List.of(),
-          null);
+          null,
+          null,
+          null,
+          List.of());
     }
 
     /** Expediente anterior al análisis: 200 con listas vacías, sin 404. */
@@ -273,7 +328,10 @@ public final class CoactivaExpedienteDtos {
           null,
           List.of(),
           List.of(),
-          null);
+          null,
+          null,
+          null,
+          List.of());
     }
   }
 

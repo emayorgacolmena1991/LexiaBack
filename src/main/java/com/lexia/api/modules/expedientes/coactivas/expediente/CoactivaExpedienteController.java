@@ -7,6 +7,9 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ConfirmarEtapaRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TareaSugeridaItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BandejaResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
@@ -189,6 +192,32 @@ public class CoactivaExpedienteController {
   @ResponseStatus(HttpStatus.CREATED)
   public ArchivoItem documentoUnificado(@PathVariable UUID id, @RequestPart("file") MultipartFile file) {
     return service.subirDocumentoUnificado(id, file);
+  }
+
+  @GetMapping("/expedientes/{id}/tareas-sugeridas")
+  public List<TareaSugeridaItem> tareasSugeridas(@PathVariable UUID id) {
+    return service.tareasSugeridas(id);
+  }
+
+  @PostMapping("/expedientes/{id}/tareas-sugeridas/{tareaId}/incorporar")
+  public TareaSugeridaItem incorporarTarea(@PathVariable UUID id, @PathVariable UUID tareaId) {
+    return service.incorporarTarea(id, tareaId);
+  }
+
+  @PostMapping("/expedientes/{id}/tareas-sugeridas/{tareaId}/descartar")
+  public TareaSugeridaItem descartarTarea(@PathVariable UUID id, @PathVariable UUID tareaId) {
+    return service.descartarTarea(id, tareaId);
+  }
+
+  @PostMapping("/expedientes/{id}/confirmar-etapa")
+  public ExpedienteDetalle confirmarEtapa(
+      @PathVariable UUID id, @Valid @RequestBody ConfirmarEtapaRequest request) {
+    return service.confirmarEtapa(id, request);
+  }
+
+  @PostMapping("/expedientes/batch-confirmar")
+  public List<ExpedienteDetalle> batchConfirmar(@Valid @RequestBody BatchConfirmarRequest request) {
+    return service.batchConfirmar(request);
   }
 
   @GetMapping("/expedientes/{id}/analisis")

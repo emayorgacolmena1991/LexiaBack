@@ -114,6 +114,12 @@ class CoactivaDiagnosticoParserTest {
     assertTrue(r.diagnostico().json().contains("Se decreta la retención de cuentas"));
     assertTrue(r.diagnostico().json().contains("AMARILLO"));
     assertTrue(r.diagnostico().json().contains("\"codigo\":\"MEDIDAS_CAUTELARES\""));
+    var tentativa = parser.tentativaDe(r.diagnostico().json());
+    assertEquals("MEDIDAS_CAUTELARES", tentativa.codigo());
+    assertEquals(3, tentativa.fojaPagina());
+    assertEquals("Se decreta la retención de cuentas", tentativa.extractoTexto());
+    assertEquals("AMARILLO", tentativa.estadoDiagnostico());
+    assertEquals("REQUERIR_LIQUIDACION", tentativa.acciones().get(0).codigo());
   }
 
   @Test

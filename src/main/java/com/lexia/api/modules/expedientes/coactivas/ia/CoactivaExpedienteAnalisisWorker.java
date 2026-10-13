@@ -8,6 +8,8 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaEvento;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaEventoRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteRepository;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaTareaSugerida;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaTareaSugeridaRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipante;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipanteRepository;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico.Documento;
@@ -62,6 +64,7 @@ public class CoactivaExpedienteAnalisisWorker {
   private final AnalisisDocumentoService analisis;
   private final CoactivaPromptCatalogRepository catalog;
   private final CoactivaDiagnosticoParser parser;
+  private final CoactivaTareaSugeridaRepository tareas;
   private final boolean dummy;
   private final TransactionTemplate tx;
 
@@ -76,6 +79,7 @@ public class CoactivaExpedienteAnalisisWorker {
       AnalisisDocumentoService analisis,
       CoactivaPromptCatalogRepository catalog,
       CoactivaDiagnosticoParser parser,
+      CoactivaTareaSugeridaRepository tareas,
       PlatformTransactionManager txManager,
       @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy) {
     this.archivos = archivos;
@@ -88,6 +92,7 @@ public class CoactivaExpedienteAnalisisWorker {
     this.analisis = analisis;
     this.catalog = catalog;
     this.parser = parser;
+    this.tareas = tareas;
     this.dummy = dummy;
     this.tx = new TransactionTemplate(txManager);
   }
@@ -202,17 +207,21 @@ public class CoactivaExpedienteAnalisisWorker {
                   archivo.getNombreOriginal(),
                   tipoPieza(diag),
                   diag);
-          analisisRepo.save(
-              CoactivaAnalisis.consolidado(
-                  tenantId,
-                  archivo.getExpedienteId(),
-                  archivoId,
-                  resultado.promptId(),
-                  resultado.etapa(),
-                  fusion.json(),
-                  fusion.porcentaje(),
-                  diag.etapaNormalizada() != null ? diag.etapaNormalizada() : fusion.etapa(),
-                  previo == null ? null : previo.id()));
+          CoactivaAnalisis guardado =
+              analisisRepo.save(
+                  CoactivaAnalisis.consolidado(
+                      tenantId,
+                      archivo.getExpedienteId(),
+                      archivoId,
+                      resultado.promptId(),
+                      resultado.etapa(),
+                      fusion.json(),
+                      fusion.porcentaje(),
+                      diag.etapaNormalizada() != null ? diag.etapaNormalizada() : fusion.etapa(),
+                      previo == null ? null : previo.id()));
+          if (vigente) {
+            poblarTareas(tenantId, archivo.getExpedienteId(), guardado.getId(), fusion.json());
+          }
           archivo.registrarResultadoIa(
               CoactivaArchivo.IA_APROBADO, null, diag.porcentajeCompletitud(), checklist(diag.documentos()));
           if (vigente) {
@@ -231,6 +240,15 @@ public class CoactivaExpedienteAnalisisWorker {
                     archivoId));
           }
         });
+  }
+
+  private void poblarTareas(UUID tenantId, UUID expedienteId, UUID analisisId, String json) {
+    tareas.deleteByTenantIdAndExpedienteIdAndEstado(tenantId, expedienteId, CoactivaTareaSugerida.SUGERIDA);
+    for (var accion : parser.tentativaDe(json).acciones()) {
+      tareas.save(
+          CoactivaTareaSugerida.nueva(
+              tenantId, expedienteId, analisisId, accion.titulo(), accion.descripcion(), accion.prioridad()));
+    }
   }
 
   private CoactivaArchivo cargarArchivo(UUID tenantId, UUID archivoId) {

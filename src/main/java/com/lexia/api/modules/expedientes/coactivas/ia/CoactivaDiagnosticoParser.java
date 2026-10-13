@@ -366,6 +366,73 @@ public final class CoactivaDiagnosticoParser {
     return datos;
   }
 
+  public Tentativa tentativaDe(String json) {
+    if (!StringUtils.hasText(json)) {
+      return Tentativa.vacia();
+    }
+    try {
+      JsonNode root = objectMapper.readTree(json);
+      if (root == null || !root.isObject()) {
+        return Tentativa.vacia();
+      }
+      JsonNode etapa = objeto(root, "etapa_sugerida");
+      JsonNode ev = etapa == null ? null : objeto(etapa, "evidencia");
+      JsonNode suf = objeto(root, "suficiencia_documental");
+      List<Tentativa.Accion> acciones = new ArrayList<>();
+      JsonNode arr = root.get("acciones_sugeridas");
+      if (arr != null && arr.isArray()) {
+        for (JsonNode item : arr) {
+          if (!item.isObject()) {
+            continue;
+          }
+          String codigo = texto(item, "codigo_accion", "codigo");
+          String titulo = texto(item, "titulo");
+          if (!StringUtils.hasText(codigo) && !StringUtils.hasText(titulo)) {
+            continue;
+          }
+          acciones.add(
+              new Tentativa.Accion(
+                  StringUtils.hasText(codigo) ? codigo : "ACCION",
+                  StringUtils.hasText(titulo) ? titulo : codigo,
+                  texto(item, "descripcion"),
+                  texto(item, "prioridad")));
+        }
+      }
+      return new Tentativa(
+          etapa == null ? null : texto(etapa, "codigo"),
+          etapa == null ? null : texto(etapa, "nombre"),
+          etapa == null ? null : texto(etapa, "justificacion_juridica", "justificacionJuridica"),
+          ev == null ? null : texto(ev, "documento_origen", "documentoOrigen"),
+          ev == null ? null : foja(ev, "foja_pagina", "fojaPagina"),
+          ev == null ? null : texto(ev, "fecha_documento", "fechaDocumento"),
+          ev == null ? null : texto(ev, "extracto_texto", "extractoTexto"),
+          suf == null ? null : texto(suf, "estado_diagnostico", "estadoDiagnostico"),
+          suf == null ? List.of() : textos(suf, "requisitos_faltantes", "requisitosFaltantes"),
+          acciones);
+    } catch (Exception e) {
+      return Tentativa.vacia();
+    }
+  }
+
+  public record Tentativa(
+      String codigo,
+      String nombre,
+      String justificacion,
+      String documentoOrigen,
+      Integer fojaPagina,
+      String fechaDocumento,
+      String extractoTexto,
+      String estadoDiagnostico,
+      List<String> requisitosFaltantes,
+      List<Accion> acciones) {
+
+    public static Tentativa vacia() {
+      return new Tentativa(null, null, null, null, null, null, null, null, List.of(), List.of());
+    }
+
+    public record Accion(String codigo, String titulo, String descripcion, String prioridad) {}
+  }
+
   private static String texto(JsonNode root, String... keys) {
     for (String key : keys) {
       JsonNode n = root.get(key);
