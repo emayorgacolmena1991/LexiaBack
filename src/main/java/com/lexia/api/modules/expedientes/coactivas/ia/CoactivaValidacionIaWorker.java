@@ -144,17 +144,17 @@ public class CoactivaValidacionIaWorker {
             etapa,
             fusion.json(),
             fusion.porcentaje(),
-            fusion.etapa() == null ? etapa : fusion.etapa(),
+            fusion.etapa(),
             previo == null ? null : previo.getId()));
   }
 
   private CoactivaIaResultado analizar(CoactivaArchivo archivo) {
-    if (dummy || !analisis.isConfigured()) {
-      LOG.info(
-          "Validación IA dummy archivo={} llmConfigured={}",
-          archivo.getId(),
-          analisis.isConfigured());
+    if (dummy) {
+      LOG.info("Validación IA dummy archivo={}", archivo.getId());
       return dummyResultado();
+    }
+    if (!analisis.isConfigured()) {
+      return CoactivaIaResultado.error("No hay un proveedor de IA configurado para validar el documento.");
     }
     LOG.info("Paso 1 OCR Azure archivo={}", archivo.getId());
     TextoOcr extraido =

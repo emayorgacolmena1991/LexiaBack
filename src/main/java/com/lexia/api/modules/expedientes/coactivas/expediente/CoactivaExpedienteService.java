@@ -636,58 +636,43 @@ public class CoactivaExpedienteService {
     if (ultimo == null) {
       return AnalisisResponse.sinDiagnostico(expediente.getEstadoAnalisis());
     }
-    if (CoactivaAnalisis.ERROR.equals(ultimo.getEstado())) {
-      Acumulado acumulado = acumulado(ultimo);
-      return new AnalisisResponse(
-          expediente.getEstadoAnalisis(),
-          ultimo.getId(),
-          ultimo.getArchivoId(),
-          ultimo.getEtapa(),
-          null,
-          null,
-          List.of(),
-          List.of(),
-          Map.of(),
-          null,
-          ultimo.getError(),
-          ultimo.getCreatedAt(),
-          acumulado.piezas(),
-          acumulado.hitos(),
-          ultimo.getAnalisisPadreId(),
-          null,
-          null,
-          List.of());
+    // Un intento fallido (p. ej. PDF ausente en este servidor) no borra el último diagnóstico válido:
+    // se devuelve ese diagnóstico y el motivo del intento en el campo error.
+    boolean fallo = CoactivaAnalisis.ERROR.equals(ultimo.getEstado());
+    CoactivaAnalisis vigente =
+        fallo
+            ? analisisRepo
+                .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+                    tenantId, expedienteId, CoactivaAnalisis.ANALIZADO)
+                .orElse(null)
+            : ultimo;
+    if (vigente == null) {
+      return sinTentativa(expediente, ultimo, ultimo.getError());
     }
-    CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(ultimo.getResultado());
+    CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(vigente.getResultado());
     CoactivaDiagnostico diag = parsed.diagnostico();
-    Acumulado acumulado = acumulado(ultimo);
     if (diag == null) {
-      return new AnalisisResponse(
-          expediente.getEstadoAnalisis(),
-          ultimo.getId(),
-          ultimo.getArchivoId(),
-          ultimo.getEtapa(),
-          null,
-          ultimo.getEtapaDetectada(),
-          List.of(),
-          List.of(),
-          Map.of(),
-          null,
-          parsed.error(),
-          ultimo.getCreatedAt(),
-          acumulado.piezas(),
-          acumulado.hitos(),
-          ultimo.getAnalisisPadreId(),
-          null,
-          null,
-          List.of());
+      return sinTentativa(expediente, vigente, parsed.error());
     }
+    Acumulado acumulado = acumulado(vigente);
     CoactivaDiagnosticoParser.Tentativa tentativa = diagnosticoParser.tentativaDe(diag.json());
+    boolean indeterminada =
+        diag.etapaNormalizada() == null && (tentativa.codigo() != null || diag.etapaDetectada() != null);
+    String estadoEtapa =
+        indeterminada
+            ? AnalisisResponse.ETAPA_INDETERMINADA
+            : diag.etapaNormalizada() == null
+                ? AnalisisResponse.ETAPA_SIN_DIAGNOSTICO
+                : tentativa.justificacion() != null
+                    ? AnalisisResponse.ETAPA_SUGERIDA
+                    : AnalisisResponse.ETAPA_ANTIGUO;
+    boolean sugerida = AnalisisResponse.ETAPA_SUGERIDA.equals(estadoEtapa);
+    CoactivaArchivo fuente = fuenteDeLaTentativa(tenantId, vigente, tentativa);
     return new AnalisisResponse(
         expediente.getEstadoAnalisis(),
-        ultimo.getId(),
-        ultimo.getArchivoId(),
-        ultimo.getEtapa(),
+        vigente.getId(),
+        vigente.getArchivoId(),
+        vigente.getEtapa(),
         diag.porcentajeCompletitud(),
         diag.etapaNormalizada() != null ? diag.etapaNormalizada() : diag.etapaDetectada(),
         diag.documentos().stream()
@@ -696,24 +681,84 @@ public class CoactivaExpedienteService {
         diag.alertas(),
         diag.datosExtraidos(),
         diag.siguienteAccion(),
-        null,
-        ultimo.getCreatedAt(),
+        fallo ? ultimo.getError() : null,
+        vigente.getCreatedAt(),
         acumulado.piezas(),
         acumulado.hitos(),
-        ultimo.getAnalisisPadreId(),
+        vigente.getAnalisisPadreId(),
         new EtapaSugeridaIa(
-            tentativa.codigo(),
-            tentativa.nombre(),
-            tentativa.justificacion(),
+            sugerida ? tentativa.codigo() : null,
+            sugerida ? tentativa.nombre() : null,
+            sugerida || indeterminada ? tentativa.justificacion() : null,
             new EvidenciaEtapa(
                 tentativa.documentoOrigen(),
                 tentativa.fojaPagina(),
                 tentativa.fechaDocumento(),
-                tentativa.extractoTexto())),
+                tentativa.extractoTexto()),
+            tentativa.evidencias().stream()
+                .map(e -> new EvidenciaEtapa(e.documentoOrigen(), e.fojaPagina(), e.fechaDocumento(), e.extractoTexto()))
+                .toList(),
+            indeterminada,
+            fuente == null ? null : fuente.getId(),
+            fuente == null ? tentativa.archivoNombre() : fuente.getNombreOriginal(),
+            fuente != null && storage != null && storage.disponible(fuente)),
         new SuficienciaDocumental(tentativa.estadoDiagnostico(), tentativa.requisitosFaltantes()),
         tentativa.acciones().stream()
             .map(a -> new AccionSugeridaIa(a.codigo(), a.titulo(), a.descripcion(), a.prioridad()))
-            .toList());
+            .toList(),
+        estadoEtapa);
+  }
+
+  private AnalisisResponse sinTentativa(CoactivaExpediente expediente, CoactivaAnalisis fila, String error) {
+    Acumulado acumulado = acumulado(fila);
+    return new AnalisisResponse(
+        expediente.getEstadoAnalisis(),
+        fila.getId(),
+        fila.getArchivoId(),
+        fila.getEtapa(),
+        null,
+        null,
+        List.of(),
+        List.of(),
+        Map.of(),
+        null,
+        error,
+        fila.getCreatedAt(),
+        acumulado.piezas(),
+        acumulado.hitos(),
+        fila.getAnalisisPadreId(),
+        null,
+        null,
+        List.of(),
+        AnalisisResponse.ETAPA_FALLIDO);
+  }
+
+  /**
+   * PDF del que salió la evidencia de la etapa. Los diagnósticos nuevos lo traen en la tentativa;
+   * en los anteriores, una validación de pieza suelta crea una fila nueva con otro archivo, así que
+   * se sube por {@code analisis_padre_id} hasta la fila de un expediente escaneado/unificado.
+   */
+  private CoactivaArchivo fuenteDeLaTentativa(
+      UUID tenantId, CoactivaAnalisis vigente, CoactivaDiagnosticoParser.Tentativa tentativa) {
+    if (tentativa.archivoId() != null) {
+      try {
+        return archivos
+            .findByIdAndTenantIdAndDeletedAtIsNull(UUID.fromString(tentativa.archivoId()), tenantId)
+            .orElse(null);
+      } catch (IllegalArgumentException ignored) {
+        // archivo_id ilegible: se busca por la cadena de análisis.
+      }
+    }
+    CoactivaAnalisis fila = vigente;
+    for (int i = 0; fila != null && i < 50; i++) {
+      CoactivaArchivo archivo =
+          archivos.findByIdAndTenantIdAndDeletedAtIsNull(fila.getArchivoId(), tenantId).orElse(null);
+      if (archivo != null && CoactivaArchivo.esExpedienteUnificado(archivo.getTipo())) {
+        return archivo;
+      }
+      fila = fila.getAnalisisPadreId() == null ? null : analisisRepo.findById(fila.getAnalisisPadreId()).orElse(null);
+    }
+    return null;
   }
 
   private static Acumulado acumulado(CoactivaAnalisis analisis) {

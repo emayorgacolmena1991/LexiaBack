@@ -120,6 +120,28 @@ class CoactivaDiagnosticoParserTest {
     assertEquals("Se decreta la retención de cuentas", tentativa.extractoTexto());
     assertEquals("AMARILLO", tentativa.estadoDiagnostico());
     assertEquals("REQUERIR_LIQUIDACION", tentativa.acciones().get(0).codigo());
+    assertEquals(1, tentativa.evidencias().size());
+    assertEquals("Providencia_0901-2024-00452.pdf", tentativa.evidencias().get(0).documentoOrigen());
+  }
+
+  @Test
+  void indeterminadaNoNormalizaYConservaEvidencias() {
+    Parse r =
+        parser.parse(
+            """
+            {"etapa_sugerida": {
+               "codigo": "INDETERMINADA",
+               "justificacion_juridica": "No consta providencia ni razón de notificación.",
+               "evidencias": [
+                 {"documento_origen": "Pagaré", "foja_pagina": 1, "extracto_texto": "Pagaré a la orden"},
+                 {"documento_origen": null, "extracto_texto": null}
+               ]}}
+            """);
+    assertTrue(r.ok());
+    assertNull(r.diagnostico().etapaNormalizada());
+    var tentativa = parser.tentativaDe(r.diagnostico().json());
+    assertEquals(1, tentativa.evidencias().size());
+    assertEquals(1, tentativa.evidencias().get(0).fojaPagina());
   }
 
   @Test

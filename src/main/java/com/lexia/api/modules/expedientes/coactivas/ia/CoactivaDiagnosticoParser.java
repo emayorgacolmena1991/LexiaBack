@@ -24,6 +24,10 @@ public final class CoactivaDiagnosticoParser {
       TENTATIVA DE ETAPA. El mensaje de usuario es el OCR consolidado del PDF único (marcas --- FOJA n ---).
       La etapa del contexto es la reportada por el banco. etapa_sugerida se decide solo con el OCR y estas reglas.
       Gana el hito más avanzado que tenga extracto literal y foja. Sin esa evidencia, no avances.
+      Decide por actuaciones con fecha, no por palabras sueltas. Distingue solicitada, ordenada, notificada, ejecutada y levantada:
+      una solicitud o un borrador no prueba la etapa; una orden sin razón de notificación no prueba la notificación;
+      una medida levantada no sostiene Medidas cautelares. Si se contradicen, gana la actuación posterior por fecha.
+      Si ningún hito tiene extracto literal en el OCR, la etapa es INDETERMINADA. No uses la etapa del banco para rellenar.
       Citación válida: 1 notificación personal, o 2 boletas por persona, o correo fijado.
       Liquidación usada en providencia: alerta si pasaron más de 3 días desde su emisión.
       - PREVIA: pagaré a la orden, aviso de vencimiento, liquidación previa u orden de cobro con número de operación.
@@ -45,20 +49,28 @@ public final class CoactivaDiagnosticoParser {
 
       Responde ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto adicional.
       etapa_sugerida es la tentativa. etapa_procesal_detectada debe ser igual a etapa_sugerida.codigo.
-      Códigos: PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO.
-      evidencia.extracto_texto es cita literal del OCR. Si no hay foja o fecha, usa null.
+      Códigos: PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO|INDETERMINADA.
+      justificacion_juridica: una o dos frases, máximo 300 caracteres, con la forma
+      "El expediente se encuentra en <etapa> porque se identificó <actuación> de <fecha>". Solo hechos del OCR.
+      Nunca justifiques con acciones pendientes, recomendaciones ni faltantes (eso va en acciones_sugeridas).
+      evidencia es el documento principal; evidencias lista hasta 3 documentos que respaldan la etapa, el principal primero.
+      documento_origen es el nombre o título del documento tal como consta. extracto_texto es cita literal del OCR.
+      Si no hay foja o fecha, usa null. Con INDETERMINADA: nombre null, evidencia null, evidencias [] y la justificación dice qué falta para decidir.
       {"porcentaje_completitud": 0,
        "etapa_procesal_detectada": "MEDIDAS_CAUTELARES",
        "etapa_sugerida": {
          "codigo": "MEDIDAS_CAUTELARES",
          "nombre": "Medidas cautelares",
-         "justificacion_juridica": "por qué esta etapa y no la anterior",
+         "justificacion_juridica": "El expediente se encuentra en Medidas cautelares porque se identificó una providencia que dispone la retención de valores del deudor.",
          "evidencia": {
-           "documento_origen": "nombre del PDF",
+           "documento_origen": "Providencia de medidas cautelares",
            "foja_pagina": 3,
            "fecha_documento": "2026-09-28",
            "extracto_texto": "cita literal corta"
-         }
+         },
+         "evidencias": [
+           {"documento_origen": "Providencia de medidas cautelares", "foja_pagina": 3, "fecha_documento": "2026-09-28", "extracto_texto": "cita literal corta"}
+         ]
        },
        "suficiencia_documental": {
          "porcentaje_completitud": 0,
@@ -408,10 +420,41 @@ public final class CoactivaDiagnosticoParser {
           ev == null ? null : texto(ev, "extracto_texto", "extractoTexto"),
           suf == null ? null : texto(suf, "estado_diagnostico", "estadoDiagnostico"),
           suf == null ? List.of() : textos(suf, "requisitos_faltantes", "requisitosFaltantes"),
-          acciones);
+          acciones,
+          evidencias(etapa, ev),
+          etapa == null ? null : texto(etapa, "archivo_id"),
+          etapa == null ? null : texto(etapa, "archivo_nombre"));
     } catch (Exception e) {
       return Tentativa.vacia();
     }
+  }
+
+  /** Lista {@code evidencias}; los diagnósticos anteriores solo traen {@code evidencia}. */
+  private static List<Tentativa.Evidencia> evidencias(JsonNode etapa, JsonNode principal) {
+    List<Tentativa.Evidencia> items = new ArrayList<>();
+    JsonNode arr = etapa == null ? null : etapa.get("evidencias");
+    if (arr != null && arr.isArray()) {
+      for (JsonNode item : arr) {
+        if (item.isObject()) {
+          agregarEvidencia(items, item);
+        }
+      }
+    }
+    if (items.isEmpty() && principal != null) {
+      agregarEvidencia(items, principal);
+    }
+    return items;
+  }
+
+  private static void agregarEvidencia(List<Tentativa.Evidencia> items, JsonNode n) {
+    String documento = texto(n, "documento_origen", "documentoOrigen");
+    String extracto = texto(n, "extracto_texto", "extractoTexto");
+    if (!StringUtils.hasText(documento) && !StringUtils.hasText(extracto)) {
+      return;
+    }
+    items.add(
+        new Tentativa.Evidencia(
+            documento, foja(n, "foja_pagina", "fojaPagina"), texto(n, "fecha_documento", "fechaDocumento"), extracto));
   }
 
   public record Tentativa(
@@ -424,13 +467,19 @@ public final class CoactivaDiagnosticoParser {
       String extractoTexto,
       String estadoDiagnostico,
       List<String> requisitosFaltantes,
-      List<Accion> acciones) {
+      List<Accion> acciones,
+      List<Evidencia> evidencias,
+      String archivoId,
+      String archivoNombre) {
 
     public static Tentativa vacia() {
-      return new Tentativa(null, null, null, null, null, null, null, null, List.of(), List.of());
+      return new Tentativa(
+          null, null, null, null, null, null, null, null, List.of(), List.of(), List.of(), null, null);
     }
 
     public record Accion(String codigo, String titulo, String descripcion, String prioridad) {}
+
+    public record Evidencia(String documentoOrigen, Integer fojaPagina, String fechaDocumento, String extractoTexto) {}
   }
 
   private static String texto(JsonNode root, String... keys) {

@@ -55,11 +55,16 @@ public final class CoactivaDiagnosticoMerge {
             nuevo == null ? Map.of() : nuevo.datosExtraidos(),
             nuevo == null ? null : nuevo.etapaNormalizada() != null ? nuevo.etapaNormalizada() : nuevo.etapaDetectada(),
             nuevo == null ? null : nuevo.siguienteAccion());
-    return adjuntarTentativa(fusion, nuevo == null ? null : nuevo.json());
+    return adjuntarTentativa(fusion, nuevo == null ? null : nuevo.json(), archivoId, nombreArchivo);
   }
 
-  /** Conserva la tentativa (evidencia, suficiencia, acciones) que el merge de hitos no reconstruye. */
-  private static Fusion adjuntarTentativa(Fusion fusion, String diagnosticoJson) {
+  /**
+   * Conserva la tentativa (evidencia, suficiencia, acciones) que el merge de hitos no reconstruye.
+   * Con {@code archivoId}, la tentativa es nueva y queda ligada al PDF del que salió su evidencia;
+   * sin él, se copia tal cual (incluido el archivo fuente que ya traía).
+   */
+  private static Fusion adjuntarTentativa(
+      Fusion fusion, String diagnosticoJson, UUID archivoId, String nombreArchivo) {
     JsonNode extra = leer(diagnosticoJson);
     JsonNode root = leer(fusion.json());
     if (extra == null || root == null || !root.isObject()) {
@@ -70,9 +75,13 @@ public final class CoactivaDiagnosticoMerge {
     for (String key : List.of("etapa_sugerida", "suficiencia_documental", "acciones_sugeridas")) {
       JsonNode n = extra.get(key);
       if (n != null && !n.isNull() && !n.isMissingNode()) {
-        obj.set(key, n);
+        obj.set(key, n.deepCopy());
         cambio = true;
       }
+    }
+    if (archivoId != null && obj.get("etapa_sugerida") instanceof ObjectNode etapa) {
+      etapa.put("archivo_id", archivoId.toString());
+      etapa.put("archivo_nombre", nombreArchivo);
     }
     if (!cambio) {
       return fusion;
@@ -103,16 +112,20 @@ public final class CoactivaDiagnosticoMerge {
     }
     List<String> alertas =
         "RECHAZADO".equals(estadoIa) ? List.of("Pieza rechazada por la IA: " + nombreArchivo) : List.of();
-    return fusionar(
+    return adjuntarTentativa(
+        fusionar(
+            previoJson,
+            previoArchivoId,
+            previoFecha,
+            archivoId,
+            nombreArchivo,
+            tipo,
+            docs,
+            alertas,
+            Map.of(),
+            null,
+            null),
         previoJson,
-        previoArchivoId,
-        previoFecha,
-        archivoId,
-        nombreArchivo,
-        tipo,
-        docs,
-        alertas,
-        Map.of(),
         null,
         null);
   }

@@ -144,12 +144,15 @@ public class CoactivaExpedienteAnalisisWorker {
         contextualizar(prompt == null ? PROMPT_FALLBACK : prompt.getSystemPrompt(), ctx)
             + variablesDeEtapa(ctx.etapa());
     Long promptId = prompt == null ? null : prompt.getId();
-    if (dummy || !analisis.isConfigured()) {
-      LOG.info("Diagnóstico dummy archivo={} llmConfigured={}", archivo.getId(), analisis.isConfigured());
-      Parse parsed = parser.parse(dummyJson(ctx));
+    if (dummy) {
+      LOG.info("Diagnóstico dummy archivo={}", archivo.getId());
+      Parse parsed = parser.parse(DUMMY_JSON);
       return parsed.ok()
           ? Resultado.ok(ctx.etapa(), promptId, parsed.diagnostico())
           : Resultado.error(ctx.etapa(), promptId, parsed.error());
+    }
+    if (!analisis.isConfigured()) {
+      return Resultado.error(ctx.etapa(), promptId, "No hay un proveedor de IA configurado para diagnosticar.");
     }
     LOG.info("Paso 1 OCR Azure expediente archivo={}", archivo.getId());
     CoactivaPdfTexto.TextoOcr extraido =
@@ -239,9 +242,7 @@ public class CoactivaExpedienteAnalisisWorker {
               CoactivaArchivo.IA_APROBADO, null, diag.porcentajeCompletitud(), checklist(diag.documentos()));
           if (vigente) {
             expediente.marcarAnalizado();
-            if (diag.etapaNormalizada() != null) {
-              expediente.setEtapaSugeridaIa(diag.etapaNormalizada());
-            }
+            expediente.setEtapaSugeridaIa(diag.etapaNormalizada());
             eventos.save(
                 CoactivaEvento.create(
                     tenantId,
@@ -392,24 +393,18 @@ public class CoactivaExpedienteAnalisisWorker {
     return sb.append(']').toString();
   }
 
-  private static String dummyJson(Contexto ctx) {
-    return """
-        {"porcentaje_completitud": 40,
-         "etapa_procesal_detectada": "%s",
-         "documentos_identificados": [
-           {"tipo": "PAGARE", "foja_inicio": 1, "foja_fin": 3, "presente": true},
-           {"tipo": "LIQUIDACION_ACTUALIZADA", "presente": false}
-         ],
-         "alertas_inconsistencias": ["Diagnóstico de prueba: LLM no configurado."],
-         "datos_extraidos": {"juicio": "%s", "operacion": "%s", "deudor": "%s", "monto_mora": null},
-         "siguiente_accion_sugerida": "Revisar el PDF cuando el LLM esté configurado."}
-        """
-        .formatted(ctx.etapa(), escape(ctx.juicio()), escape(ctx.operacion()), escape(ctx.deudor()));
-  }
-
-  private static String escape(String s) {
-    return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
-  }
+  /** Solo con {@code lexia.coactivas.ia.dummy=true}: no propone etapa ni copia la del banco. */
+  private static final String DUMMY_JSON =
+      """
+      {"porcentaje_completitud": 0,
+       "etapa_procesal_detectada": "INDETERMINADA",
+       "etapa_sugerida": {"codigo": "INDETERMINADA", "nombre": null,
+         "justificacion_juridica": "Diagnóstico de prueba: no se leyó el OCR.", "evidencia": null, "evidencias": []},
+       "documentos_identificados": [],
+       "alertas_inconsistencias": ["Diagnóstico de prueba: LLM desactivado."],
+       "datos_extraidos": {},
+       "siguiente_accion_sugerida": null}
+      """;
 
   private static String nulo(String s) {
     return s == null ? "" : s;
