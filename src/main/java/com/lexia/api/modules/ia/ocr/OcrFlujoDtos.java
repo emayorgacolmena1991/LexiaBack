@@ -34,7 +34,9 @@ public final class OcrFlujoDtos {
       String mensaje,
       Double confianza,
       String textoExtraido,
-      String estado) {}
+      String estado,
+      String origen,
+      Integer duracionMs) {}
 
   public record ReuploadResponse(
       String fileId,

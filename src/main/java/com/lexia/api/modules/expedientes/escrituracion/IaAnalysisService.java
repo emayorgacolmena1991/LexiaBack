@@ -14,6 +14,8 @@ import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService;
+import com.lexia.api.modules.ia.llm.IaConsumoContexto;
+import com.lexia.api.modules.ia.ocr.OcrTextSanitizerService;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService.Ejecucion;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.DatosExtraidos;
@@ -67,6 +69,7 @@ public class IaAnalysisService {
   private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
   private final ObjectMapper objectMapper;
+  private final OcrTextSanitizerService sanitizer;
 
   public IaAnalysisService(
       LegalCaseRepository legalCases,
@@ -80,7 +83,8 @@ public class IaAnalysisService {
       ExpedienteCompletoLlmService llm,
       DocumentosExtraidosStore documentos,
       AuthorizationService authorization,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      OcrTextSanitizerService sanitizer) {
     this.legalCases = legalCases;
     this.borradores = borradores;
     this.writingFiles = writingFiles;
@@ -93,6 +97,7 @@ public class IaAnalysisService {
     this.documentos = documentos;
     this.authorization = authorization;
     this.objectMapper = objectMapper;
+    this.sanitizer = sanitizer;
   }
 
   @Transactional
@@ -154,9 +159,16 @@ public class IaAnalysisService {
 
     String canton = legalCase != null ? resolveCanton(writingFile) : cantonOf(borrador);
     String ocrText =
-        loadOcrMarcado(
-            expedienteId, legalCase == null ? null : legalCase.getCode(), request);
-    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
+        sanitizer.limpiar(
+            loadOcrMarcado(
+                expedienteId, legalCase == null ? null : legalCase.getCode(), request));
+    IaConsumoContexto.setExpediente(expedienteId);
+    Ejecucion ejecucion;
+    try {
+      ejecucion = llm.ejecutar(ocrText, productCode, canton);
+    } finally {
+      IaConsumoContexto.clear();
+    }
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
       throw ApiException.badRequest(

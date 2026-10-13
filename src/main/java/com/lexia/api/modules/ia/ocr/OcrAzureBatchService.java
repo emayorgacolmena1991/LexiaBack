@@ -40,16 +40,22 @@ public class OcrAzureBatchService {
   private final CargaDocumentoService cargaDocumentoService;
   private final OcrSessionCacheService cache;
   private final Executor ocrExecutor;
+  private final PdfTextoNativo pdfNativo;
+  private final DocumentoCacheStore documentoCache;
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
       CargaDocumentoService cargaDocumentoService,
       OcrSessionCacheService cache,
-      @Qualifier("ocrExecutor") Executor ocrExecutor) {
+      @Qualifier("ocrExecutor") Executor ocrExecutor,
+      PdfTextoNativo pdfNativo,
+      DocumentoCacheStore documentoCache) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
     this.ocrExecutor = ocrExecutor;
+    this.pdfNativo = pdfNativo;
+    this.documentoCache = documentoCache;
   }
 
   public AnalyzeBatchResponse analyzeBatch(AnalyzeBatchRequest request) {
@@ -161,12 +167,6 @@ public class OcrAzureBatchService {
     if (!StringUtils.hasText(request.fileId())) {
       throw ApiException.badRequest("fileId requerido.");
     }
-    if (!layoutService.isConfigured()) {
-      throw new ApiException(
-          HttpStatus.SERVICE_UNAVAILABLE,
-          "AZURE_NOT_CONFIGURED",
-          "Azure Document Intelligence no configurado.");
-    }
 
     String sessionId = request.sessionId().trim();
     String fileId = request.fileId().trim();
@@ -183,9 +183,34 @@ public class OcrAzureBatchService {
             ? stored.codigoTipoDocumento()
             : (tipo == null ? "DOCUMENTO" : tipo);
 
+    long inicio = System.nanoTime();
+    String hash = stored.bytes() == null ? null : DocumentoCacheStore.sha256(stored.bytes());
+    var cacheado = hash == null ? java.util.Optional.<DocumentoCacheStore.Hit>empty() : documentoCache.buscar(hash, DocumentoCacheStore.VERSION_OCR);
+    if (cacheado.isPresent() && StringUtils.hasText(cacheado.get().textoOcr())) {
+      return respuestaDe(fileId, stored.nombreOriginal(), tipoFinal, true, "Recuperado de caché.", 0.99,
+          cacheado.get().textoOcr(), "LEGIBLE", "CACHE", ms(inicio));
+    }
+    var nativo = pdfNativo.extraerSiDenso(stored.bytes());
+    if (nativo.isPresent()) {
+      if (hash != null) {
+        documentoCache.guardar(hash, DocumentoCacheStore.VERSION_OCR, "PDF_NATIVO", nativo.get(), null);
+      }
+      return respuestaDe(fileId, stored.nombreOriginal(), tipoFinal, true, "PDF con texto nativo.", 0.95,
+          nativo.get(), "LEGIBLE", "PDF_NATIVO", ms(inicio));
+    }
+
+    if (!layoutService.isConfigured()) {
+      throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "AZURE_NOT_CONFIGURED",
+          "Azure Document Intelligence no configurado.");
+    }
     AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal);
     String estado = item.legible() ? "LEGIBLE" : "REVISAR";
-    return new AnalyzeSingleResponse(
+    if (hash != null && StringUtils.hasText(item.textoExtraido())) {
+      documentoCache.guardar(hash, DocumentoCacheStore.VERSION_OCR, "AZURE", item.textoExtraido(), null);
+    }
+    return respuestaDe(
         item.fileId(),
         stored.nombreOriginal(),
         item.tipoDocumento(),
@@ -193,7 +218,27 @@ public class OcrAzureBatchService {
         item.motivo(),
         item.scoreConfianza(),
         item.textoExtraido(),
-        estado);
+        estado,
+        "AZURE",
+        ms(inicio));
+  }
+
+  private static int ms(long inicioNano) {
+    return (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - inicioNano) / 1_000_000L);
+  }
+
+  private static AnalyzeSingleResponse respuestaDe(
+      String fileId,
+      String fileName,
+      String tipo,
+      boolean legible,
+      String mensaje,
+      double confianza,
+      String texto,
+      String estado,
+      String origen,
+      int duracionMs) {
+    return new AnalyzeSingleResponse(fileId, fileName, tipo, legible, mensaje, confianza, texto, estado, origen, duracionMs);
   }
 
   public ReuploadResponse reupload(

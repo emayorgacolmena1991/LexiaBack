@@ -10,6 +10,7 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.IaConsumoLog;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
@@ -62,19 +63,38 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
   private final String apiKey;
   private final ObjectMapper objectMapper;
   private final ActoVariableCatalog actos;
+  private final IaConsumoLog consumo;
+  private final ThreadLocal<List<String>> modelosForzados = new ThreadLocal<>();
 
   public GeminiAnalysisService(
       @Value("${gemini.api.key:}") String apiKey,
       ObjectMapper objectMapper,
-      ActoVariableCatalog actos) {
+      ActoVariableCatalog actos,
+      IaConsumoLog consumo) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.objectMapper = objectMapper;
     this.actos = actos;
+    this.consumo = consumo;
   }
 
   @Override
   public boolean isConfigured() {
     return StringUtils.hasText(apiKey);
+  }
+
+  @Override
+  public ExtraccionExpedienteCompleto procesarCotejo(String ocrMarcado, String systemPrompt) {
+    return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
+  }
+
+  @Override
+  public ExtraccionExpedienteCompleto procesarDictamen(String ocrMarcado, String systemPrompt) {
+    modelosForzados.set(List.of("gemini-2.5-pro"));
+    try {
+      return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
+    } finally {
+      modelosForzados.remove();
+    }
   }
 
   @Override
@@ -107,7 +127,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
 
     String ultimoDiagnostico = "sin respuesta";
     try (Client client = Client.builder().apiKey(apiKey).build()) {
-      for (String modelo : MODELOS_FREE) {
+      for (String modelo : modelosForzados.get() == null ? MODELOS_FREE : modelosForzados.get()) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
             LOG.info(
@@ -115,8 +135,10 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
                 modelo,
                 intento,
                 MAX_INTENTOS_POR_MODELO);
+            long inicio = System.nanoTime();
             GenerateContentResponse response =
                 client.models.generateContent(modelo, content, config);
+            anotarUso(response, modelo, inicio);
             String raw = response.text();
             if (!StringUtils.hasText(raw)) {
               ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
@@ -150,6 +172,21 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     }
     return ExtraccionExpedienteCompleto.error(
         "No se pudo procesar el expediente con Gemini. Último: " + ultimoDiagnostico);
+  }
+
+  private void anotarUso(GenerateContentResponse response, String modelo, long inicio) {
+    try {
+      var meta = response.usageMetadata();
+      if (meta.isEmpty()) {
+        return;
+      }
+      var usage = meta.get();
+      int prompt = usage.promptTokenCount().orElse(0);
+      int completion = usage.candidatesTokenCount().orElse(0);
+      consumo.registrar(modelo, prompt, completion, (System.nanoTime() - inicio) / 1_000_000L);
+    } catch (RuntimeException ex) {
+      LOG.debug("Sin usage de Gemini: {}", ex.getMessage());
+    }
   }
 
   @Override

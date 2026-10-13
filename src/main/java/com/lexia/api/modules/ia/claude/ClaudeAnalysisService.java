@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.IaConsumoLog;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
@@ -19,8 +20,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -76,6 +79,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private final List<String> modelos;
   private final ObjectMapper objectMapper;
   private final ActoVariableCatalog actos;
+  private final IaConsumoLog consumo;
+  private final ThreadLocal<List<String>> modelosForzados = new ThreadLocal<>();
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -83,17 +88,81 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       @Value("${anthropic.api.key:}") String apiKey,
       @Value("${anthropic.models:claude-sonnet-5,claude-haiku-4-5-20251001}") String modelos,
       ObjectMapper objectMapper,
-      ActoVariableCatalog actos) {
+      ActoVariableCatalog actos,
+      IaConsumoLog consumo) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.modelos =
         Arrays.stream(modelos.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     this.objectMapper = objectMapper;
     this.actos = actos;
+    this.consumo = consumo;
   }
 
   @Override
   public boolean isConfigured() {
     return StringUtils.hasText(apiKey);
+  }
+
+  /** Cotejo estricto: solo Haiku o Flash, sin caer al modelo pesado. */
+  @Override
+  public ExtraccionExpedienteCompleto procesarCotejo(String ocrMarcado, String systemPrompt) {
+    List<String> livianos = solo(true);
+    if (livianos.isEmpty()) {
+      return ExtraccionExpedienteCompleto.error("No hay modelo liviano (Haiku o Flash) configurado.");
+    }
+    modelosForzados.set(livianos);
+    try {
+      return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
+    } finally {
+      modelosForzados.remove();
+    }
+  }
+
+  /** Dictamen: solo el modelo pesado, cuando el cotejo dejó observaciones altas o medias. */
+  @Override
+  public ExtraccionExpedienteCompleto procesarDictamen(String ocrMarcado, String systemPrompt) {
+    List<String> pesados = solo(false);
+    if (pesados.isEmpty()) {
+      return ExtraccionExpedienteCompleto.error("No hay modelo pesado configurado.");
+    }
+    modelosForzados.set(pesados);
+    try {
+      return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
+    } finally {
+      modelosForzados.remove();
+    }
+  }
+
+  private List<String> solo(boolean liviano) {
+    List<String> elegidos = new ArrayList<>();
+    for (String modelo : modelos) {
+      boolean esLiviano = esLiviano(modelo);
+      if (liviano == esLiviano) {
+        elegidos.add(modelo);
+      }
+    }
+    return elegidos;
+  }
+
+  private static boolean esLiviano(String modelo) {
+    String nombre = modelo.toLowerCase(Locale.ROOT);
+    return nombre.contains("haiku") || nombre.contains("flash");
+  }
+
+  /** Cotejo con respaldo: Haiku o Flash primero. La minuta sigue el orden configurado. */
+  private List<String> modelosExtraccion() {
+    List<String> livianos = new ArrayList<>();
+    List<String> pesados = new ArrayList<>();
+    for (String modelo : modelos) {
+      String nombre = modelo.toLowerCase(Locale.ROOT);
+      if (nombre.contains("haiku") || nombre.contains("flash")) {
+        livianos.add(modelo);
+      } else {
+        pesados.add(modelo);
+      }
+    }
+    livianos.addAll(pesados);
+    return livianos;
   }
 
   @Override
@@ -111,7 +180,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
             + ProcesarExpedienteCompletoPayload.REGLAS_SALIDA;
 
     String ultimoDiagnostico = "sin respuesta";
-    for (String modelo : modelos) {
+    List<String> orden = modelosForzados.get() == null ? modelosExtraccion() : modelosForzados.get();
+    for (String modelo : orden) {
       for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
         try {
           LOG.info(
@@ -613,6 +683,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   private HttpResponse<String> enviar(String body) throws IOException, InterruptedException {
+    long inicio = System.nanoTime();
     HttpRequest req =
         HttpRequest.newBuilder(URI.create(API_URL))
             .timeout(Duration.ofSeconds(180))
@@ -621,7 +692,24 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
             .header("content-type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build();
-    return http.send(req, HttpResponse.BodyHandlers.ofString());
+    HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+    anotarUso(body, res.body(), (System.nanoTime() - inicio) / 1_000_000L);
+    return res;
+  }
+
+  private void anotarUso(String requestBody, String responseBody, long ms) {
+    try {
+      JsonNode req = objectMapper.readTree(requestBody);
+      JsonNode usage = objectMapper.readTree(responseBody).path("usage");
+      int prompt = usage.path("input_tokens").asInt(0);
+      int completion = usage.path("output_tokens").asInt(0);
+      if (prompt == 0 && completion == 0) {
+        return;
+      }
+      consumo.registrar(req.path("model").asText("claude"), prompt, completion, ms);
+    } catch (RuntimeException | IOException ex) {
+      LOG.debug("Sin usage de Claude: {}", ex.getMessage());
+    }
   }
 
   private String construirBodyExpedienteCompleto(String modelo, String systemPrompt, String texto)

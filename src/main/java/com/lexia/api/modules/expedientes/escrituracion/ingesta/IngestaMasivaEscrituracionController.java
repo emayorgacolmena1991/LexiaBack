@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1/escrituracion/ingesta-masiva")
@@ -60,9 +61,16 @@ public class IngestaMasivaEscrituracionController {
     return ingesta.reintentar(batchId, clientRowId);
   }
 
+  /** @deprecated Usar {@code GET /{batchId}/stream}. */
+  @Deprecated
   @GetMapping("/{batchId}/status")
   public LoteStatus status(@PathVariable UUID batchId) {
     return ingesta.status(batchId);
+  }
+
+  @GetMapping(value = "/{batchId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter stream(@PathVariable UUID batchId) {
+    return ingesta.stream(batchId);
   }
 
   @PostMapping("/{batchId}/process-ia")

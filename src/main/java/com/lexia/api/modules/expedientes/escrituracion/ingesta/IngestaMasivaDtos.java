@@ -35,7 +35,9 @@ public final class IngestaMasivaDtos {
       int confianza,
       boolean legible,
       String mensaje,
-      String textoParcial) {}
+      String textoParcial,
+      String origen,
+      Integer ocrMs) {}
 
   public record FilaStatus(
       String clientRowId,
@@ -51,6 +53,9 @@ public final class IngestaMasivaDtos {
       String observaciones,
       String iaEstado,
       String iaResumen,
+      String modeloIa,
+      Integer tokens,
+      Long iaMs,
       List<ArchivoStatus> archivos) {}
 
   public record LoteStatus(

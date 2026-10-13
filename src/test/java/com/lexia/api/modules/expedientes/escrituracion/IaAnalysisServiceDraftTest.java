@@ -22,6 +22,7 @@ import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService;
+import com.lexia.api.modules.ia.ocr.OcrTextSanitizerService;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService.Ejecucion;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.DatosExtraidos;
@@ -78,7 +79,8 @@ class IaAnalysisServiceDraftTest {
             llm,
             documentos,
             authorization,
-            new ObjectMapper());
+            new ObjectMapper(),
+            new OcrTextSanitizerService());
   }
 
   @AfterEach
