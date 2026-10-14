@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.escrituracion.ingesta;
 
 import com.lexia.api.common.api.ApiException;
 import jakarta.persistence.EntityManager;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -77,8 +78,15 @@ public class IngestaJobQueue {
     return encolar(tenantId, tipo, payload);
   }
 
+  /**
+   * Reclama un job de {@code tipos}. El filtro aplica a pendientes y a leases vencidos: un módulo no
+   * toma el trabajo de otro ni recupera un candado ajeno.
+   */
   @Transactional
-  public Optional<Job> reclamar(String workerId) {
+  public Optional<Job> reclamar(String workerId, Collection<String> tipos) {
+    if (tipos == null || tipos.isEmpty()) {
+      return Optional.empty();
+    }
     @SuppressWarnings("unchecked")
     List<Object[]> rows =
         entityManager
@@ -86,12 +94,16 @@ public class IngestaJobQueue {
                 """
                 SELECT id, tenant_id, tipo, CAST(payload AS text), intentos
                 FROM app.jobs
-                WHERE (estado = 'PENDIENTE' AND run_at <= now())
-                   OR (estado = 'EN_PROCESO' AND (locked_until IS NULL OR locked_until < now()))
+                WHERE tipo IN (:tipos)
+                  AND (
+                        (estado = 'PENDIENTE' AND run_at <= now())
+                     OR (estado = 'EN_PROCESO' AND (locked_until IS NULL OR locked_until < now()))
+                  )
                 ORDER BY created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """)
+            .setParameter("tipos", tipos)
             .getResultList();
     if (rows.isEmpty()) {
       return Optional.empty();

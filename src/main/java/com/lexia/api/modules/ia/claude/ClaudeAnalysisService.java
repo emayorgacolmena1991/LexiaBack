@@ -53,6 +53,10 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final int MAX_TOKENS_VALIDACION = 1024;
   private static final int MAX_CHARS_DIAGNOSTICO = 120_000;
   private static final int MAX_TOKENS_DIAGNOSTICO = 4096;
+  /** Supera el candado de app.jobs: el latido del worker lo renueva cada 30 s mientras espera. */
+  private static final Duration TIMEOUT_DIAGNOSTICO = Duration.ofSeconds(180);
+  /** Tope de escrituración y del resto de llamadas Claude. */
+  private static final Duration TIMEOUT_DEFAULT = Duration.ofSeconds(120);
   private static final int MAX_INTENTOS_CAPTURA_BIESS = 2;
   private static final int MAX_CHARS_CAPTURA = 20_000;
   private static final int MAX_TOKENS_EXPEDIENTE = 8192;
@@ -371,7 +375,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     for (String modelo : modelos) {
       for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
         try {
-          HttpResponse<String> res = enviar(construirBodyDiagnostico(modelo, prompt, texto));
+          HttpResponse<String> res = enviar(construirBodyDiagnostico(modelo, prompt, texto), TIMEOUT_DIAGNOSTICO);
           int status = res.statusCode();
           if (status == 200) {
             JsonNode root = objectMapper.readTree(res.body());
@@ -694,10 +698,14 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   private HttpResponse<String> enviar(String body) throws IOException, InterruptedException {
+    return enviar(body, TIMEOUT_DEFAULT);
+  }
+
+  private HttpResponse<String> enviar(String body, Duration limite) throws IOException, InterruptedException {
     long inicio = System.nanoTime();
     HttpRequest req =
         HttpRequest.newBuilder(URI.create(API_URL))
-            .timeout(Duration.ofSeconds(120))
+            .timeout(limite)
             .header("x-api-key", apiKey)
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
@@ -707,7 +715,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     try {
       res = http.send(req, HttpResponse.BodyHandlers.ofString());
     } catch (java.net.http.HttpTimeoutException timeout) {
-      throw new LlmTimeoutException("Claude no respondió en 120 segundos.", timeout);
+      throw new LlmTimeoutException(
+          "Claude no respondió en " + limite.toSeconds() + " segundos.", timeout);
     }
     anotarUso(body, res.body(), (System.nanoTime() - inicio) / 1_000_000L);
     return res;

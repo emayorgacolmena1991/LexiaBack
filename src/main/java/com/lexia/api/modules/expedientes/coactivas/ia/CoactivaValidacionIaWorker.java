@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.coactivas.ia;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoRepository;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoStorage;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteRepository;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto.TextoOcr;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
@@ -35,6 +36,7 @@ public class CoactivaValidacionIaWorker {
   private final CoactivaPromptCatalogRepository catalog;
   private final CoactivaIaResultadoParser parser;
   private final CoactivaAnalisisRepository analisisRepo;
+  private final CoactivaExpedienteRepository expedientes;
   private final boolean dummy;
   private final TransactionTemplate tx;
 
@@ -46,6 +48,7 @@ public class CoactivaValidacionIaWorker {
       CoactivaPromptCatalogRepository catalog,
       CoactivaIaResultadoParser parser,
       CoactivaAnalisisRepository analisisRepo,
+      CoactivaExpedienteRepository expedientes,
       PlatformTransactionManager txManager,
       @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy) {
     this.archivos = archivos;
@@ -55,6 +58,7 @@ public class CoactivaValidacionIaWorker {
     this.catalog = catalog;
     this.parser = parser;
     this.analisisRepo = analisisRepo;
+    this.expedientes = expedientes;
     this.dummy = dummy;
     this.tx = new TransactionTemplate(txManager);
   }
@@ -112,6 +116,7 @@ public class CoactivaValidacionIaWorker {
   }
 
   private void acumular(CoactivaArchivo archivo, String estado, String checklist) {
+    expedientes.bloquear(archivo.getExpedienteId(), archivo.getTenantId());
     CoactivaAnalisis previo =
         analisisRepo
             .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
@@ -151,7 +156,12 @@ public class CoactivaValidacionIaWorker {
     }
     LOG.info("Paso 1 OCR Azure archivo={}", archivo.getId());
     TextoOcr extraido =
-        pdfTexto.extraer(storage.read(archivo), archivo.getMimeType(), archivo.getNombreOriginal());
+        pdfTexto.extraer(
+            archivo.getTenantId(),
+            archivo.getSha256(),
+            () -> storage.read(archivo),
+            archivo.getMimeType(),
+            archivo.getNombreOriginal());
     if (CoactivaPdfTexto.calidadInsuficiente(extraido)) {
       return CoactivaIaResultado.error(CoactivaPdfTexto.mensajeCalidad(extraido.paginas()));
     }

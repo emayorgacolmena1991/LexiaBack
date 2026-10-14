@@ -35,6 +35,7 @@ class CoactivaPdfTextoTest {
     assertTrue(texto.texto().contains("PAGARE BanEcuador"));
     assertTrue(texto.texto().contains("Liquidacion previa"));
     assertEquals(2, texto.paginas());
+    assertEquals(2, CoactivaPdfTexto.contarFojas(texto.texto()));
     assertEquals("PAGARE BanEcuador".length(), texto.caracteres());
   }
 
@@ -63,7 +64,7 @@ class CoactivaPdfTextoTest {
                  "pages":[{"pageNumber":1,"lines":[{"content":"PAGARE a la orden BanEcuador titulo de credito"}]}]}
                 """));
     byte[] pdf = new byte[] {'%', 'P', 'D', 'F', '-', '1'};
-    TextoOcr texto = new CoactivaPdfTexto(ocr).extraer(pdf, "application/pdf", "juicio.pdf");
+    TextoOcr texto = new CoactivaPdfTexto(ocr, null).extraer(pdf, "application/pdf", "juicio.pdf");
     verify(ocr).analizarLectura(pdf, "application/pdf");
     assertTrue(texto.texto().contains("--- FOJA 1 ---"));
     assertTrue(texto.texto().contains("PAGARE"));

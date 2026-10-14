@@ -2,7 +2,10 @@ package com.lexia.api.modules.expedientes.coactivas.ia;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.lexia.api.modules.ia.ocr.AzureOcrService;
+import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import java.util.Locale;
+import java.util.UUID;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -20,10 +23,36 @@ public class CoactivaPdfTexto {
   static final int MIN_CARACTERES = 50;
   static final int MIN_FOJAS_CALIDAD = 5;
 
-  private final AzureOcrService ocr;
+  static final String VERSION_CACHE = "coactiva-ocr-v1";
+  private static final String MARCA_FOJA = "\n--- FOJA ";
 
-  public CoactivaPdfTexto(AzureOcrService ocr) {
+  private final AzureOcrService ocr;
+  private final DocumentoCacheStore cache;
+
+  public CoactivaPdfTexto(AzureOcrService ocr, DocumentoCacheStore cache) {
     this.ocr = ocr;
+    this.cache = cache;
+  }
+
+  /**
+   * Reanalizar el mismo PDF no vuelve a pagar Azure: el texto se guarda por tenant + sha256 del
+   * archivo. Los bytes solo se leen del disco si no hay caché.
+   */
+  public TextoOcr extraer(UUID tenantId, String sha256, Supplier<byte[]> bytes, String mime, String nombre) {
+    if (cache != null && StringUtils.hasText(sha256)) {
+      var hit = cache.buscar(tenantId, sha256, VERSION_CACHE);
+      if (hit.isPresent() && StringUtils.hasText(hit.get().textoOcr())) {
+        String texto = hit.get().textoOcr();
+        LOG.info("OCR coactivas desde caché sha256={}", sha256);
+        return new TextoOcr(texto, contarFojas(texto), texto.length());
+      }
+    }
+    TextoOcr extraido = extraer(bytes.get(), mime, nombre);
+    if (cache != null && StringUtils.hasText(sha256) && StringUtils.hasText(extraido.texto())
+        && !calidadInsuficiente(extraido)) {
+      cache.guardar(tenantId, sha256, VERSION_CACHE, "AZURE_READ", extraido.texto(), null);
+    }
+    return extraido;
   }
 
   public TextoOcr extraer(byte[] bytes, String mime, String nombre) {
@@ -31,8 +60,7 @@ public class CoactivaPdfTexto {
       return TextoOcr.vacio();
     }
     if (!ocr.isConfigured()) {
-      LOG.warn("Azure OCR no configurado");
-      return TextoOcr.vacio();
+      throw new IllegalStateException("Azure OCR no está configurado en este ambiente.");
     }
     String tipo = StringUtils.hasText(mime) ? mime : (esPdf(nombre, bytes) ? "application/pdf" : "application/octet-stream");
     try {
@@ -41,8 +69,17 @@ public class CoactivaPdfTexto {
       return extraido;
     } catch (RuntimeException e) {
       LOG.warn("OCR Azure falló: {}", e.getMessage());
-      return TextoOcr.vacio();
+      throw new IllegalStateException("El OCR de Azure falló: " + e.getMessage(), e);
     }
+  }
+
+  static int contarFojas(String texto) {
+    String t = "\n" + texto;
+    int fojas = 0;
+    for (int i = t.indexOf(MARCA_FOJA); i >= 0; i = t.indexOf(MARCA_FOJA, i + 1)) {
+      fojas++;
+    }
+    return fojas;
   }
 
   /** Más de 5 fojas y menos de 50 caracteres de texto: no vale la pena llamar al LLM. */

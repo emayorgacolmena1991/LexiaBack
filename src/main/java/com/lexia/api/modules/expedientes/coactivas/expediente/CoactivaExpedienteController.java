@@ -258,15 +258,31 @@ public class CoactivaExpedienteController {
   @GetMapping("/archivos/{archivoId}/contenido")
   public ResponseEntity<byte[]> contenido(@PathVariable UUID archivoId) {
     ArchivoContenido contenido = service.contenido(archivoId);
-    MediaType mediaType =
-        contenido.mimeType() == null
-            ? MediaType.APPLICATION_OCTET_STREAM
-            : MediaType.parseMediaType(contenido.mimeType());
+    MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+    try {
+      if (contenido.mimeType() != null) {
+        mediaType = MediaType.parseMediaType(contenido.mimeType());
+      }
+    } catch (org.springframework.http.InvalidMediaTypeException ignored) {
+      // MIME declarado por el cliente al subir: si es ilegible se descarga como binario.
+    }
+    // El MIME lo declara quien sube: HTML o SVG inline ejecutarían script en el origen de Lexia.
+    boolean inline =
+        MediaType.APPLICATION_PDF.equalsTypeAndSubtype(mediaType)
+            || ("image".equals(mediaType.getType())
+                && !mediaType.isWildcardSubtype()
+                && !mediaType.getSubtype().contains("svg"));
+    if (!inline) {
+      mediaType = MediaType.APPLICATION_OCTET_STREAM;
+    }
+    ContentDisposition disposition =
+        (inline ? ContentDisposition.inline() : ContentDisposition.attachment())
+            .filename(contenido.nombre(), StandardCharsets.UTF_8)
+            .build();
     return ResponseEntity.ok()
         .contentType(mediaType)
-        .header(
-            HttpHeaders.CONTENT_DISPOSITION,
-            ContentDisposition.inline().filename(contenido.nombre(), StandardCharsets.UTF_8).build().toString())
+        .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+        .header("X-Content-Type-Options", "nosniff")
         .body(contenido.bytes());
   }
 }

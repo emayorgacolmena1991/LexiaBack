@@ -15,6 +15,7 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaAnalisisRepository;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.List;
@@ -40,6 +41,7 @@ class CoactivaExpedienteReanalisisTest {
   @Mock private CoactivaArchivoRepository archivos;
   @Mock private AuthorizationService authorization;
   @Mock private CoactivaExpedienteAnalisisWorker diagnostico;
+  @Mock private CoactivaAnalisisRepository analisisRepo;
 
   private CoactivaExpedienteService service;
   private CoactivaExpediente expediente;
@@ -50,10 +52,9 @@ class CoactivaExpedienteReanalisisTest {
     service =
         new CoactivaExpedienteService(
             expedientes, null, null, null, eventos, archivos, null, null, null, null, authorization,
-            diagnostico, null, null, null, null);
+            diagnostico, analisisRepo, null, null, null);
     expediente = CoactivaExpediente.create(TENANT, UUID.randomUUID(), "025-2024-00026", USER);
-    when(expedientes.findByIdAndTenantIdAndDeletedAtIsNull(expediente.getId(), TENANT))
-        .thenReturn(Optional.of(expediente));
+    when(expedientes.bloquear(expediente.getId(), TENANT)).thenReturn(Optional.of(expediente));
   }
 
   @AfterEach
@@ -67,6 +68,8 @@ class CoactivaExpedienteReanalisisTest {
     expediente.marcarAnalizando(pdf.getId());
     expediente.marcarAnalizado();
     when(archivos.findByIdAndTenantIdAndDeletedAtIsNull(pdf.getId(), TENANT)).thenReturn(Optional.of(pdf));
+    when(expedientes.findByIdAndTenantIdAndDeletedAtIsNull(expediente.getId(), TENANT))
+        .thenReturn(Optional.of(expediente));
 
     AnalisisResponse r = service.reanalizar(expediente.getId());
 
@@ -98,12 +101,26 @@ class CoactivaExpedienteReanalisisTest {
   @Test
   void enAnalisisResponde409() {
     expediente.marcarAnalizando(UUID.randomUUID());
+    when(analisisRepo.hayDiagnosticoActivo(TENANT, expediente.getId().toString())).thenReturn(true);
 
     ApiException e = assertThrows(ApiException.class, () -> service.reanalizar(expediente.getId()));
 
     assertEquals(HttpStatus.CONFLICT, e.getStatus());
     verify(diagnostico, never()).encolar(any(), any(), any());
     verify(eventos, never()).save(any());
+  }
+
+  @Test
+  void analizandoSinJobVivoPermiteReanalizar() {
+    CoactivaArchivo pdf = archivo(CoactivaArchivo.EXPEDIENTE_UNIFICADO);
+    expediente.marcarAnalizando(pdf.getId());
+    when(analisisRepo.hayDiagnosticoActivo(TENANT, expediente.getId().toString())).thenReturn(false);
+    when(archivos.findByIdAndTenantIdAndDeletedAtIsNull(pdf.getId(), TENANT)).thenReturn(Optional.of(pdf));
+
+    AnalisisResponse r = service.reanalizar(expediente.getId());
+
+    assertEquals(pdf.getId(), r.archivoId());
+    verify(diagnostico).encolar(TENANT, expediente.getId(), pdf.getId());
   }
 
   @Test

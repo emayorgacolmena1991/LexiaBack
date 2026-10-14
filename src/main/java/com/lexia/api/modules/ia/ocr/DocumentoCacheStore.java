@@ -39,7 +39,12 @@ public class DocumentoCacheStore {
 
   @Transactional(readOnly = true)
   public Optional<Hit> buscar(String sha256, String versionPrompt) {
-    UUID tenantId = tenant();
+    return buscar(tenant(), sha256, versionPrompt);
+  }
+
+  /** Para workers de {@code app.jobs}, que no tienen {@link AuthContext}. */
+  @Transactional(readOnly = true)
+  public Optional<Hit> buscar(UUID tenantId, String sha256, String versionPrompt) {
     if (tenantId == null || sha256 == null) {
       return Optional.empty();
     }
@@ -67,7 +72,12 @@ public class DocumentoCacheStore {
 
   @Transactional
   public void guardar(String sha256, String versionPrompt, String modelo, String texto, String json) {
-    UUID tenantId = tenant();
+    guardar(tenant(), sha256, versionPrompt, modelo, texto, json);
+  }
+
+  @Transactional
+  public void guardar(
+      UUID tenantId, String sha256, String versionPrompt, String modelo, String texto, String json) {
     if (tenantId == null || sha256 == null) {
       return;
     }

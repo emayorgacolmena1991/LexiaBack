@@ -1,11 +1,13 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
+import jakarta.persistence.LockModeType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -13,6 +15,13 @@ public interface CoactivaExpedienteRepository
     extends JpaRepository<CoactivaExpediente, UUID>, JpaSpecificationExecutor<CoactivaExpediente> {
 
   Optional<CoactivaExpediente> findByIdAndTenantIdAndDeletedAtIsNull(UUID id, UUID tenantId);
+
+  /** Serializa las fusiones del diagnóstico consolidado por expediente. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "select e from CoactivaExpediente e "
+          + "where e.id = :id and e.tenantId = :tenantId and e.deletedAt is null")
+  Optional<CoactivaExpediente> bloquear(@Param("id") UUID id, @Param("tenantId") UUID tenantId);
 
   Optional<CoactivaExpediente> findByTenantIdAndNroJuicioAndDeletedAtIsNull(UUID tenantId, String nroJuicio);
 

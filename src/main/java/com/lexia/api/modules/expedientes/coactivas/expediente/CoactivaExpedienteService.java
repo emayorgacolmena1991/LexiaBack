@@ -93,6 +93,7 @@ public class CoactivaExpedienteService {
   private final AppUserRepository usuarios;
 
   private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
+  private static final String ANALISIS_INTERRUMPIDO = "El análisis IA se interrumpió. Vuelve a analizar el expediente.";
 
   public CoactivaExpedienteService(
       CoactivaExpedienteRepository expedientes,
@@ -621,14 +622,16 @@ public class CoactivaExpedienteService {
     CoactivaExpediente expediente = require(tenantId, expedienteId);
     CoactivaAnalisis ultimo =
         analisisRepo.findFirstByTenantIdAndExpedienteIdOrderByCreatedAtDesc(tenantId, expedienteId).orElse(null);
+    boolean huerfano = analisisHuerfano(expediente);
+    String estado = huerfano ? CoactivaExpediente.ANALISIS_ERROR : expediente.getEstadoAnalisis();
     boolean enCurso =
-        CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())
+        CoactivaExpediente.ANALISIS_ANALIZANDO.equals(estado)
             && (ultimo == null || !ultimo.getArchivoId().equals(expediente.getAnalisisArchivoId()));
     if (enCurso) {
       return AnalisisResponse.enCurso(expediente.getAnalisisArchivoId());
     }
     if (ultimo == null) {
-      return AnalisisResponse.sinDiagnostico(expediente.getEstadoAnalisis());
+      return AnalisisResponse.sinDiagnostico(estado);
     }
     // Un intento fallido (p. ej. PDF ausente en este servidor) no borra el último diagnóstico válido:
     // se devuelve ese diagnóstico y el motivo del intento en el campo error.
@@ -641,12 +644,12 @@ public class CoactivaExpedienteService {
                 .orElse(null)
             : ultimo;
     if (vigente == null) {
-      return sinTentativa(expediente, ultimo, ultimo.getError());
+      return sinTentativa(estado, ultimo, ultimo.getError());
     }
     CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(vigente.getResultado());
     CoactivaDiagnostico diag = parsed.diagnostico();
     if (diag == null) {
-      return sinTentativa(expediente, vigente, parsed.error());
+      return sinTentativa(estado, vigente, parsed.error());
     }
     Acumulado acumulado = acumulado(vigente);
     CoactivaDiagnosticoParser.Tentativa tentativa = diagnosticoParser.tentativaDe(diag.json());
@@ -663,7 +666,7 @@ public class CoactivaExpedienteService {
     boolean sugerida = AnalisisResponse.ETAPA_SUGERIDA.equals(estadoEtapa);
     CoactivaArchivo fuente = fuenteDeLaTentativa(tenantId, vigente, tentativa);
     return new AnalisisResponse(
-        expediente.getEstadoAnalisis(),
+        estado,
         vigente.getId(),
         vigente.getArchivoId(),
         vigente.getEtapa(),
@@ -675,7 +678,7 @@ public class CoactivaExpedienteService {
         diag.alertas(),
         diag.datosExtraidos(),
         diag.siguienteAccion(),
-        fallo ? ultimo.getError() : null,
+        fallo ? ultimo.getError() : huerfano ? ANALISIS_INTERRUMPIDO : null,
         vigente.getCreatedAt(),
         acumulado.piezas(),
         acumulado.hitos(),
@@ -703,10 +706,19 @@ public class CoactivaExpedienteService {
         estadoEtapa);
   }
 
-  private AnalisisResponse sinTentativa(CoactivaExpediente expediente, CoactivaAnalisis fila, String error) {
+  /**
+   * ANALIZANDO sin job vivo en {@code app.jobs}: el worker lo soltó sin cerrar el análisis. Se
+   * muestra como error para que la abogada pueda reanalizar.
+   */
+  private boolean analisisHuerfano(CoactivaExpediente expediente) {
+    return CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())
+        && !analisisRepo.hayDiagnosticoActivo(expediente.getTenantId(), expediente.getId().toString());
+  }
+
+  private AnalisisResponse sinTentativa(String estado, CoactivaAnalisis fila, String error) {
     Acumulado acumulado = acumulado(fila);
     return new AnalisisResponse(
-        expediente.getEstadoAnalisis(),
+        estado,
         fila.getId(),
         fila.getArchivoId(),
         fila.getEtapa(),
@@ -802,8 +814,11 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
     AuthPrincipal principal = AuthContext.require();
     UUID tenantId = principal.tenantId();
-    CoactivaExpediente expediente = require(tenantId, expedienteId);
-    if (CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())) {
+    CoactivaExpediente expediente =
+        expedientes
+            .bloquear(expedienteId, tenantId)
+            .orElseThrow(() -> ApiException.notFound("Expediente coactivo no encontrado."));
+    if (CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis()) && !analisisHuerfano(expediente)) {
       throw new ApiException(
           HttpStatus.CONFLICT, "COA_ANALISIS_EN_CURSO", "El expediente ya se está analizando.");
     }

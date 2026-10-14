@@ -11,6 +11,8 @@ import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisService;
 import com.lexia.api.modules.tenancy.RlsConnectionProvider;
 import com.lexia.api.modules.tenancy.TenantContext;
 import jakarta.annotation.PreDestroy;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -30,6 +33,10 @@ public class IngestaJobWorker {
 
   private static final Logger LOG = LoggerFactory.getLogger(IngestaJobWorker.class);
   private static final String NODE = UUID.randomUUID().toString();
+  static final Collection<String> TIPOS_ESCRITURACION =
+      List.of("ESCRITURACION_ANALISIS", "OCR_EXTRACTION", "IA_ANALYSIS");
+  static final Collection<String> TIPOS_COACTIVA =
+      List.of("COACTIVA_DIAGNOSTICO", "COACTIVA_VALIDACION_ANEXO");
 
   private final IngestaJobQueue cola;
   private final IngestaMasivaEscrituracionService ingesta;
@@ -44,6 +51,14 @@ public class IngestaJobWorker {
         hilo.setDaemon(true);
         return hilo;
       });
+  /** Un análisis de escrituración a la vez. El tick no espera al LLM, así Coactivas sigue reclamando. */
+  private final ExecutorService escrituracionPool =
+      Executors.newSingleThreadExecutor(r -> {
+        Thread hilo = new Thread(r, "escrituracion-job");
+        hilo.setDaemon(true);
+        return hilo;
+      });
+  private final AtomicBoolean escrituracionEnCurso = new AtomicBoolean();
   private final ScheduledExecutorService latido =
       Executors.newSingleThreadScheduledExecutor(r -> {
         Thread hilo = new Thread(r, "jobs-latido");
@@ -73,11 +88,26 @@ public class IngestaJobWorker {
   void cerrar() {
     latido.shutdownNow();
     anexoPool.shutdownNow();
+    escrituracionPool.shutdownNow();
   }
 
   @Scheduled(fixedDelay = 1000)
   public void tick() {
-    Optional<IngestaJobQueue.Job> job = cola.reclamar(NODE);
+    tomarCoactiva();
+    if (!escrituracionEnCurso.compareAndSet(false, true)) {
+      return;
+    }
+    escrituracionPool.execute(() -> {
+      try {
+        tomarEscrituracion();
+      } finally {
+        escrituracionEnCurso.set(false);
+      }
+    });
+  }
+
+  private void tomarCoactiva() {
+    Optional<IngestaJobQueue.Job> job = cola.reclamar(NODE, TIPOS_COACTIVA);
     if (job.isEmpty()) {
       return;
     }
@@ -85,12 +115,18 @@ public class IngestaJobWorker {
     LOG.info("Tarea tomada app.jobs id={} tipo={}", actual.id(), actual.tipo());
     if ("COACTIVA_VALIDACION_ANEXO".equals(actual.tipo())) {
       anexoPool.execute(() -> correrAnexo(actual));
-      return;
-    }
-    if ("COACTIVA_DIAGNOSTICO".equals(actual.tipo())) {
+    } else if ("COACTIVA_DIAGNOSTICO".equals(actual.tipo())) {
       anexoPool.execute(() -> correrDiagnostico(actual));
+    }
+  }
+
+  private void tomarEscrituracion() {
+    Optional<IngestaJobQueue.Job> job = cola.reclamar(NODE, TIPOS_ESCRITURACION);
+    if (job.isEmpty()) {
       return;
     }
+    IngestaJobQueue.Job actual = job.get();
+    LOG.info("Tarea tomada app.jobs id={} tipo={}", actual.id(), actual.tipo());
     RlsConnectionProvider.setTenantId(actual.tenantId());
     try {
       if ("ESCRITURACION_ANALISIS".equals(actual.tipo())) {
@@ -120,6 +156,7 @@ public class IngestaJobWorker {
     } catch (RuntimeException ex) {
       LOG.warn("job {} falló: {}", job.id(), ex.getMessage());
       cola.fallar(job.id(), NODE, ex.getMessage());
+      abandonarCoactiva(job, ex);
     } finally {
       AuthContext.clear();
       TenantContext.clear();
@@ -149,24 +186,32 @@ public class IngestaJobWorker {
         sse.publicar(expedienteId, "ANALYSIS_FAILED", Map.of("error", msg));
       }
       cola.fallar(job.id(), NODE, ex.getMessage());
+      abandonarCoactiva(job, ex);
     } finally {
       TenantContext.clear();
     }
   }
 
-  private static UUID uuidEn(String payload, String campo) {
-    String key = "\"" + campo + "\":\"";
-    int i = payload == null ? -1 : payload.indexOf(key);
-    if (i < 0) {
+  /** Mismo umbral que {@link IngestaJobQueue#fallar}: al tercer intento el job queda en ERROR. */
+  private void abandonarCoactiva(IngestaJobQueue.Job job, RuntimeException ex) {
+    CoactivaExpedienteAnalisisWorker worker = coactivas.getIfAvailable();
+    if (job.intentos() < 3 || worker == null) {
+      return;
+    }
+    try {
+      worker.abandonar(job.tenantId(), archivoId(job.payload()), ex.getMessage());
+    } catch (RuntimeException cierre) {
+      LOG.warn("job {} no pudo cerrar el análisis: {}", job.id(), cierre.getMessage());
+    }
+  }
+
+  /** {@code CAST(payload AS text)} devuelve el jsonb normalizado ({@code "k": "v"}): hay que parsearlo. */
+  private UUID uuidEn(String payload, String campo) {
+    try {
+      return uuid(json.readTree(payload), campo);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException | IllegalArgumentException ex) {
       return null;
     }
-    int start = i + key.length();
-    int end = payload.indexOf('"', start);
-    String value = payload.substring(start, end);
-    if (value.isBlank() || "null".equals(value)) {
-      return null;
-    }
-    return UUID.fromString(value);
   }
 
   private void correrEscrituracion(IngestaJobQueue.Job job) {
@@ -220,14 +265,11 @@ public class IngestaJobWorker {
     }
   }
 
-  private static UUID archivoId(String payload) {
-    String key = "\"archivoId\":\"";
-    int i = payload == null ? -1 : payload.indexOf(key);
-    if (i < 0) {
+  private UUID archivoId(String payload) {
+    UUID id = uuidEn(payload, "archivoId");
+    if (id == null) {
       throw new IllegalArgumentException("payload sin archivoId");
     }
-    int start = i + key.length();
-    int end = payload.indexOf('"', start);
-    return UUID.fromString(payload.substring(start, end));
+    return id;
   }
 }
