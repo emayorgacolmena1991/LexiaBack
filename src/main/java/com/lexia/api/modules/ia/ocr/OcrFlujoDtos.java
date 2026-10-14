@@ -48,7 +48,11 @@ public final class OcrFlujoDtos {
       String textoExtraido,
       String motivo) {}
 
-  public record ConsolidateRequest(String sessionId, String consolidatedContent) {}
+  public record ConsolidateRequest(String sessionId, String consolidatedContent, Boolean encolar) {
+    public ConsolidateRequest(String sessionId, String consolidatedContent) {
+      this(sessionId, consolidatedContent, null);
+    }
+  }
 
   public record ConsolidateResponse(boolean success, String cacheKey) {}
 

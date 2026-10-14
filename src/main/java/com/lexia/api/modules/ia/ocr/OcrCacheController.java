@@ -17,6 +17,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -49,10 +50,11 @@ public class OcrCacheController {
   }
 
   @PostMapping("/consolidate-extracted-text")
-  public ConsolidateResponse consolidate(@Valid @RequestBody ConsolidateRequest request) {
+  @Transactional
+  public ResponseEntity<ConsolidateResponse> consolidate(@Valid @RequestBody ConsolidateRequest request) {
     ConsolidateResponse respuesta = batchService.consolidate(request);
     encolarAnalisis(request);
-    return respuesta;
+    return ResponseEntity.accepted().body(respuesta);
   }
 
   @GetMapping("/consolidate-extracted-text/{sessionId}")
@@ -95,7 +97,8 @@ public class OcrCacheController {
 
   /** El texto ya quedó en caché. El job corre el LLM; el stream no tiene que esperar un POST aparte. */
   private void encolarAnalisis(ConsolidateRequest request) {
-    if (request == null || request.sessionId() == null || request.consolidatedContent() == null
+    if (request == null || !Boolean.TRUE.equals(request.encolar())
+        || request.sessionId() == null || request.consolidatedContent() == null
         || request.consolidatedContent().isBlank()) {
       return;
     }
@@ -122,7 +125,7 @@ public class OcrCacheController {
       jobs.encolarSiActivo(
           principal.tenantId(), "ESCRITURACION_ANALISIS", expediente.toString(), json.writeValueAsString(payload));
       LOG.info(
-          "[OCR OK] Texto consolidado para expediente {}. Encolando job ESCRITURACION_ANALISIS en app.jobs...",
+          "[JOB ENCOLADO] Tarea insertada en app.jobs tipo=ESCRITURACION_ANALISIS expediente={}",
           expediente);
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar el análisis.");

@@ -1,5 +1,6 @@
 package com.lexia.api.modules.ia.ocr;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,5 +24,24 @@ class OcrExpedienteTextoTest {
     assertTrue(payload.contains("JUAN PEREZ"));
     assertTrue(payload.contains("</expediente_ocr>"));
     assertFalse(payload.contains("%PDF"));
+  }
+
+  @Test
+  void consolidadoConVariosDocumentosNoSeQuedaEnUno() {
+    String lote =
+        """
+        === DOCUMENTO: CEDULA ===
+        0102030405
+        === DOCUMENTO: AVALUO ===
+        clave catastral 123
+        === DOCUMENTO: GRAVAMEN ===
+        hipoteca BIESS
+        """;
+    String marcado = OcrExpedienteTexto.marcarConsolidado(lote);
+    String uno = OcrExpedienteTexto.documentos(List.of(new DocOcr("solo", "CEDULA", null, "0102030405")));
+
+    assertEquals(3, OcrExpedienteTexto.contarDocumentos(marcado));
+    assertTrue(OcrExpedienteTexto.masDocumentos(uno, marcado).contains("hipoteca BIESS"));
+    assertTrue(OcrExpedienteTexto.masDocumentos(marcado, uno).contains("clave catastral"));
   }
 }

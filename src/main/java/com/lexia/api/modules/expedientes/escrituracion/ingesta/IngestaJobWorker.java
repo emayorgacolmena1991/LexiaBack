@@ -194,8 +194,9 @@ public class IngestaJobWorker {
           servicio.analizarExpedienteConPromptProducto(
               expedienteId,
               new AnalysisRequestDTO(force, nodo.path("sessionIdOcr").asText("")));
-      LOG.info("[IA OK] Dictamen generado para expediente {}. Notificando SSE...", expedienteId);
       sse.publicar(expedienteId, "ANALYSIS_COMPLETED", resultado);
+      LOG.info(
+          "[WORKER OK] Dictamen guardado en app.extracted_data y app.title_study. SSE emitido.");
     } catch (RuntimeException ex) {
       String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
       sse.publicar(expedienteId, "ANALYSIS_FAILED", Map.of("error", msg));

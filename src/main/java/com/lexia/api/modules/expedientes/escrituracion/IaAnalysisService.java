@@ -133,12 +133,16 @@ public class IaAnalysisService {
             ? null
             : writingFiles
                 .findByCaseIdAndTenantIdAndDeletedAtIsNull(expedienteId, tenantId)
-                .orElse(null);
+                .orElseGet(() -> writingFiles.save(WritingFile.create(tenantId, expedienteId)));
 
     String productCode =
         legalCase != null ? resolveProductCode(legalCase, writingFile) : text(borrador.getProductCode());
     if (!StringUtils.hasText(productCode)) {
       throw ApiException.badRequest("El expediente no tiene un producto asignado.");
+    }
+    if (writingFile != null && !StringUtils.hasText(writingFile.getProductCode())) {
+      writingFile.applyProduct(productCode, resolveCanton(writingFile), null);
+      writingFiles.save(writingFile);
     }
 
     if (writingFile != null && writingFile.isFlagBloqueoReenvio()) {
@@ -407,7 +411,11 @@ public class IaAnalysisService {
               + " case="
               + expedienteId);
     }
-    LOG.info("analizar-ia OCR caseId={} chars={}", expedienteId, marcado.length());
+    LOG.info(
+        "analizar-ia OCR caseId={} chars={} documentos={}",
+        expedienteId,
+        marcado.length(),
+        OcrExpedienteTexto.contarDocumentos(marcado));
     return marcado;
   }
 
@@ -421,13 +429,20 @@ public class IaAnalysisService {
         continue;
       }
       List<DocOcr> docs = new ArrayList<>();
+      String consolidado = "";
       for (DocumentoTextoOcr row : rows) {
         if (row == null || !StringUtils.hasText(row.getTextoOcr())) {
           continue;
         }
+        if ("consolidado".equals(row.getIdDocumento())) {
+          consolidado = row.getTextoOcr();
+          continue;
+        }
         docs.add(new DocOcr(row.getIdDocumento(), row.getTipoDocumento(), null, row.getTextoOcr()));
       }
-      String marcado = OcrExpedienteTexto.documentos(docs);
+      String marcado =
+          OcrExpedienteTexto.masDocumentos(
+              OcrExpedienteTexto.documentos(docs), OcrExpedienteTexto.marcarConsolidado(consolidado));
       if (StringUtils.hasText(marcado)) {
         return marcado;
       }

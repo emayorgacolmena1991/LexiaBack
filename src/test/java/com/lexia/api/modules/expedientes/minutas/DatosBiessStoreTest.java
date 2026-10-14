@@ -69,6 +69,18 @@ class DatosBiessStoreTest {
   }
 
   @Test
+  void conRespaldoNoPisaReposicionVacia() {
+    DatosBiessMinuta previo = new DatosBiessMinuta("58500", "7.21", "300", "453.48", "86256.7", "80", "ANDRE");
+    DatosBiessMinuta desdeMinuta = new DatosBiessMinuta("58500", "7.21", "300", "453.48", "", "", "ANDRE");
+
+    DatosBiessMinuta out = desdeMinuta.conRespaldo(previo);
+
+    assertEquals("86256.7", out.valorReposicion());
+    assertEquals("80", out.porcentajeValorFinanciado());
+    assertEquals("58500", out.monto());
+  }
+
+  @Test
   void cargarDevuelveNullSiNoHayFilas() {
     UUID tenant = UUID.randomUUID();
     UUID caseId = UUID.randomUUID();

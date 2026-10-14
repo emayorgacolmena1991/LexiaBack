@@ -531,26 +531,44 @@ public class CargaDocumentoService {
     return out;
   }
 
+  /** Texto unido que manda el front al consolidar. Sobrevive al reinicio; no queda solo en memoria. */
+  public void persistirTextoConsolidado(String idExpediente, UUID tenantId, String texto) {
+    if (!StringUtils.hasText(idExpediente) || !StringUtils.hasText(texto)) {
+      return;
+    }
+    persistirFilaOcr(
+        idExpediente.trim(),
+        tenantId,
+        new DocumentoOcrResultadoDTO(
+            "consolidado", "consolidado", "CONSOLIDADO", texto, null, "LEGIBLE", null, null));
+  }
+
+  public String textoConsolidado(String idExpediente) {
+    if (!StringUtils.hasText(idExpediente)) {
+      return null;
+    }
+    return ocrRepository
+        .findByIdExpedienteAndIdDocumento(idExpediente.trim(), "consolidado")
+        .map(DocumentoTextoOcr::getTextoOcr)
+        .filter(StringUtils::hasText)
+        .orElse(null);
+  }
+
   private void persistirFilaOcr(String idExpediente, UUID tenantId, DocumentoOcrResultadoDTO r) {
     if (r == null || !StringUtils.hasText(r.idDocumento())) {
       return;
     }
-    DocumentoTextoOcr row =
-        ocrRepository
-            .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
-            .orElseGet(DocumentoTextoOcr::new);
-    if (tenantId != null) {
-      row.setTenantId(tenantId);
-    }
-    row.setIdExpediente(idExpediente);
-    row.setIdDocumento(r.idDocumento());
-    row.setTipoDocumento(r.tipoDocumento());
-    row.setTextoOcr(r.textoOcr());
-    row.setAnalisisJson(r.analisisJson());
-    row.setEstadoDoc(StringUtils.hasText(r.estado()) ? r.estado() : "LEGIBLE");
-    row.setMotivo(r.motivo());
-    row.setConfianza(r.confianza());
-    ocrRepository.save(row);
+    ocrRepository.upsert(
+        UUID.randomUUID(),
+        tenantId,
+        idExpediente,
+        r.idDocumento(),
+        r.tipoDocumento(),
+        r.textoOcr(),
+        r.analisisJson(),
+        StringUtils.hasText(r.estado()) ? r.estado() : "LEGIBLE",
+        r.motivo(),
+        r.confianza());
   }
 
   void actualizarDocPrevalidacion(

@@ -1,6 +1,7 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
@@ -281,7 +282,20 @@ public class OcrAzureBatchService {
     }
     String sessionId = request.sessionId().trim();
     String content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
+    String previo = cache.getConsolidated(sessionId);
+    if (!StringUtils.hasText(previo)) {
+      previo = cargaDocumentoService.textoConsolidado(sessionId);
+    }
+    if (OcrExpedienteTexto.contarDocumentos(previo) > OcrExpedienteTexto.contarDocumentos(content)) {
+      content = previo;
+    }
     cache.putConsolidated(sessionId, content);
+    var principal = AuthContext.get();
+    if (StringUtils.hasText(content)) {
+      cargaDocumentoService.persistirTextoConsolidado(
+          sessionId, principal == null ? null : principal.tenantId(), content);
+      LOG.info("[OCR OK] Texto consolidado y persistido en app.documento_texto_ocr");
+    }
     return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
   }
 
@@ -291,6 +305,9 @@ public class OcrAzureBatchService {
     }
     String id = sessionId.trim();
     String content = cache.getConsolidated(id);
+    if (content == null) {
+      content = cargaDocumentoService.textoConsolidado(id);
+    }
     if (content == null) {
       throw ApiException.notFound("Caché OCR no encontrada o expirada para sessionId=" + id);
     }

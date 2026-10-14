@@ -42,6 +42,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -157,7 +158,8 @@ public class MinutaGenerationService {
       completarDesdeConsolidado(tenantId, caseId, base);
     }
     DatosBiessMinuta biess = datosBiess.cargar(caseId, tenantId);
-    MinutaViviendaData data = variablesService.fusionar(base, biess, overrides);
+    MinutaViviendaData data =
+        variablesService.fusionar(base, biess, overrides, variablesService.camposDelActo(descriptor));
     return respuestaVariables(
         draft,
         descriptor,
@@ -203,7 +205,9 @@ public class MinutaGenerationService {
         variablesService.normalizarOverrides(descriptor, request == null ? null : request.variables()));
     // La tienda BIESS solo guarda la captura: los cambios manuales viven en los overrides.
     DatosBiessMinuta biessGuardado = datosBiess.cargar(caseId, tenantId);
-    MinutaViviendaData data = variablesService.fusionar(base, biessGuardado, overrides);
+    MinutaViviendaData data =
+        variablesService.fusionar(
+            base, biessGuardado, overrides, variablesService.camposDelActo(descriptor));
 
     byte[] docx =
         renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
@@ -387,7 +391,7 @@ public class MinutaGenerationService {
             request == null ? null : request.sessionId(),
             product,
             kind);
-    validarCriticos(descriptor, data, caseId);
+    avisarCriticos(descriptor, data, caseId);
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
@@ -395,9 +399,16 @@ public class MinutaGenerationService {
     persistData(draft, data);
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
-    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(data));
+    DatosBiessMinuta biess =
+        DatosBiessMinuta.from(data).conRespaldo(datosBiess.cargar(caseId, tenantId));
+    datosBiess.guardar(tenantId, caseId, biess);
 
     List<String> pendientes = pendientes(descriptor, data);
+    long hidratadas =
+        data.toTemplateMap().values().stream().filter(v -> !MinutaViviendaData.isMissing(v)).count();
+    LOG.info(
+        "Borrador de minuta generado exitosamente (HTTP 200) con {} variables hidratadas.",
+        hidratadas);
     LOG.info(
         "Minuta generada case={} product={} kind={} draft={} bytes={} pendientes={}",
         caseId,
@@ -452,7 +463,10 @@ public class MinutaGenerationService {
     persistData(draft, data);
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
-    datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
+    datosBiess.guardar(
+        draft.getTenantId(),
+        caseId,
+        DatosBiessMinuta.from(data).conRespaldo(datosBiess.cargar(caseId, draft.getTenantId())));
 
     LOG.info(
         "Datos BIESS aplicados case={} draft={} kind={} editado={} bytes={}",
@@ -548,7 +562,10 @@ public class MinutaGenerationService {
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
     if (biessCambia) {
-      datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
+      datosBiess.guardar(
+        draft.getTenantId(),
+        caseId,
+        DatosBiessMinuta.from(data).conRespaldo(datosBiess.cargar(caseId, draft.getTenantId())));
     }
     LOG.info(
         "Minuta guardada case={} draft={} parrafos={} biess={} bytes={}",
@@ -710,10 +727,10 @@ public class MinutaGenerationService {
   }
 
   /**
-   * Solo los críticos del descriptor bloquean (422); el resto de tags vacíos se genera como nodata y
-   * se devuelve en camposPendientes.
+   * Los críticos vacíos no cortan la respuesta: poi-tl los deja como {@code nodata} y vuelven en
+   * {@code camposPendientes} para el editor.
    */
-  private static void validarCriticos(
+  private static void avisarCriticos(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data, UUID caseId) {
     var map = data.toTemplateMap();
     List<String> faltantes =
@@ -722,16 +739,10 @@ public class MinutaGenerationService {
             .toList();
     if (!faltantes.isEmpty()) {
       LOG.warn(
-          "Minuta case={} kind={} no generada, faltan críticos: {}",
+          "Minuta case={} kind={} generada con críticos pendientes: {}",
           caseId,
           descriptor.templateKind(),
           faltantes);
-      throw new ApiException(
-          HttpStatus.UNPROCESSABLE_ENTITY,
-          "MINUTA_DATOS_FALTANTES",
-          "No se generó el documento: faltan datos obligatorios en el expediente: "
-              + String.join("; ", faltantes.stream().map(MinutaViviendaData::etiqueta).toList())
-              + ".");
     }
   }
 
@@ -748,7 +759,7 @@ public class MinutaGenerationService {
       String templateKind) {
     MinutaViviendaData data = extraerConIa(legalCase, sessionIdHint, productCode, templateKind);
     completarDesdeConsolidado(tenantId, caseId, data);
-    aplicarDatosBiessGuardados(tenantId, caseId, data);
+    aplicarDatosBiessGuardados(tenantId, caseId, data, productCode, templateKind);
     ExpedienteVariablesService.letrasDesdeMonto(data);
     return data;
   }
@@ -817,17 +828,37 @@ public class MinutaGenerationService {
   }
 
   /** Captura BIESS ya guardada en el expediente (p. ej. al generar la minuta antes que el mutuo). */
-  private void aplicarDatosBiessGuardados(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+  private void aplicarDatosBiessGuardados(
+      UUID tenantId, UUID caseId, MinutaViviendaData data, String producto, String kind) {
     DatosBiessMinuta guardados = datosBiess.cargar(caseId, tenantId);
     if (guardados == null) {
       return;
     }
+    List<String> camposActo =
+        StringUtils.hasText(producto) && StringUtils.hasText(kind)
+            ? variablesService.camposDelActo(catalog.require(producto, kind))
+            : null;
+    Map<String, String> aplicadas = new LinkedHashMap<>();
     for (CampoPlantilla campo : CampoPlantilla.values()) {
-      String valor = campo.valor(guardados);
-      if (StringUtils.hasText(valor)) {
-        campo.asignar(data, valor);
+      if (camposActo != null && !camposActo.contains(campo.tag())) {
+        continue;
       }
+      String valor = campo.valor(guardados);
+      if (!StringUtils.hasText(valor)) {
+        continue;
+      }
+      campo.asignar(data, valor);
+      aplicadas.put(campo.tag(), valor.trim());
     }
+    LOG.info(
+        "Variables de Captura BIESS fusionadas en el mapa de Minuta: captura={{monto_aprobado={}, tasa_efectiva={}, cuota_aprobada={}, plazo_aprobado={}, valor_reposicion={}, porcentaje_valor_financiado={}}} aplicadas={}",
+        guardados.monto(),
+        guardados.tasa(),
+        guardados.cuota(),
+        guardados.plazo(),
+        guardados.valorReposicion(),
+        guardados.porcentajeValorFinanciado(),
+        aplicadas);
   }
 
   private static void completar(String actual, String candidato, Consumer<String> setter) {

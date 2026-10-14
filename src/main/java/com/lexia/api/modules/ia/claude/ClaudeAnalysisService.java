@@ -697,7 +697,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     long inicio = System.nanoTime();
     HttpRequest req =
         HttpRequest.newBuilder(URI.create(API_URL))
-            .timeout(Duration.ofSeconds(30))
+            .timeout(Duration.ofSeconds(120))
             .header("x-api-key", apiKey)
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
@@ -707,7 +707,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     try {
       res = http.send(req, HttpResponse.BodyHandlers.ofString());
     } catch (java.net.http.HttpTimeoutException timeout) {
-      throw new LlmTimeoutException("Claude no respondió en 30 segundos.", timeout);
+      throw new LlmTimeoutException("Claude no respondió en 120 segundos.", timeout);
     }
     anotarUso(body, res.body(), (System.nanoTime() - inicio) / 1_000_000L);
     return res;

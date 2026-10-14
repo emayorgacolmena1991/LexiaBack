@@ -104,7 +104,7 @@ public class IngestaJobQueue {
             UPDATE app.jobs
             SET estado = 'EN_PROCESO',
                 worker_id = :worker,
-                locked_until = now() + interval '2 minutes',
+                locked_until = now() + interval '3 minutes',
                 intentos = intentos + 1,
                 run_at = now()
             WHERE id = :id
@@ -160,7 +160,7 @@ public class IngestaJobQueue {
         .createNativeQuery(
             """
             UPDATE app.jobs
-            SET locked_until = now() + interval '2 minutes'
+            SET locked_until = now() + interval '3 minutes'
             WHERE worker_id = :worker AND estado = 'EN_PROCESO'
             """)
         .setParameter("worker", workerId)

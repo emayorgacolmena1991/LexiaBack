@@ -79,9 +79,24 @@ public class ExpedienteVariablesService {
    */
   public MinutaViviendaData fusionar(
       MinutaViviendaData llm, DatosBiessMinuta biess, Map<String, String> overrides) {
+    return fusionar(llm, biess, overrides, null);
+  }
+
+  /**
+   * {@code camposActo} son los canónicos de la plantilla. {@code null} aplica todo el crédito
+   * BIESS. Un tag que no está en la lista no se pisa con la captura.
+   */
+  public MinutaViviendaData fusionar(
+      MinutaViviendaData llm,
+      DatosBiessMinuta biess,
+      Map<String, String> overrides,
+      java.util.Collection<String> camposActo) {
     ObjectNode json = mapper.valueToTree(llm == null ? new MinutaViviendaData() : llm);
     if (biess != null) {
       for (CampoPlantilla campo : CampoPlantilla.values()) {
+        if (camposActo != null && !camposActo.contains(campo.tag())) {
+          continue;
+        }
         pisarSiHayValor(json, campo.tag(), campo.valor(biess));
       }
     }
