@@ -418,7 +418,7 @@ public class CoactivaExpedienteAnalisisWorker {
     }
     StringBuilder sb = new StringBuilder();
     sb.append(
-        "\n\nPlantillas de esta etapa. Incluye en datos_extraidos cada variable que conste en el OCR; null si no aparece:\n");
+        "\n\nPlantillas de esta etapa. En datos_extraidos incluye solo variables que consten literalmente en el OCR; omite las demás:\n");
     for (CoactivaPromptCatalog fila : filas) {
       if (fila.getVariablesRequeridas() == null || fila.getVariablesRequeridas().isBlank()) {
         continue;

@@ -50,71 +50,40 @@ public final class CoactivaDiagnosticoParser {
       Responde ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto adicional.
       etapa_sugerida es la tentativa. etapa_procesal_detectada debe ser igual a etapa_sugerida.codigo.
       Códigos: PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO|INDETERMINADA.
-      justificacion_juridica: una o dos frases, máximo 300 caracteres, con la forma
+      Devuelve una sola etapa, la más probable. No listes alternativas.
+      justificacion_juridica: máximo dos frases y 300 caracteres, con la forma
       "El expediente se encuentra en <etapa> porque se identificó <actuación> de <fecha>". Solo hechos del OCR.
-      Nunca justifiques con acciones pendientes, recomendaciones ni faltantes (eso va en acciones_sugeridas).
-      evidencia es el documento principal; evidencias lista hasta 3 documentos que respaldan la etapa, el principal primero.
-      documento_origen es el nombre o título del documento tal como consta. extracto_texto es cita literal del OCR.
-      Si no hay foja o fecha, usa null. Con INDETERMINADA: nombre null, evidencia null, evidencias [] y la justificación dice qué falta para decidir.
+      Nunca justifiques con acciones pendientes, recomendaciones ni faltantes.
+      evidencia es un solo documento: documento_origen, foja_pagina, fecha_documento y extracto_texto.
+      extracto_texto es una cita literal de hasta 180 caracteres. Si no hay foja o fecha, usa null.
+      Sin cita literal en el OCR: codigo INDETERMINADA y evidencia null. No inventes extractos.
+      documentos_identificados: como máximo 8, solo los presentes.
+      alertas_inconsistencias: como máximo 4 frases cortas. acciones_sugeridas: como máximo 2.
+      datos_extraidos: como máximo 12 claves con valor literal; omite null y claves que no consten.
+      siguiente_accion_sugerida: una frase.
       {"porcentaje_completitud": 0,
        "etapa_procesal_detectada": "MEDIDAS_CAUTELARES",
        "etapa_sugerida": {
          "codigo": "MEDIDAS_CAUTELARES",
          "nombre": "Medidas cautelares",
-         "justificacion_juridica": "El expediente se encuentra en Medidas cautelares porque se identificó una providencia que dispone la retención de valores del deudor.",
+         "justificacion_juridica": "El expediente se encuentra en Medidas cautelares porque se identificó una providencia de retención del 28 de septiembre de 2026.",
          "evidencia": {
            "documento_origen": "Providencia de medidas cautelares",
            "foja_pagina": 3,
            "fecha_documento": "2026-09-28",
            "extracto_texto": "cita literal corta"
-         },
-         "evidencias": [
-           {"documento_origen": "Providencia de medidas cautelares", "foja_pagina": 3, "fecha_documento": "2026-09-28", "extracto_texto": "cita literal corta"}
-         ]
+         }
        },
-       "suficiencia_documental": {
-         "porcentaje_completitud": 0,
-         "estado_diagnostico": "VERDE|AMARILLO|ROJO",
-         "requisitos_faltantes": ["documento que el OCR no contiene"]
-       },
+       "documentos_identificados": [{"tipo": "PROVIDENCIA", "foja_inicio": 3, "foja_fin": 3, "presente": true}],
+       "alertas_inconsistencias": [],
+       "datos_extraidos": {},
        "acciones_sugeridas": [
-         {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "acción concreta", "descripcion": "por qué", "prioridad": "ALTA|MEDIA|BAJA"}
+         {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "acción concreta", "descripcion": "por qué", "prioridad": "ALTA"}
        ],
-       "documentos_identificados": [{"tipo": "PAGARE", "foja_inicio": 1, "foja_fin": 4, "presente": true}],
-       "alertas_inconsistencias": ["motivo concreto"],
-       "datos_extraidos": {
-         "juicio": null, "operacion": null, "deudor": null, "monto_mora": null,
-         "cedula_deudor_principal": null, "correo_notificacion_deudor": null,
-         "nombre_garante_solidario": null, "cedula_garante_solidario": null,
-         "nombre_depositario_judicial": null, "cedula_depositario_judicial": null,
-         "nombre_funcionario_coactiva": null, "nombre_gerente_general": null, "nombre_abogado_secretario": null,
-         "numero_resolucion_delegacion": null, "fecha_resolucion_delegacion": null,
-         "monto_deuda_total": null, "monto_honorarios": null, "cuenta_honorarios_abogado": null,
-         "banco_embargado": null,
-         "cuentas_embargadas": [{"numero_cuenta": null, "tipo": "CORRIENTE|AHORROS", "titular": "DEUDOR|GARANTE", "banco": null, "monto_retenido": null}],
-         "correo_estudio_juridico_externo": null, "correo_funcionario_coactiva": null, "correo_coactiva_institucional": null,
-         "nombre_deudor_principal_2": null, "cedula_deudor_principal_2": null,
-         "nombre_garante_solidario_2": null, "cedula_garante_solidario_2": null,
-         "fecha_liquidacion": null, "fecha_embargo": null, "fecha_orden_pago_inmediato": null,
-         "fecha_escrito_presentado": null, "fecha_comprobante_pago": null, "numero_comprobante_pago": null,
-         "monto_retencion": null, "monto_credito_original": null, "monto_abono": null,
-         "monto_retencion_1": null, "monto_retencion_2": null,
-         "numero_oficio": null, "institucion_financiera": null,
-         "nombre_embargado": null, "cedula_embargado": null, "calidad_embargado": null,
-         "nombre_coactivado": null, "cedula_coactivado": null, "calidad_coactivado": null,
-         "numero_cuenta_retencion": null, "numero_cuenta_destino": null, "tipo_cuenta_destino": null,
-         "numero_oficio_retencion_1": null, "numero_oficio_retencion_2": null,
-         "correo_notificacion_2": null, "correo_notificacion_3": null,
-         "numero_cuotas": null, "fecha_convenio": null,
-         "nombre_receptor": null, "cedula_receptor": null,
-         "titulo_delegado": null, "titulo_secretario": null, "titulo_gerente_general": null, "titulo_depositario": null},
        "siguiente_accion_sugerida": "qué debe hacer el abogado"}
-      No inventes documentos ni fojas que no estén en el texto. Si falta, presente=false y sin fojas.
-      En datos_extraidos copia solo valores que consten literalmente en el texto; si un dato no aparece usa null
-      (cuentas_embargadas: [] si no hay oficios de retención). No deduzcas, completes ni estimes valores.
-      Nombres sin títulos ni tratamientos (sin "señor", "Sr.", "Abg.", "Mgs.", "Ing."). Cédulas solo con dígitos.
+      No inventes documentos ni fojas que no estén en el texto.
+      Nombres sin títulos ni tratamientos. Cédulas solo con dígitos.
       Montos como número decimal sin símbolo ni separador de miles. Fechas tal como constan en el documento.
-      Correos solo si aparecen escritos en el expediente.
       """;
 
   private final ObjectMapper objectMapper;

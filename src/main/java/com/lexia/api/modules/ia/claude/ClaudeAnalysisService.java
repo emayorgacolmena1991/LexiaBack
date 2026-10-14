@@ -52,7 +52,12 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final int MAX_CHARS_VALIDACION = 80_000;
   private static final int MAX_TOKENS_VALIDACION = 1024;
   private static final int MAX_CHARS_DIAGNOSTICO = 120_000;
+  /** Tope de la primera llamada. El fallo de expedientes grandes es este límite, no el timeout. */
   private static final int MAX_TOKENS_DIAGNOSTICO = 4096;
+  /** Un solo reintento, con esquema reducido, si la primera respuesta llega con stop_reason max_tokens. */
+  private static final int MAX_TOKENS_DIAGNOSTICO_BREVE = 1024;
+  private static final String ERROR_DIAGNOSTICO_TRUNCADO =
+      "Respuesta truncada (max_tokens) al diagnosticar.";
   /** Supera el candado de app.jobs: el latido del worker lo renueva cada 30 s mientras espera. */
   private static final Duration TIMEOUT_DIAGNOSTICO = Duration.ofSeconds(180);
   /** Tope de escrituración y del resto de llamadas Claude. */
@@ -373,44 +378,102 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
             : "Eres un auditor legal. Diagnostica el expediente invocando " + DIAGNOSTICO_TOOL_NAME + ".";
     String ultimoDiagnostico = "sin respuesta";
     for (String modelo : modelos) {
-      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
-        try {
-          HttpResponse<String> res = enviar(construirBodyDiagnostico(modelo, prompt, texto), TIMEOUT_DIAGNOSTICO);
-          int status = res.statusCode();
-          if (status == 200) {
-            JsonNode root = objectMapper.readTree(res.body());
-            if ("max_tokens".equals(root.path("stop_reason").asText())) {
-              return ValidacionDocumentoJson.error("Respuesta truncada (max_tokens) al diagnosticar.");
-            }
-            JsonNode input = leerToolInput(root);
-            if (input != null && input.isObject()) {
-              LOG.info("Claude diagnóstico coactivo OK modelo={}", modelo);
-              return ValidacionDocumentoJson.ok(objectMapper.writeValueAsString(input));
-            }
-            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use " + DIAGNOSTICO_TOOL_NAME;
-          } else if (status == 429 || status == 529 || status >= 500) {
-            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+      IntentoDiagnostico intento = pedirDiagnostico(modelo, prompt, texto, false);
+      if (intento.cortada()) {
+        LOG.warn("Claude diagnóstico truncado modelo={}; un reintento con esquema breve", modelo);
+        IntentoDiagnostico breve = pedirDiagnostico(modelo, prompt, texto, true);
+        if (breve.json() != null) {
+          LOG.info("Claude diagnóstico coactivo recuperado modelo={}", modelo);
+          return ValidacionDocumentoJson.ok(breve.json());
+        }
+        return ValidacionDocumentoJson.error(
+            breve.cortada() ? ERROR_DIAGNOSTICO_TRUNCADO : breve.error());
+      }
+      if (intento.json() != null) {
+        LOG.info("Claude diagnóstico coactivo OK modelo={}", modelo);
+        return ValidacionDocumentoJson.ok(intento.json());
+      }
+      if (intento.detener()) {
+        return ValidacionDocumentoJson.error(intento.error());
+      }
+      ultimoDiagnostico = intento.error();
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo diagnosticar el expediente con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  /**
+   * Una pasada por modelo. {@code breve} no reintenta transporte: es el único rescate tras
+   * {@code max_tokens} y no debe encadenarse.
+   */
+  private IntentoDiagnostico pedirDiagnostico(
+      String modelo, String prompt, String texto, boolean breve) {
+    int tope = breve ? 1 : MAX_INTENTOS_POR_MODELO;
+    String ultimo = "sin respuesta";
+    for (int intento = 1; intento <= tope; intento++) {
+      try {
+        HttpResponse<String> res =
+            enviar(construirBodyDiagnostico(modelo, prompt, texto, breve), TIMEOUT_DIAGNOSTICO);
+        int status = res.statusCode();
+        if (status == 200) {
+          JsonNode root = objectMapper.readTree(res.body());
+          if ("max_tokens".equals(root.path("stop_reason").asText())) {
+            return IntentoDiagnostico.porMaxTokens();
+          }
+          JsonNode input = leerToolInput(root);
+          if (input != null && input.isObject()) {
+            return IntentoDiagnostico.ok(objectMapper.writeValueAsString(input));
+          }
+          ultimo = "modelo=" + modelo + " sin tool_use " + DIAGNOSTICO_TOOL_NAME;
+          if (!breve) {
+            dormir(BACKOFF_BASE_MS * intento);
+          }
+          continue;
+        }
+        if (status == 429 || status == 529 || status >= 500) {
+          ultimo = "modelo=" + modelo + " HTTP " + status;
+          if (!breve) {
             dormir(esperaReintento(res, intento));
             continue;
-          } else {
-            return ValidacionDocumentoJson.error(
-                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
           }
-        } catch (InterruptedException ie) {
-          Thread.currentThread().interrupt();
-          return ValidacionDocumentoJson.error("Diagnóstico coactivo interrumpido.");
-        } catch (LlmTimeoutException timeout) {
-          throw timeout;
-        } catch (Exception e) {
-          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
-          LOG.warn("Fallo Claude diagnóstico coactivo: {}", ultimoDiagnostico);
+          return IntentoDiagnostico.agotado(ultimo);
+        }
+        return IntentoDiagnostico.fallo(
+            "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        return IntentoDiagnostico.fallo("Diagnóstico coactivo interrumpido.");
+      } catch (LlmTimeoutException timeout) {
+        throw timeout;
+      } catch (Exception e) {
+        String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        ultimo = "modelo=" + modelo + " " + truncate(msg, 180);
+        LOG.warn("Fallo Claude diagnóstico coactivo: {}", ultimo);
+        if (!breve) {
           dormir(BACKOFF_BASE_MS * intento);
         }
       }
     }
-    return ValidacionDocumentoJson.error(
-        "No se pudo diagnosticar el expediente con Claude. Último: " + ultimoDiagnostico);
+    return IntentoDiagnostico.agotado(ultimo);
+  }
+
+  /** JSON de tool use, o error. {@code cortada} no es un diagnóstico: el input puede venir a medias. */
+  private record IntentoDiagnostico(String json, String error, boolean cortada, boolean detener) {
+    static IntentoDiagnostico ok(String json) {
+      return new IntentoDiagnostico(json, null, false, false);
+    }
+
+    static IntentoDiagnostico porMaxTokens() {
+      return new IntentoDiagnostico(null, ERROR_DIAGNOSTICO_TRUNCADO, true, false);
+    }
+
+    static IntentoDiagnostico fallo(String error) {
+      return new IntentoDiagnostico(null, error, false, true);
+    }
+
+    static IntentoDiagnostico agotado(String error) {
+      return new IntentoDiagnostico(null, error, false, false);
+    }
   }
 
   @Override
@@ -500,10 +563,49 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     return objectMapper.writeValueAsString(body);
   }
 
-  private String construirBodyDiagnostico(String modelo, String systemPrompt, String texto)
-      throws IOException {
+  private String construirBodyDiagnostico(
+      String modelo, String systemPrompt, String texto, boolean breve) throws IOException {
+    ObjectNode schema = breve ? schemaDiagnosticoBreve() : schemaDiagnostico();
+    String system =
+        breve
+            ? systemPrompt
+                + "\n\nPRIORIDAD: la respuesta anterior se truncó. Ignora catálogos y listas."
+                + " Devuelve solo etapa_sugerida (codigo, justificacion_juridica de máximo dos frases,"
+                + " y una evidencia). Sin cita literal: codigo INDETERMINADA y evidencia null."
+                + " No inventes extractos."
+            : systemPrompt;
+    String instruccion =
+        breve
+            ? "Una sola etapa, justificación de máximo dos frases y una cita literal de hasta 180 caracteres,"
+                + " con documento, fecha y foja solo si constan. No inventes evidencia.\n\n<expediente_ocr>\n"
+            : "Diagnostica una sola etapa, la más probable. Justificación de máximo dos frases."
+                + " Una cita literal de hasta 180 caracteres, con documento, fecha y foja solo si constan."
+                + " No inventes evidencia ni rellenes nulls.\n\n<expediente_ocr>\n";
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", breve ? MAX_TOKENS_DIAGNOSTICO_BREVE : MAX_TOKENS_DIAGNOSTICO);
+    body.put("system", system);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", DIAGNOSTICO_TOOL_NAME);
+    tool.put(
+        "description",
+        breve
+            ? "Registra solo la etapa más probable y una evidencia corta."
+            : "Registra el diagnóstico corto del expediente coactivo.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", DIAGNOSTICO_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        instruccion + truncate(texto, MAX_CHARS_DIAGNOSTICO) + "\n</expediente_ocr>");
+    return objectMapper.writeValueAsString(body);
+  }
+
+  private ObjectNode schemaDiagnostico() {
     ObjectNode doc = objectMapper.createObjectNode();
     doc.put("type", "object");
+    doc.put("additionalProperties", false);
     ObjectNode docProps = doc.putObject("properties");
     docProps.putObject("tipo").put("type", "string");
     docProps.putObject("foja_inicio").put("type", "integer").put("description", "0 si no consta.");
@@ -513,81 +615,99 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
 
     ObjectNode schema = objectMapper.createObjectNode();
     schema.put("type", "object");
+    schema.put("additionalProperties", false);
     ObjectNode props = schema.putObject("properties");
     props.putObject("porcentaje_completitud").put("type", "integer").put("description", "0 a 100.");
-    props.putObject("etapa_procesal_detectada").put("type", "string");
+    props
+        .putObject("etapa_procesal_detectada")
+        .put("type", "string")
+        .put("description", "Igual a etapa_sugerida.codigo. Un solo código.");
     ObjectNode docs = props.putObject("documentos_identificados");
     docs.put("type", "array");
+    docs.put("maxItems", 8);
     docs.set("items", doc);
     ObjectNode alertas = props.putObject("alertas_inconsistencias");
     alertas.put("type", "array");
-    alertas.putObject("items").put("type", "string");
+    alertas.put("maxItems", 4);
+    alertas.putObject("items").put("type", "string").put("maxLength", 180);
     ObjectNode datos = props.putObject("datos_extraidos");
     datos.put("type", "object");
-    ObjectNode datosProps = datos.putObject("properties");
-    datosProps.putObject("juicio").put("type", "string");
-    datosProps.putObject("operacion").put("type", "string");
-    datosProps.putObject("deudor").put("type", "string");
-    datosProps.putObject("monto_mora").put("type", "number");
-    props.putObject("siguiente_accion_sugerida").put("type", "string");
-    ObjectNode evidencia = objectMapper.createObjectNode();
-    evidencia.put("type", "object");
-    ObjectNode evProps = evidencia.putObject("properties");
-    evProps.putObject("documento_origen").put("type", "string");
-    evProps.putObject("foja_pagina").put("type", "integer");
-    evProps.putObject("fecha_documento").put("type", "string");
-    evProps.putObject("extracto_texto").put("type", "string");
-    ObjectNode etapa = props.putObject("etapa_sugerida");
-    etapa.put("type", "object");
-    ObjectNode etapaProps = etapa.putObject("properties");
-    etapaProps.putObject("codigo").put("type", "string");
-    etapaProps.putObject("nombre").put("type", "string");
-    etapaProps.putObject("justificacion_juridica").put("type", "string");
-    etapaProps.set("evidencia", evidencia);
-    etapa.putArray("required").add("codigo").add("justificacion_juridica").add("evidencia");
-    ObjectNode suf = props.putObject("suficiencia_documental");
-    suf.put("type", "object");
-    ObjectNode sufProps = suf.putObject("properties");
-    sufProps.putObject("porcentaje_completitud").put("type", "integer");
-    sufProps.putObject("estado_diagnostico").put("type", "string");
-    sufProps.putObject("requisitos_faltantes").put("type", "array").putObject("items").put("type", "string");
+    datos.put("description", "Como máximo 12 claves con valor literal. Omite null.");
+    datos.put("additionalProperties", true);
+    props
+        .putObject("siguiente_accion_sugerida")
+        .put("type", "string")
+        .put("maxLength", 200);
+    props.set("etapa_sugerida", schemaEtapaSugerida());
     ObjectNode accionItem = objectMapper.createObjectNode();
     accionItem.put("type", "object");
+    accionItem.put("additionalProperties", false);
     ObjectNode accionProps = accionItem.putObject("properties");
     accionProps.putObject("codigo_accion").put("type", "string");
-    accionProps.putObject("titulo").put("type", "string");
-    accionProps.putObject("descripcion").put("type", "string");
+    accionProps.putObject("titulo").put("type", "string").put("maxLength", 120);
+    accionProps.putObject("descripcion").put("type", "string").put("maxLength", 180);
     accionProps.putObject("prioridad").put("type", "string");
     ObjectNode acciones = props.putObject("acciones_sugeridas");
     acciones.put("type", "array");
+    acciones.put("maxItems", 2);
     acciones.set("items", accionItem);
     schema
         .putArray("required")
-        .add("porcentaje_completitud")
         .add("etapa_procesal_detectada")
         .add("etapa_sugerida")
-        .add("documentos_identificados")
-        .add("alertas_inconsistencias")
-        .add("datos_extraidos")
         .add("siguiente_accion_sugerida");
+    return schema;
+  }
 
-    ObjectNode body = objectMapper.createObjectNode();
-    body.put("model", modelo);
-    body.put("max_tokens", MAX_TOKENS_DIAGNOSTICO);
-    body.put("system", systemPrompt);
-    ObjectNode tool = body.putArray("tools").addObject();
-    tool.put("name", DIAGNOSTICO_TOOL_NAME);
-    tool.put("description", "Registra el diagnóstico del expediente coactivo unificado.");
-    tool.set("input_schema", schema);
-    body.putObject("tool_choice").put("type", "tool").put("name", DIAGNOSTICO_TOOL_NAME);
-    ObjectNode msg = body.putArray("messages").addObject();
-    msg.put("role", "user");
-    msg.put(
-        "content",
-        "Diagnostica la etapa procesal tentativa con este OCR consolidado. No inventes documentos, fojas ni extractos.\n\n<expediente_ocr>\n"
-            + truncate(texto, MAX_CHARS_DIAGNOSTICO)
-            + "\n</expediente_ocr>");
-    return objectMapper.writeValueAsString(body);
+  /** Segunda llamada: solo etapa, justificación corta y una evidencia. Sin catálogo ni listas. */
+  private ObjectNode schemaDiagnosticoBreve() {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    schema.put("additionalProperties", false);
+    schema.putObject("properties").set("etapa_sugerida", schemaEtapaSugerida());
+    schema.putArray("required").add("etapa_sugerida");
+    return schema;
+  }
+
+  private ObjectNode schemaEtapaSugerida() {
+    ObjectNode evidencia = objectMapper.createObjectNode();
+    evidencia.put("type", "object");
+    evidencia.put("additionalProperties", false);
+    ObjectNode evProps = evidencia.putObject("properties");
+    evProps
+        .putObject("documento_origen")
+        .put("type", "string")
+        .put("description", "Título tal como consta. Vacío si no hay cita.");
+    evProps
+        .putObject("foja_pagina")
+        .put("type", "integer")
+        .put("description", "0 si no consta.");
+    evProps
+        .putObject("fecha_documento")
+        .put("type", "string")
+        .put("description", "Tal como consta, o vacío.");
+    evProps
+        .putObject("extracto_texto")
+        .put("type", "string")
+        .put("maxLength", 180)
+        .put("description", "Cita literal de hasta 180 caracteres. Vacío si no consta. No la inventes.");
+    ObjectNode etapa = objectMapper.createObjectNode();
+    etapa.put("type", "object");
+    etapa.put("additionalProperties", false);
+    ObjectNode etapaProps = etapa.putObject("properties");
+    etapaProps
+        .putObject("codigo")
+        .put("type", "string")
+        .put("description", "Un solo código de etapa, el más probable.");
+    etapaProps.putObject("nombre").put("type", "string");
+    etapaProps
+        .putObject("justificacion_juridica")
+        .put("type", "string")
+        .put("maxLength", 300)
+        .put("description", "Máximo dos frases y 300 caracteres. Solo hechos del OCR.");
+    etapaProps.set("evidencia", evidencia);
+    etapa.putArray("required").add("codigo").add("justificacion_juridica");
+    return etapa;
   }
 
   private String construirBodyCapturaBiess(String modelo, String texto) throws IOException {
@@ -701,7 +821,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     return enviar(body, TIMEOUT_DEFAULT);
   }
 
-  private HttpResponse<String> enviar(String body, Duration limite) throws IOException, InterruptedException {
+  protected HttpResponse<String> enviar(String body, Duration limite) throws IOException, InterruptedException {
     long inicio = System.nanoTime();
     HttpRequest req =
         HttpRequest.newBuilder(URI.create(API_URL))

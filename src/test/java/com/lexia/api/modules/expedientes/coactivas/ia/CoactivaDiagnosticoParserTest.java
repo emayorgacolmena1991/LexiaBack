@@ -145,6 +145,38 @@ class CoactivaDiagnosticoParserTest {
   }
 
   @Test
+  void respuestaBreveConservaEtapaJustificacionYEvidencia() {
+    Parse r =
+        parser.parse(
+            """
+            {"etapa_sugerida": {
+               "codigo": "EMBARGO",
+               "justificacion_juridica": "El expediente se encuentra en Embargo porque se identificó un oficio de retención del 2 de marzo de 2022.",
+               "evidencia": {
+                 "documento_origen": "Oficio de embargo",
+                 "foja_pagina": 12,
+                 "fecha_documento": "2022-03-02",
+                 "extracto_texto": "Se ordena la retención de fondos"
+               }
+            }}
+            """);
+    assertTrue(r.ok());
+    assertEquals("EMBARGO", r.diagnostico().etapaNormalizada());
+    assertTrue(r.diagnostico().json().contains("\"codigo\":\"EMBARGO\""));
+    var tentativa = parser.tentativaDe(r.diagnostico().json());
+    assertEquals("EMBARGO", tentativa.codigo());
+    assertEquals(
+        "El expediente se encuentra en Embargo porque se identificó un oficio de retención del 2 de marzo de 2022.",
+        tentativa.justificacion());
+    assertEquals("Oficio de embargo", tentativa.documentoOrigen());
+    assertEquals(12, tentativa.fojaPagina());
+    assertEquals("2022-03-02", tentativa.fechaDocumento());
+    assertEquals("Se ordena la retención de fondos", tentativa.extractoTexto());
+    assertEquals(1, tentativa.evidencias().size());
+    assertEquals("Oficio de embargo", tentativa.evidencias().get(0).documentoOrigen());
+  }
+
+  @Test
   void vacioEsError() {
     assertFalse(parser.parse("").ok());
     assertFalse(parser.parse("no es json").ok());
