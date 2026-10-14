@@ -194,11 +194,16 @@ public class EscrituracionAbogadoController {
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar el análisis.");
     }
-    UUID jobId = jobs.encolar(principal.tenantId(), "ESCRITURACION_ANALISIS", cuerpo);
+    UUID jobId = jobs.encolarSiActivo(principal.tenantId(), "ESCRITURACION_ANALISIS", id.toString(), cuerpo);
     return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "ENCOLADO"));
   }
 
-  @GetMapping(value = "/expedientes/{id}/escrituracion/analizar-ia/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  @GetMapping(
+      value = {
+        "/expedientes/{id}/escrituracion/analizar-ia/stream",
+        "/escrituracion/expedientes/{id}/stream"
+      },
+      produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter streamAnalisis(@PathVariable UUID id) {
     iaAnalysis.exigirExpediente(id);
     return sse.abrir(id);

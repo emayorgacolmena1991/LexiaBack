@@ -202,6 +202,7 @@ public class IaAnalysisService {
             documentosExtraidos,
             ext.payload().datosExtraidos(),
             ext.payload().dictamen());
+    persistirDictamen(tenantId, expedienteId, ocrText, response);
 
     if (legalCase != null) {
       persistExtracted(tenantId, expedienteId, response.datosExtraidos());
@@ -236,6 +237,29 @@ public class IaAnalysisService {
     } catch (JsonProcessingException e) {
       LOG.warn("analizar-ia borrador id={} datos_extraidos ilegible", borrador.getId());
       return null;
+    }
+  }
+
+  /** Fila fija: el cotejo la lee si la caché de sesión ya no existe. */
+  private void persistirDictamen(
+      UUID tenantId, UUID expedienteId, String ocrText, ProcesarExpedienteCompletoResult response) {
+    try {
+      DocumentoTextoOcr row =
+          documentoTextoOcr
+              .findByIdExpedienteAndIdDocumento(expedienteId.toString(), "dictamen")
+              .orElseGet(DocumentoTextoOcr::new);
+      row.setTenantId(tenantId);
+      row.setIdExpediente(expedienteId.toString());
+      row.setIdDocumento("dictamen");
+      row.setTipoDocumento("DICTAMEN");
+      if (StringUtils.hasText(ocrText)) {
+        row.setTextoOcr(ocrText);
+      }
+      row.setAnalisisJson(objectMapper.writeValueAsString(response));
+      row.setEstadoDoc("LISTO");
+      documentoTextoOcr.save(row);
+    } catch (JsonProcessingException e) {
+      throw ApiException.badRequest("No se pudo guardar el dictamen del expediente.");
     }
   }
 

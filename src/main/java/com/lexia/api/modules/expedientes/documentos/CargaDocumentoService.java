@@ -449,21 +449,37 @@ public class CargaDocumentoService {
     if (official != null) {
       return caseDocs.listarOcr(official);
     }
-    DraftExpediente draft = requireDraft(idExpediente);
+    List<DocumentoOcrResultadoDTO> durable = listarOcrDurable(idExpediente);
+    if (!durable.isEmpty()) {
+      return durable;
+    }
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null) {
+      return List.of();
+    }
     return draft.documentos().keySet().stream()
         .map(idDoc -> draft.ocrResultados().get(idDoc))
         .filter(java.util.Objects::nonNull)
         .toList();
   }
 
-  /** OCR durable si el id ya es expediente; si no, queda en RAM del borrador. */
+  /** OCR durable: expediente oficial o fila de {@code documento_texto_ocr} del borrador. */
   public void guardarResultadoOcr(String idExpediente, DocumentoOcrResultadoDTO resultado) {
+    if (resultado == null || !StringUtils.hasText(resultado.idDocumento())) {
+      return;
+    }
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
     if (official != null) {
       caseDocs.guardarOcr(official, resultado);
       return;
     }
     guardarOcrEnMemoria(idExpediente, resultado);
+    AuthPrincipal principal = AuthContext.get();
+    try {
+      persistirFilaOcr(idExpediente, principal == null ? null : principal.tenantId(), resultado);
+    } catch (RuntimeException e) {
+      LOG.warn("OCR no persistido expediente={}: {}", idExpediente, e.getMessage());
+    }
   }
 
   /** Guarda resultado OCR+Gemini solo en RAM del borrador. */
@@ -485,24 +501,56 @@ public class CargaDocumentoService {
     }
     for (DocumentoOcrResultadoDTO r : draft.ocrResultados().values()) {
       try {
-        DocumentoTextoOcr row =
-            ocrRepository
-                .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
-                .orElseGet(DocumentoTextoOcr::new);
-        row.setTenantId(tenantId);
-        row.setIdExpediente(idExpediente);
-        row.setIdDocumento(r.idDocumento());
-        row.setTipoDocumento(r.tipoDocumento());
-        row.setTextoOcr(r.textoOcr());
-        row.setAnalisisJson(r.analisisJson());
-        row.setEstadoDoc(r.estado());
-        row.setMotivo(r.motivo());
-        row.setConfianza(r.confianza());
-        ocrRepository.save(row);
+        persistirFilaOcr(idExpediente, tenantId, r);
       } catch (Exception e) {
         // no bloquear alta si falla el volcado OCR
       }
     }
+  }
+
+  private List<DocumentoOcrResultadoDTO> listarOcrDurable(String idExpediente) {
+    List<DocumentoOcrResultadoDTO> out = new ArrayList<>();
+    for (DocumentoTextoOcr row : ocrRepository.findByIdExpedienteOrderByCreatedAtAsc(idExpediente)) {
+      if (row == null || "dictamen".equals(row.getIdDocumento())) {
+        continue;
+      }
+      if (!StringUtils.hasText(row.getTextoOcr()) && !StringUtils.hasText(row.getAnalisisJson())) {
+        continue;
+      }
+      out.add(
+          new DocumentoOcrResultadoDTO(
+              row.getIdDocumento(),
+              row.getTipoDocumento(),
+              row.getTipoDocumento(),
+              row.getTextoOcr(),
+              row.getAnalisisJson(),
+              row.getEstadoDoc(),
+              row.getMotivo(),
+              row.getConfianza()));
+    }
+    return out;
+  }
+
+  private void persistirFilaOcr(String idExpediente, UUID tenantId, DocumentoOcrResultadoDTO r) {
+    if (r == null || !StringUtils.hasText(r.idDocumento())) {
+      return;
+    }
+    DocumentoTextoOcr row =
+        ocrRepository
+            .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
+            .orElseGet(DocumentoTextoOcr::new);
+    if (tenantId != null) {
+      row.setTenantId(tenantId);
+    }
+    row.setIdExpediente(idExpediente);
+    row.setIdDocumento(r.idDocumento());
+    row.setTipoDocumento(r.tipoDocumento());
+    row.setTextoOcr(r.textoOcr());
+    row.setAnalisisJson(r.analisisJson());
+    row.setEstadoDoc(StringUtils.hasText(r.estado()) ? r.estado() : "LEGIBLE");
+    row.setMotivo(r.motivo());
+    row.setConfianza(r.confianza());
+    ocrRepository.save(row);
   }
 
   void actualizarDocPrevalidacion(

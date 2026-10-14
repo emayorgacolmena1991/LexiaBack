@@ -35,7 +35,6 @@ import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoMerge;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
-import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
@@ -60,8 +59,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -89,7 +86,6 @@ public class CoactivaExpedienteService {
   private final CoactivaSemaforoService semaforo;
   private final CoactivaCaseSync caseSync;
   private final AuthorizationService authorization;
-  private final CoactivaValidacionIaWorker validacionIa;
   private final CoactivaExpedienteAnalisisWorker diagnostico;
   private final CoactivaAnalisisRepository analisisRepo;
   private final CoactivaDiagnosticoParser diagnosticoParser;
@@ -110,7 +106,6 @@ public class CoactivaExpedienteService {
       CoactivaSemaforoService semaforo,
       CoactivaCaseSync caseSync,
       AuthorizationService authorization,
-      CoactivaValidacionIaWorker validacionIa,
       CoactivaExpedienteAnalisisWorker diagnostico,
       CoactivaAnalisisRepository analisisRepo,
       CoactivaDiagnosticoParser diagnosticoParser,
@@ -127,7 +122,6 @@ public class CoactivaExpedienteService {
     this.semaforo = semaforo;
     this.caseSync = caseSync;
     this.authorization = authorization;
-    this.validacionIa = validacionIa;
     this.diagnostico = diagnostico;
     this.analisisRepo = analisisRepo;
     this.diagnosticoParser = diagnosticoParser;
@@ -940,7 +934,7 @@ public class CoactivaExpedienteService {
   }
 
   /**
-   * Marca {@code ANALIZANDO} y lanza el worker tras el commit. No analiza actas ni PDFs de
+   * Marca {@code ANALIZANDO} e inserta el job en la misma transacción. No analiza actas ni PDFs de
    * actuación generados por el sistema.
    */
   public void encolarAnalisis(CoactivaArchivo archivo, String etapa) {
@@ -953,7 +947,7 @@ public class CoactivaExpedienteService {
       return;
     }
     archivo.iniciarAnalisisIa(etapa);
-    lanzarTrasCommit(() -> validacionIa.analizarAsync(archivo.getTenantId(), archivo.getId()));
+    diagnostico.encolarAnexo(archivo.getTenantId(), archivo.getExpedienteId(), archivo.getId());
   }
 
   private void encolarDiagnostico(CoactivaArchivo archivo, String etapa) {
@@ -963,21 +957,7 @@ public class CoactivaExpedienteService {
           .findByIdAndTenantIdAndDeletedAtIsNull(archivo.getExpedienteId(), archivo.getTenantId())
           .ifPresent(e -> e.marcarAnalizando(archivo.getId()));
     }
-    lanzarTrasCommit(() -> diagnostico.analizarAsync(archivo.getTenantId(), archivo.getId()));
-  }
-
-  private static void lanzarTrasCommit(Runnable launch) {
-    if (TransactionSynchronizationManager.isSynchronizationActive()) {
-      TransactionSynchronizationManager.registerSynchronization(
-          new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-              launch.run();
-            }
-          });
-    } else {
-      launch.run();
-    }
+    diagnostico.encolar(archivo.getTenantId(), archivo.getExpedienteId(), archivo.getId());
   }
 
   private static boolean esPdf(MultipartFile file) {

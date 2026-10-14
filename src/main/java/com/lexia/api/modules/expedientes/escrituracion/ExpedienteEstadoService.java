@@ -1,12 +1,17 @@
 package com.lexia.api.modules.expedientes.escrituracion;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorrador;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.caso.CaseStageRepository;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
+import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoMinutaBorrador;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
@@ -53,6 +58,8 @@ public class ExpedienteEstadoService {
   private final MinutaGenerationService minutas;
   private final CaseStageRepository caseStages;
   private final ProcessStageDefRepository stageDefs;
+  private final ExpedienteBorradorStore borradores;
+  private final ObjectMapper objectMapper;
 
   public ExpedienteEstadoService(
       AuthorizationService authorization,
@@ -66,7 +73,9 @@ public class ExpedienteEstadoService {
       DocumentosExtraidosStore documentos,
       MinutaGenerationService minutas,
       CaseStageRepository caseStages,
-      ProcessStageDefRepository stageDefs) {
+      ProcessStageDefRepository stageDefs,
+      ExpedienteBorradorStore borradores,
+      ObjectMapper objectMapper) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -79,6 +88,8 @@ public class ExpedienteEstadoService {
     this.minutas = minutas;
     this.caseStages = caseStages;
     this.stageDefs = stageDefs;
+    this.borradores = borradores;
+    this.objectMapper = objectMapper;
   }
 
   /** Paso del wizard para retomar el flujo al salir y volver. */
@@ -105,9 +116,9 @@ public class ExpedienteEstadoService {
   public EstadoMinutaBorrador hidratar(UUID caseId) {
     authorization.requirePermission("expedientes:caso:leer");
     UUID tenantId = AuthContext.require().tenantId();
-    legalCases
-        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
-        .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    if (legalCases.findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId).isEmpty()) {
+      return hidratarBorrador(caseId, tenantId);
+    }
 
     List<DocumentoExtraidoDTO> docs = documentos.cargar(caseId, tenantId);
     DatosExtraidos extraidos = loadDatos(caseId, tenantId);
@@ -136,6 +147,35 @@ public class ExpedienteEstadoService {
     }
     return new EstadoMinutaBorrador(
         caseId, biess, extraidos, docs, dictamen, minuta, hasDraft, draftId);
+  }
+
+  private EstadoMinutaBorrador hidratarBorrador(UUID caseId, UUID tenantId) {
+    ExpedienteBorrador borrador =
+        borradores
+            .find(caseId, tenantId)
+            .orElseThrow(() -> ApiException.notFound("Expediente no encontrado."));
+    ProcesarExpedienteCompletoResult estudio = null;
+    if (StringUtils.hasText(borrador.getDatosExtraidos())) {
+      try {
+        estudio =
+            objectMapper.readValue(borrador.getDatosExtraidos(), ProcesarExpedienteCompletoResult.class);
+      } catch (JsonProcessingException e) {
+        estudio = null;
+      }
+    }
+    List<DocumentoExtraidoDTO> docs =
+        estudio == null || estudio.documentosExtraidos() == null
+            ? List.of()
+            : estudio.documentosExtraidos();
+    return new EstadoMinutaBorrador(
+        caseId,
+        DatosBiessMinuta.empty(),
+        estudio == null ? null : estudio.datosExtraidos(),
+        docs,
+        estudio == null ? null : estudio.dictamen(),
+        null,
+        false,
+        null);
   }
 
   private EstadoEscrituracion buildEstado(

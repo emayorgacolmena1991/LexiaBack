@@ -94,7 +94,9 @@ class ExpedienteEstadoServiceTest {
             documentos,
             minutas,
             caseStages,
-            stageDefs);
+            stageDefs,
+            null,
+            null);
 
     EstadoMinutaBorrador estado = service.hidratar(caseId);
 

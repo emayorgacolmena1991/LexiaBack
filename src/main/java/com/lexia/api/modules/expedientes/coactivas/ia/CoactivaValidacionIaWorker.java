@@ -6,7 +6,6 @@ import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoStora
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto.TextoOcr;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
-import com.lexia.api.modules.tenancy.TenantContext;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -14,13 +13,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
-/** Worker asíncrono: OCR → prompt del catálogo → LLM JSON → estado del archivo. */
+/** OCR → prompt del catálogo → LLM JSON → estado del archivo. Lo invoca el job de diagnóstico. */
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
 public class CoactivaValidacionIaWorker {
@@ -62,15 +60,10 @@ public class CoactivaValidacionIaWorker {
   }
 
   /**
-   * Dos pasos, fuera de la transacción HTTP: (1) Azure OCR del archivo completo, (2) ese texto +
-   * prompt al LLM. El {@code @Transactional} en el hilo {@code @Async} no commiteaba y el archivo
-   * se quedaba en ANALIZANDO: el front polleaba {@code /archivos} sin fin.
+   * Corre en el worker de {@code app.jobs} (job {@code COACTIVA_DIAGNOSTICO} de un anexo), con el
+   * tenant ya fijado: (1) Azure OCR del archivo, (2) ese texto + prompt al LLM.
    */
-  @Async("taskExecutor")
-  public void analizarAsync(UUID tenantId, UUID archivoId) {
-    if (TenantContext.getTenantId() == null) {
-      TenantContext.setTenantId(tenantId);
-    }
+  public void ejecutar(UUID tenantId, UUID archivoId) {
     CoactivaArchivo archivo = cargar(tenantId, archivoId);
     if (archivo == null || !archivo.analizando()) {
       LOG.warn("Validación IA sin archivo visible archivo={} tenant={}", archivoId, tenantId);

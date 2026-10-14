@@ -16,7 +16,6 @@ import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
-import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.List;
 import java.util.Optional;
@@ -40,7 +39,6 @@ class CoactivaExpedienteReanalisisTest {
   @Mock private CoactivaEventoRepository eventos;
   @Mock private CoactivaArchivoRepository archivos;
   @Mock private AuthorizationService authorization;
-  @Mock private CoactivaValidacionIaWorker validacionIa;
   @Mock private CoactivaExpedienteAnalisisWorker diagnostico;
 
   private CoactivaExpedienteService service;
@@ -52,7 +50,7 @@ class CoactivaExpedienteReanalisisTest {
     service =
         new CoactivaExpedienteService(
             expedientes, null, null, null, eventos, archivos, null, null, null, null, authorization,
-            validacionIa, diagnostico, null, null, null, null);
+            diagnostico, null, null, null, null);
     expediente = CoactivaExpediente.create(TENANT, UUID.randomUUID(), "025-2024-00026", USER);
     when(expedientes.findByIdAndTenantIdAndDeletedAtIsNull(expediente.getId(), TENANT))
         .thenReturn(Optional.of(expediente));
@@ -77,8 +75,7 @@ class CoactivaExpedienteReanalisisTest {
     assertTrue(pdf.analizando());
     assertEquals(CoactivaExpediente.ANALISIS_ANALIZANDO, expediente.getEstadoAnalisis());
     verify(authorization).requirePermission(CoactivaPermisos.ESCRIBIR);
-    verify(diagnostico).analizarAsync(TENANT, pdf.getId());
-    verify(validacionIa, never()).analizarAsync(any(), any());
+    verify(diagnostico).encolar(TENANT, expediente.getId(), pdf.getId());
     ArgumentCaptor<CoactivaEvento> evento = ArgumentCaptor.forClass(CoactivaEvento.class);
     verify(eventos).save(evento.capture());
     assertEquals("ANALISIS_REINICIADO", evento.getValue().getTipo());
@@ -95,7 +92,7 @@ class CoactivaExpedienteReanalisisTest {
     AnalisisResponse r = service.reanalizar(expediente.getId());
 
     assertEquals(escaneado.getId(), r.archivoId());
-    verify(diagnostico).analizarAsync(TENANT, escaneado.getId());
+    verify(diagnostico).encolar(TENANT, expediente.getId(), escaneado.getId());
   }
 
   @Test
@@ -105,7 +102,7 @@ class CoactivaExpedienteReanalisisTest {
     ApiException e = assertThrows(ApiException.class, () -> service.reanalizar(expediente.getId()));
 
     assertEquals(HttpStatus.CONFLICT, e.getStatus());
-    verify(diagnostico, never()).analizarAsync(any(), any());
+    verify(diagnostico, never()).encolar(any(), any(), any());
     verify(eventos, never()).save(any());
   }
 
@@ -117,7 +114,7 @@ class CoactivaExpedienteReanalisisTest {
     ApiException e = assertThrows(ApiException.class, () -> service.reanalizar(expediente.getId()));
 
     assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
-    verify(diagnostico, never()).analizarAsync(any(), any());
+    verify(diagnostico, never()).encolar(any(), any(), any());
   }
 
   private CoactivaArchivo archivo(String tipo) {

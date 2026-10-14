@@ -41,6 +41,42 @@ public class IngestaJobQueue {
     return id;
   }
 
+  /** No apila otro análisis si ya hay uno pendiente o en curso para el expediente. */
+  @Transactional
+  public UUID encolarSiActivo(UUID tenantId, String tipo, String expedienteId, String payload) {
+    @SuppressWarnings("unchecked")
+    List<?> rows =
+        entityManager
+            .createNativeQuery(
+                """
+                SELECT id FROM app.jobs
+                WHERE tenant_id = :tenant AND tipo = :tipo
+                  AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                  AND payload->>'expedienteId' = :expediente
+                ORDER BY created_at DESC
+                LIMIT 1
+                """)
+            .setParameter("tenant", tenantId)
+            .setParameter("tipo", tipo)
+            .setParameter("expediente", expedienteId)
+            .getResultList();
+    if (!rows.isEmpty()) {
+      UUID id = UUID.fromString(String.valueOf(rows.get(0)));
+      entityManager
+          .createNativeQuery(
+              """
+              UPDATE app.jobs
+              SET payload = CAST(:payload AS jsonb)
+              WHERE id = :id AND estado = 'PENDIENTE'
+              """)
+          .setParameter("payload", payload)
+          .setParameter("id", id)
+          .executeUpdate();
+      return id;
+    }
+    return encolar(tenantId, tipo, payload);
+  }
+
   @Transactional
   public Optional<Job> reclamar(String workerId) {
     @SuppressWarnings("unchecked")

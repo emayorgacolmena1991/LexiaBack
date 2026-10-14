@@ -413,18 +413,7 @@ public class IngestaMasivaEscrituracionService {
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar la fila " + fila.clientRowId + ".");
     }
-    Runnable insertar = () -> jobs.encolar(principal.tenantId(), tipo, payload);
-    if (TransactionSynchronizationManager.isSynchronizationActive()) {
-      TransactionSynchronizationManager.registerSynchronization(
-          new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-              insertar.run();
-            }
-          });
-      return;
-    }
-    insertar.run();
+    jobs.encolar(principal.tenantId(), tipo, payload);
   }
 
   public void ejecutarJob(IngestaJobQueue.Job job) {

@@ -68,6 +68,7 @@ public class CoactivaExpedienteAnalisisWorker {
   private final CoactivaTareaSugeridaRepository tareas;
   private final IngestaJobQueue jobs;
   private final BatchEventPublisherService sse;
+  private final CoactivaValidacionIaWorker validacion;
   private final boolean dummy;
   private final TransactionTemplate tx;
 
@@ -85,6 +86,7 @@ public class CoactivaExpedienteAnalisisWorker {
       CoactivaTareaSugeridaRepository tareas,
       IngestaJobQueue jobs,
       BatchEventPublisherService sse,
+      CoactivaValidacionIaWorker validacion,
       PlatformTransactionManager txManager,
       @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy) {
     this.archivos = archivos;
@@ -100,18 +102,39 @@ public class CoactivaExpedienteAnalisisWorker {
     this.tareas = tareas;
     this.jobs = jobs;
     this.sse = sse;
+    this.validacion = validacion;
     this.dummy = dummy;
     this.tx = new TransactionTemplate(txManager);
   }
 
-  /** Encola el diagnóstico en {@code app.jobs}. Lo corre {@code IngestaJobWorker}. */
-  public void analizarAsync(UUID tenantId, UUID archivoId) {
-    jobs.encolar(tenantId, "COACTIVA_DIAGNOSTICO", "{\"archivoId\":\"" + archivoId + "\"}");
+  /** Inserta en {@code app.jobs} dentro de la transacción del llamador. Lo corre {@code IngestaJobWorker}. */
+  public void encolar(UUID tenantId, UUID expedienteId, UUID archivoId) {
+    jobs.encolar(tenantId, "COACTIVA_DIAGNOSTICO", payload(expedienteId, archivoId));
+    anunciar(expedienteId);
+  }
+
+  public void encolarAnexo(UUID tenantId, UUID expedienteId, UUID archivoId) {
+    jobs.encolar(tenantId, "COACTIVA_VALIDACION_ANEXO", payload(expedienteId, archivoId));
+    anunciar(expedienteId);
+  }
+
+  private void anunciar(UUID expedienteId) {
+    LOG.info("[COACTIVA] Job encolado para reemplazo de documento en expediente {}", expedienteId);
+    avisar(expedienteId, "ANALYSIS_STARTED");
+  }
+
+  private static String payload(UUID expedienteId, UUID archivoId) {
+    return "{\"expedienteId\":\"" + expedienteId + "\",\"archivoId\":\"" + archivoId + "\"}";
   }
 
   public void ejecutar(UUID tenantId, UUID archivoId) {
     RlsConnectionProvider.setTenantId(tenantId);
     CoactivaArchivo archivo = cargarArchivo(tenantId, archivoId);
+    if (archivo != null && !CoactivaArchivo.esExpedienteUnificado(archivo.getTipo())) {
+      validacion.ejecutar(tenantId, archivoId);
+      avisar(archivo.getExpedienteId(), "ANALYSIS_COMPLETED");
+      return;
+    }
     if (archivo == null || !archivo.analizando() || archivo.getExpedienteId() == null) {
       LOG.warn("Diagnóstico sin archivo en análisis archivo={} tenant={}", archivoId, tenantId);
       return;
