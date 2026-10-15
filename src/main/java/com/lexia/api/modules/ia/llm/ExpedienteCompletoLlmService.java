@@ -54,20 +54,24 @@ public class ExpedienteCompletoLlmService {
                 .orElse(DEFAULT_PROMPT_KEY)
             : DEFAULT_PROMPT_KEY;
     String cantonResuelto = StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL";
-    String deBd = catalogo.resolver(cantonResuelto, code, "*");
+    EscrituracionPromptCatalog.Prompt deBd = catalogo.resolver(cantonResuelto, code, "estudio_titulo");
     String prompt =
-        StringUtils.hasText(deBd)
-            ? deBd.replace("${canton}", cantonResuelto).replace("${productCode}", code)
+        deBd != null
+            ? deBd.texto().replace("${canton}", cantonResuelto).replace("${productCode}", code)
             : promptRegistryService.resolvePrompt(
                 promptKey, Map.of("canton", cantonResuelto, "productCode", code, "vigenciaDias", "60"));
+    String version =
+        promptKey + "@v" + (deBd == null ? 0 : deBd.version()) + ":"
+            + DocumentoCacheStore.sha256(prompt).substring(0, 12);
     String hash = DocumentoCacheStore.sha256(ocrMarcado);
-    var guardado = cache.buscar(hash, promptKey);
+    var guardado = cache.buscar(hash, version);
     if (guardado.isPresent() && StringUtils.hasText(guardado.get().resultadoJson())) {
       try {
         var payload =
             new com.fasterxml.jackson.databind.ObjectMapper()
                 .readValue(guardado.get().resultadoJson(), ProcesarExpedienteCompletoPayload.class);
-        return new Ejecucion(promptKey, ExtraccionExpedienteCompleto.ok(payload));
+        return new Ejecucion(
+            promptKey, ExtraccionExpedienteCompleto.ok(payload), version, guardado.get().modelo(), hash);
       } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
         // El JSON guardado no sirve. Se vuelve a llamar al modelo.
       }
@@ -80,17 +84,26 @@ public class ExpedienteCompletoLlmService {
         elegido = pesado;
       }
     }
+    String modelo = IaConsumoContexto.ultimo() == null ? "llm" : IaConsumoContexto.ultimo().modelo();
     if (elegido != null && elegido.payload() != null && "OK".equals(elegido.estado())) {
       try {
         String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(elegido.payload());
-        String modelo = IaConsumoContexto.ultimo() == null ? "llm" : IaConsumoContexto.ultimo().modelo();
-        cache.guardar(hash, promptKey, modelo, null, json);
+        cache.guardar(hash, version, modelo, null, json);
       } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
         // Sin caché de JSON. El resultado igual se devuelve.
       }
     }
-    return new Ejecucion(promptKey, elegido);
+    return new Ejecucion(promptKey, elegido, version, modelo, hash);
   }
 
-  public record Ejecucion(String promptKey, ExtraccionExpedienteCompleto extraccion) {}
+  public record Ejecucion(
+      String promptKey,
+      ExtraccionExpedienteCompleto extraccion,
+      String versionPrompt,
+      String modelo,
+      String sha256) {
+    public Ejecucion(String promptKey, ExtraccionExpedienteCompleto extraccion) {
+      this(promptKey, extraccion, promptKey, null, null);
+    }
+  }
 }

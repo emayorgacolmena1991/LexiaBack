@@ -5,7 +5,10 @@ import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.Statement;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -66,8 +69,18 @@ public class BatchEventPublisherService {
     return emitter;
   }
 
+  /** Contrato del cuerpo: {@code {"evento": "...", "data": {...}, "ts": "ISO8601"}}. */
+  public static Map<String, Object> sobre(String evento, Object data) {
+    Map<String, Object> cuerpo = new LinkedHashMap<>();
+    cuerpo.put("evento", evento);
+    cuerpo.put("data", data);
+    cuerpo.put("ts", Instant.now().toString());
+    return cuerpo;
+  }
+
   public void publicar(UUID batchId, String evento, Object data) {
-    emitirLocal(batchId, evento, data);
+    Map<String, Object> cuerpo = sobre(evento, data);
+    emitirLocal(batchId, evento, cuerpo);
     try {
       UUID eventoId = UUID.randomUUID();
       jdbc.update(
@@ -75,7 +88,7 @@ public class BatchEventPublisherService {
           eventoId,
           batchId,
           evento,
-          json.writeValueAsString(data));
+          json.writeValueAsString(cuerpo));
       jdbc.query(
           "SELECT pg_notify(?, ?)",
           rs -> {},

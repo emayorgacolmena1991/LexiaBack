@@ -2,15 +2,19 @@ package com.lexia.api.modules.expedientes.escrituracion.ingesta;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisService;
+import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
+import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.tenancy.RlsConnectionProvider;
 import com.lexia.api.modules.tenancy.TenantContext;
 import jakarta.annotation.PreDestroy;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +38,7 @@ public class IngestaJobWorker {
   private static final Logger LOG = LoggerFactory.getLogger(IngestaJobWorker.class);
   private static final String NODE = UUID.randomUUID().toString();
   static final Collection<String> TIPOS_ESCRITURACION =
-      List.of("ESCRITURACION_ANALISIS", "OCR_EXTRACTION", "IA_ANALYSIS");
+      List.of("ESCRITURACION_ANALISIS", "OCR_EXTRACTION", "IA_ANALYSIS", "BIESS_CAPTURA", "MINUTA_RENDER");
   static final Collection<String> TIPOS_COACTIVA =
       List.of("COACTIVA_DIAGNOSTICO", "COACTIVA_VALIDACION_ANEXO");
 
@@ -43,6 +47,8 @@ public class IngestaJobWorker {
   private final ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas;
   private final ObjectProvider<CoactivaValidacionIaWorker> anexos;
   private final ObjectProvider<IaAnalysisService> escrituracion;
+  private final ObjectProvider<MinutaGenerationService> minutas;
+  private final ObjectProvider<CapturaBiessService> capturas;
   private final BatchEventPublisherService sse;
   private final ObjectMapper json;
   private final ExecutorService anexoPool =
@@ -72,6 +78,8 @@ public class IngestaJobWorker {
       ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas,
       ObjectProvider<CoactivaValidacionIaWorker> anexos,
       ObjectProvider<IaAnalysisService> escrituracion,
+      ObjectProvider<MinutaGenerationService> minutas,
+      ObjectProvider<CapturaBiessService> capturas,
       BatchEventPublisherService sse,
       ObjectMapper json) {
     this.cola = cola;
@@ -79,6 +87,8 @@ public class IngestaJobWorker {
     this.coactivas = coactivas;
     this.anexos = anexos;
     this.escrituracion = escrituracion;
+    this.minutas = minutas;
+    this.capturas = capturas;
     this.sse = sse;
     this.json = json;
     latido.scheduleAtFixedRate(this::renovar, 30, 30, TimeUnit.SECONDS);
@@ -131,6 +141,10 @@ public class IngestaJobWorker {
     try {
       if ("ESCRITURACION_ANALISIS".equals(actual.tipo())) {
         correrEscrituracion(actual);
+      } else if ("BIESS_CAPTURA".equals(actual.tipo())) {
+        correrCapturaBiess(actual);
+      } else if ("MINUTA_RENDER".equals(actual.tipo())) {
+        correrMinuta(actual);
       } else {
         ingesta.ejecutarJob(actual);
       }
@@ -214,17 +228,67 @@ public class IngestaJobWorker {
     }
   }
 
-  private void correrEscrituracion(IngestaJobQueue.Job job) {
+  /** Payload con la identidad del usuario que encoló: restaura {@link AuthContext} para el job. */
+  private JsonNode comoUsuario(IngestaJobQueue.Job job) {
     JsonNode nodo;
     try {
       nodo = json.readTree(job.payload());
     } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
-      throw new IllegalArgumentException("payload de análisis ilegible");
+      throw new IllegalArgumentException("payload de " + job.tipo() + " ilegible");
     }
-    UUID expedienteId = UUID.fromString(nodo.path("expedienteId").asText());
     AuthContext.set(
         new AuthPrincipal(
             uuid(nodo, "userId"), uuid(nodo, "sessionId"), job.tenantId(), uuid(nodo, "membershipId")));
+    return nodo;
+  }
+
+  /** Error de negocio (imagen ilegible, sin datos): no se reintenta, se avisa por SSE y se cierra. */
+  private void correrCapturaBiess(IngestaJobQueue.Job job) {
+    JsonNode nodo = comoUsuario(job);
+    UUID expedienteId = UUID.fromString(nodo.path("expedienteId").asText());
+    CapturaBiessService servicio = capturas.getIfAvailable();
+    if (servicio == null) {
+      throw new IllegalStateException("Captura BIESS no disponible");
+    }
+    try {
+      byte[] bytes = Base64.getDecoder().decode(nodo.path("archivo").asText(""));
+      var campos = servicio.extraer(expedienteId, bytes, nodo.path("mime").asText(""));
+      sse.publicar(
+          expedienteId,
+          "BIESS_DONE",
+          Map.of("expedienteId", expedienteId.toString(), "jobId", job.id().toString(), "campos", campos));
+    } catch (ApiException ex) {
+      sse.publicar(
+          expedienteId,
+          "BIESS_FAILED",
+          Map.of("expedienteId", expedienteId.toString(), "error", String.valueOf(ex.getMessage())));
+    } catch (RuntimeException ex) {
+      if (job.intentos() >= 3) {
+        String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+        sse.publicar(expedienteId, "BIESS_FAILED", Map.of("expedienteId", expedienteId.toString(), "error", msg));
+      }
+      throw ex;
+    }
+  }
+
+  private void correrMinuta(IngestaJobQueue.Job job) {
+    JsonNode nodo = comoUsuario(job);
+    MinutaGenerationService servicio = minutas.getIfAvailable();
+    if (servicio == null) {
+      throw new IllegalStateException("Minutas no disponible");
+    }
+    var minuta =
+        servicio.enriquecerConIa(
+            UUID.fromString(nodo.path("minutaId").asText()), nodo.path("sessionIdOcr").asText(""));
+    sse.publicar(
+        minuta.caseId(),
+        "MINUTA_READY",
+        Map.of("minutaId", minuta.minutaId().toString(), "variables_pendientes", minuta.pendientes()));
+  }
+
+  private void correrEscrituracion(IngestaJobQueue.Job job) {
+    JsonNode nodo = comoUsuario(job);
+    UUID expedienteId = UUID.fromString(nodo.path("expedienteId").asText());
     IaAnalysisService servicio = escrituracion.getIfAvailable();
     if (servicio == null) {
       throw new IllegalStateException("Análisis de escrituración no disponible");

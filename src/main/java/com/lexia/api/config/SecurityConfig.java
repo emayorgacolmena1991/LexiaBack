@@ -126,6 +126,7 @@ public class SecurityConfig {
                         paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{id}/extract-biess-screenshot"),
+                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/captura-biess"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/stages/advance"),
                         paths.matcher(
                             HttpMethod.POST,

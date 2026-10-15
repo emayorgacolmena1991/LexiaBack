@@ -212,7 +212,7 @@ public class IaAnalysisService {
       persistExtracted(tenantId, expedienteId, response.datosExtraidos());
     }
     if (writingFile != null) {
-      persistStudy(tenantId, writingFile, response.dictamen());
+      persistStudy(tenantId, writingFile, response.dictamen(), ejecucion);
     } else if (borrador != null) {
       persistDraftStudy(borrador, response);
     } else {
@@ -362,12 +362,11 @@ public class IaAnalysisService {
         ExtractedData.create(tenantId, caseId, grupo + "." + campo, valor.trim(), grupo));
   }
 
-  private void persistStudy(UUID tenantId, WritingFile writingFile, Dictamen dictamen) {
-    TitleStudy study =
-        titleStudies
-            .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(
-                writingFile.getId(), tenantId)
-            .orElseGet(() -> titleStudies.save(TitleStudy.create(tenantId, writingFile.getId())));
+  /** Cada análisis es una versión nueva de {@code title_study}; las lecturas toman la última. */
+  private void persistStudy(
+      UUID tenantId, WritingFile writingFile, Dictamen dictamen, Ejecucion ejecucion) {
+    TitleStudy study = TitleStudy.create(tenantId, writingFile.getId());
+    study.applyOrigen(ejecucion.versionPrompt(), ejecucion.modelo(), ejecucion.sha256());
     String estado = dictamen == null || !StringUtils.hasText(dictamen.estado())
         ? "WITH_OBSERVATIONS"
         : dictamen.estado().trim();

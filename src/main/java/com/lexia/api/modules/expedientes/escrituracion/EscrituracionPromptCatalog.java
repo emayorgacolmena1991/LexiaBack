@@ -16,14 +16,16 @@ public class EscrituracionPromptCatalog {
     this.entityManager = entityManager;
   }
 
+  public record Prompt(String texto, int version) {}
+
   @Transactional(readOnly = true)
-  public String resolver(String canton, String productCode, String tipoDocumento) {
+  public Prompt resolver(String canton, String productCode, String tipoDocumento) {
     @SuppressWarnings("unchecked")
-    List<?> rows =
+    List<Object[]> rows =
         entityManager
             .createNativeQuery(
                 """
-                SELECT system_prompt
+                SELECT system_prompt, version
                 FROM app.escrituracion_prompt_catalog
                 WHERE activo
                   AND canton IN (:canton, '*')
@@ -32,17 +34,18 @@ public class EscrituracionPromptCatalog {
                 ORDER BY
                   (canton <> '*') DESC,
                   (product_code <> '*') DESC,
-                  (tipo_documento <> '*') DESC
+                  (tipo_documento <> '*') DESC,
+                  version DESC
                 LIMIT 1
                 """)
             .setParameter("canton", texto(canton))
             .setParameter("product", texto(productCode))
             .setParameter("tipo", texto(tipoDocumento))
             .getResultList();
-    if (rows.isEmpty() || !StringUtils.hasText(String.valueOf(rows.get(0)))) {
+    if (rows.isEmpty() || !StringUtils.hasText(String.valueOf(rows.get(0)[0]))) {
       return null;
     }
-    return String.valueOf(rows.get(0));
+    return new Prompt(String.valueOf(rows.get(0)[0]), ((Number) rows.get(0)[1]).intValue());
   }
 
   private static String texto(String value) {

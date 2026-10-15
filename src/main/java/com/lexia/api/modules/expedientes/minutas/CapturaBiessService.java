@@ -59,7 +59,10 @@ public class CapturaBiessService {
     this.datosBiess = datosBiess;
   }
 
-  public DatosBiessMinuta extraer(UUID caseId, MultipartFile file) {
+  public record CapturaValidada(byte[] bytes, String mime) {}
+
+  /** Lado HTTP: valida y devuelve el binario para encolar {@code BIESS_CAPTURA}. No llama a OCR ni LLM. */
+  public CapturaValidada validar(UUID caseId, MultipartFile file) {
     authorization.requirePermission("expedientes:caso:escribir");
     UUID tenantId = AuthContext.require().tenantId();
     legalCases
@@ -79,12 +82,22 @@ public class CapturaBiessService {
     if (!analisis.isConfigured()) {
       throw ApiException.badRequest("Proveedor LLM no configurado para leer la captura BIESS.");
     }
-
-    JsonNode layout;
     try {
-      layout = ocr.analizarLayout(file.getBytes(), mime);
+      return new CapturaValidada(file.getBytes(), mime);
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo de la captura BIESS.");
+    }
+  }
+
+  /**
+   * Lado worker: Azure layout → LLM → grupo {@code biess}. Reposición y porcentaje ya guardados no
+   * se pisan.
+   */
+  public DatosBiessMinuta extraer(UUID caseId, byte[] bytes, String mime) {
+    UUID tenantId = AuthContext.require().tenantId();
+    JsonNode layout;
+    try {
+      layout = ocr.analizarLayout(bytes, mime);
     } catch (RuntimeException e) {
       LOG.warn("OCR captura BIESS falló case={}: {}", caseId, e.getMessage());
       throw ApiException.badRequest("No se pudo leer el texto de la captura BIESS.");
@@ -106,8 +119,22 @@ public class CapturaBiessService {
           "No se pudo leer la captura BIESS: no se encontraron monto, tasa, plazo, cuota ni"
               + " apoderado. Sube una imagen más nítida de DATOS APROBADOS PARA DESEMBOLSO.");
     }
+    DatosBiessMinuta previo = datosBiess.cargar(caseId, tenantId);
+    if (previo != null) {
+      data =
+          new DatosBiessMinuta(
+              data.monto(),
+              data.tasa(),
+              data.plazo(),
+              data.cuota(),
+              StringUtils.hasText(previo.valorReposicion()) ? previo.valorReposicion() : data.valorReposicion(),
+              StringUtils.hasText(previo.porcentajeValorFinanciado())
+                  ? previo.porcentajeValorFinanciado()
+                  : data.porcentajeValorFinanciado(),
+              data.apoderado());
+    }
     datosBiess.guardar(tenantId, caseId, data);
-    LOG.info("Captura BIESS persistida case={} bytes={}", caseId, file.getSize());
+    LOG.info("Captura BIESS persistida case={} bytes={}", caseId, bytes.length);
     return data;
   }
 

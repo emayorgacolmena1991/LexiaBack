@@ -36,7 +36,9 @@ class IngestaJobAislamientoTest {
     ObjectProvider<CoactivaValidacionIaWorker> a = mock(ObjectProvider.class);
     ObjectProvider<IaAnalysisService> e = mock(ObjectProvider.class);
     when(d.getIfAvailable()).thenReturn(diagnostico);
-    return new IngestaJobWorker(cola, ingesta, d, a, e, mock(BatchEventPublisherService.class), new ObjectMapper());
+    return new IngestaJobWorker(
+        cola, ingesta, d, a, e, mock(ObjectProvider.class), mock(ObjectProvider.class),
+        mock(BatchEventPublisherService.class), new ObjectMapper());
   }
 
   @Test

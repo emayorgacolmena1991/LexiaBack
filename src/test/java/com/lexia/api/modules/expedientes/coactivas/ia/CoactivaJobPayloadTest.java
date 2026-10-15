@@ -41,7 +41,8 @@ class CoactivaJobPayloadTest {
     when(d.getIfAvailable()).thenReturn(diagnostico);
     when(a.getIfAvailable()).thenReturn(anexo);
     return new IngestaJobWorker(
-        cola, mock(IngestaMasivaEscrituracionService.class), d, a, e, sse, new ObjectMapper());
+        cola, mock(IngestaMasivaEscrituracionService.class), d, a, e,
+        mock(ObjectProvider.class), mock(ObjectProvider.class), sse, new ObjectMapper());
   }
 
   private String comoJsonb(String payload) {

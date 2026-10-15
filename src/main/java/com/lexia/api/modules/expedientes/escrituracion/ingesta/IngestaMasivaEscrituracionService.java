@@ -27,7 +27,9 @@ import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.FilaStatus;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.LoteStatus;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
+import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
+import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeSingleRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeSingleResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateRequest;
@@ -215,6 +217,9 @@ public class IngestaMasivaEscrituracionService {
     for (Fila fila : objetivo) {
       encolarOcr(lote, fila, principal);
     }
+    int total = objetivo.stream().mapToInt(fila -> fila.archivos.size()).sum();
+    despuesDeCommit(
+        () -> eventos.publicar(lote.id, "BATCH_STARTED", Map.of("batchId", lote.id.toString(), "total", total)));
     return lote.snapshot();
   }
 
@@ -295,21 +300,14 @@ public class IngestaMasivaEscrituracionService {
     return lote.snapshot();
   }
 
-  /** @deprecated El cliente debe usar {@code GET .../stream}. */
-  @Deprecated
-  @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
-  public LoteStatus status(UUID batchId) {
-    Lote lote = require(batchId);
-    reanudar(lote, AuthContext.require());
-    return lote.snapshot();
-  }
-
   public SseEmitter stream(UUID batchId) {
     Lote lote = require(batchId);
     reanudar(lote, AuthContext.require());
     SseEmitter emitter = eventos.abrir(batchId);
     try {
-      emitter.send(SseEmitter.event().name(nombreEvento(lote)).data(lote.snapshot()));
+      String evento = nombreEvento(lote);
+      emitter.send(
+          SseEmitter.event().name(evento).data(BatchEventPublisherService.sobre(evento, lote.snapshot())));
     } catch (IOException ex) {
       emitter.completeWithError(ex);
     }
@@ -470,7 +468,9 @@ public class IngestaMasivaEscrituracionService {
     }
     List<CompletableFuture<Void>> trabajos = new ArrayList<>();
     for (Archivo archivo : pendientes) {
-      trabajos.add(CompletableFuture.runAsync(() -> leerArchivo(sesion, archivo), ocrExecutor));
+      trabajos.add(
+          CompletableFuture.runAsync(
+              () -> leerArchivo(lote.id, fila.clientRowId, sesion, archivo), ocrExecutor));
     }
     CompletableFuture.allOf(trabajos.toArray(CompletableFuture[]::new)).join();
     List<String> faltantes = documentosFaltantes(fila);
@@ -483,13 +483,15 @@ public class IngestaMasivaEscrituracionService {
     persistir(lote);
   }
 
-  private void leerArchivo(String sesion, Archivo archivo) {
+  private void leerArchivo(UUID batchId, String itemId, String sesion, Archivo archivo) {
     if (sesion == null) {
       synchronized (archivo) {
         archivo.fallo("Sin expediente. No se llama a OCR.");
       }
+      eventos.publicar(batchId, "OCR_FAILED", Map.of("itemId", itemId, "error", archivo.mensaje));
       return;
     }
+    eventos.publicar(batchId, "OCR_STARTED", Map.of("itemId", itemId, "docId", archivo.fileId));
     azure.acquireUninterruptibly();
     try {
       StoredDoc guardado = carga.requireStoredDoc(sesion, archivo.fileId);
@@ -497,6 +499,7 @@ public class IngestaMasivaEscrituracionService {
         synchronized (archivo) {
           archivo.fallo("El archivo no está guardado. No se llama a OCR.");
         }
+        eventos.publicar(batchId, "OCR_FAILED", Map.of("itemId", itemId, "error", archivo.mensaje));
         return;
       }
       AnalyzeSingleResponse respuesta =
@@ -504,10 +507,23 @@ public class IngestaMasivaEscrituracionService {
       synchronized (archivo) {
         archivo.aplicar(respuesta);
       }
+      Map<String, Object> data = new java.util.LinkedHashMap<>();
+      data.put("itemId", itemId);
+      data.put("docId", archivo.fileId);
+      if ("CACHE".equals(respuesta.origen())) {
+        data.put("sha256", DocumentoCacheStore.sha256(guardado.bytes()));
+        eventos.publicar(batchId, "OCR_CACHED", data);
+      } else if ("PDF_NATIVO".equals(respuesta.origen())) {
+        eventos.publicar(batchId, "OCR_NATIVE", data);
+      } else {
+        data.put("ms", respuesta.duracionMs());
+        eventos.publicar(batchId, "OCR_DONE", data);
+      }
     } catch (RuntimeException ex) {
       synchronized (archivo) {
         archivo.fallo(mensaje(ex));
       }
+      eventos.publicar(batchId, "OCR_FAILED", Map.of("itemId", itemId, "error", archivo.mensaje));
     } finally {
       azure.release();
     }
@@ -531,6 +547,13 @@ public class IngestaMasivaEscrituracionService {
       } else {
         String sessionId = fila.expedienteId.toString();
         ocr.consolidate(new ConsolidateRequest(sessionId, texto));
+        eventos.publicar(
+            batchId,
+            "CONSOLIDADO_READY",
+            Map.of(
+                "expedienteId", sessionId,
+                "secciones", OcrExpedienteTexto.contarDocumentos(texto),
+                "chars", texto.length()));
         ProcesarExpedienteCompletoResult resultado =
             ia.analizarExpedienteConPromptProducto(
                 fila.expedienteId, new AnalysisRequestDTO(Boolean.FALSE, sessionId));
@@ -570,7 +593,10 @@ public class IngestaMasivaEscrituracionService {
     LoteStatus foto = lote.snapshot();
     String evento = nombreEvento(lote);
     store.guardar(lote.tenantId, lote.id, estado);
-    Runnable publicar = () -> eventos.publicar(lote.id, evento, foto);
+    despuesDeCommit(() -> eventos.publicar(lote.id, evento, foto));
+  }
+
+  private static void despuesDeCommit(Runnable publicar) {
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(
           new TransactionSynchronization() {
@@ -610,7 +636,7 @@ public class IngestaMasivaEscrituracionService {
       }
     }
     if (!corre && "LISTO".equals(lote.fase)) {
-      return "BATCH_COMPLETED";
+      return "BATCH_COMPLETE";
     }
     if (error) {
       return "ITEM_ERROR";

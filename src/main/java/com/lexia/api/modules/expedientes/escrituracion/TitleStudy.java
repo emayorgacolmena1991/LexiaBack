@@ -31,6 +31,15 @@ public class TitleStudy {
   @Column(name = "updated_at", nullable = false)
   private Instant updatedAt;
 
+  @Column(name = "prompt_version", length = 120)
+  private String promptVersion;
+
+  @Column(length = 80)
+  private String modelo;
+
+  @Column(name = "documento_sha256", length = 64)
+  private String documentoSha256;
+
   public static TitleStudy create(UUID tenantId, UUID writingFileId) {
     TitleStudy study = new TitleStudy();
     study.id = UUID.randomUUID();
@@ -63,5 +72,11 @@ public class TitleStudy {
     this.status = status;
     this.summary = summary;
     this.updatedAt = Instant.now();
+  }
+
+  public void applyOrigen(String promptVersion, String modelo, String documentoSha256) {
+    this.promptVersion = promptVersion;
+    this.modelo = modelo;
+    this.documentoSha256 = documentoSha256;
   }
 }

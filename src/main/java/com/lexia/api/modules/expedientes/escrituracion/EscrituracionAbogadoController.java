@@ -28,12 +28,12 @@ import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalisisEn
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
-import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -180,28 +180,19 @@ public class EscrituracionAbogadoController {
   public ResponseEntity<AnalisisEncolado> analizarIa(
       @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
     iaAnalysis.exigirExpediente(id);
-    AuthPrincipal principal = AuthContext.require();
     Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("expedienteId", id.toString());
     payload.put("forceReanalysis", request != null && Boolean.TRUE.equals(request.forceReanalysis()));
     payload.put("sessionIdOcr", request == null || request.sessionId() == null ? "" : request.sessionId());
-    payload.put("userId", principal.userId() == null ? "" : principal.userId().toString());
-    payload.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
-    payload.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
-    String cuerpo;
-    try {
-      cuerpo = json.writeValueAsString(payload);
-    } catch (JsonProcessingException ex) {
-      throw ApiException.badRequest("No se pudo encolar el análisis.");
-    }
-    UUID jobId = jobs.encolarSiActivo(principal.tenantId(), "ESCRITURACION_ANALISIS", id.toString(), cuerpo);
-    return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "ENCOLADO"));
+    UUID jobId = encolar("ESCRITURACION_ANALISIS", id, payload, true);
+    return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "PENDIENTE"));
   }
 
   @GetMapping(
       value = {
         "/expedientes/{id}/escrituracion/analizar-ia/stream",
-        "/escrituracion/expedientes/{id}/stream"
+        "/escrituracion/expedientes/{id}/stream",
+        "/expedientes/{id}/captura-biess/stream",
+        "/expedientes/{id}/escrituracion/captura-biess/stream"
       },
       produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter streamAnalisis(@PathVariable UUID id) {
@@ -209,21 +200,25 @@ public class EscrituracionAbogadoController {
     return sse.abrir(id);
   }
 
-  /** Mismo single-pass que analizar-ia. Sin forceReanalysis devuelve lo persistido en BD. */
+  /** Retirado: llamaba al LLM dentro del HTTP. El único camino es {@code analizar-ia} (202). */
   @PostMapping("/expedientes/{id}/procesar-completo")
-  public ResponseEntity<ProcesarExpedienteCompletoResult> procesarCompleto(
-      @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
-    return ResponseEntity.ok(iaAnalysis.analizarExpedienteConPromptProducto(id, request));
+  public ResponseEntity<Map<String, String>> procesarCompleto(@PathVariable UUID id) {
+    return ResponseEntity.status(HttpStatus.GONE)
+        .body(
+            Map.of(
+                "message",
+                "procesar-completo fue retirado. Usa POST /expedientes/" + id
+                    + "/escrituracion/analizar-ia y escucha el stream SSE."));
   }
 
   @PostMapping("/expedientes/{id}/escrituracion/minutas")
   @ResponseStatus(HttpStatus.CREATED)
   public ResponseEntity<MinutaItem> crearMinuta(
       @PathVariable UUID id, @Valid @RequestBody(required = false) CrearMinutaRequest request) {
-    return ResponseEntity.status(HttpStatus.CREATED)
-        .body(
-            minutaGeneration.generar(
-                id, request == null ? new CrearMinutaRequest(null, null) : request));
+    MinutaItem item =
+        minutaGeneration.generar(id, request == null ? new CrearMinutaRequest(null, null) : request);
+    encolarRender(id, item.id(), request == null ? null : request.sessionId());
+    return ResponseEntity.status(HttpStatus.CREATED).body(item);
   }
 
   /**
@@ -235,8 +230,9 @@ public class EscrituracionAbogadoController {
       @PathVariable UUID id,
       @PathVariable String tipoMinuta,
       @RequestBody(required = false) CrearMinutaRequest request) {
-    return ResponseEntity.status(HttpStatus.CREATED)
-        .body(minutaGeneration.generarBorrador(id, tipoMinuta, request));
+    BorradorGeneradoResponse borrador = minutaGeneration.generarBorrador(id, tipoMinuta, request);
+    UUID jobId = encolarRender(id, borrador.minutaId(), request == null ? null : request.sessionId());
+    return ResponseEntity.status(HttpStatus.CREATED).header("X-Job-Id", jobId.toString()).body(borrador);
   }
 
   /**
@@ -260,8 +256,36 @@ public class EscrituracionAbogadoController {
       @PathVariable UUID id,
       @PathVariable String tipoMinuta,
       @RequestBody(required = false) PreviewMinutaRequest request) {
-    MinutaGenerationService.PreviewMinuta preview =
-        minutaGeneration.previsualizar(id, tipoMinuta, request);
+    return pdf(id, minutaGeneration.previsualizar(id, tipoMinuta, request));
+  }
+
+  @GetMapping("/minutas/{minutaId}/variables")
+  public VariablesMinutaResponse variablesPorMinuta(@PathVariable UUID minutaId) {
+    return minutaGeneration.variablesPorMinuta(minutaId);
+  }
+
+  @GetMapping("/minutas/{minutaId}/variables-faltantes")
+  public List<String> variablesFaltantes(@PathVariable UUID minutaId) {
+    return minutaGeneration.variablesPorMinuta(minutaId).variablesPendientes();
+  }
+
+  /** Guardado parcial del editor (al perder foco): overrides + DOCX re-renderizado, sin PDF. */
+  @PatchMapping("/minutas/{minutaId}/variables")
+  public VariablesMinutaResponse guardarVariables(
+      @PathVariable UUID minutaId, @RequestBody(required = false) PreviewMinutaRequest request) {
+    return minutaGeneration.guardarVariables(minutaId, request);
+  }
+
+  @PostMapping(value = "/minutas/{minutaId}/preview", produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> previewPorMinuta(
+      @PathVariable UUID minutaId, @RequestBody(required = false) PreviewMinutaRequest request) {
+    return pdf(null, minutaGeneration.previsualizarPorMinuta(minutaId, request));
+  }
+
+  private ResponseEntity<byte[]> pdf(UUID caseId, MinutaGenerationService.PreviewMinuta preview) {
+    if (preview.nuevo() && caseId != null) {
+      encolarRender(caseId, preview.minutaId(), null);
+    }
     return ResponseEntity.ok()
         .header("X-Minuta-Id", preview.minutaId().toString())
         .header(
@@ -324,12 +348,45 @@ public class EscrituracionAbogadoController {
   @PostMapping(
       value = {
         "/expedientes/{id}/escrituracion/captura-biess",
+        "/expedientes/{id}/captura-biess",
         "/expedientes/{id}/extract-biess-screenshot"
       },
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public DatosBiessMinuta extraerCapturaBiess(
+  public ResponseEntity<AnalisisEncolado> extraerCapturaBiess(
       @PathVariable UUID id, @RequestParam("file") MultipartFile file) {
-    return capturaBiess.extraer(id, file);
+    CapturaBiessService.CapturaValidada captura = capturaBiess.validar(id, file);
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("mime", captura.mime());
+    payload.put("archivo", Base64.getEncoder().encodeToString(captura.bytes()));
+    UUID jobId = encolar("BIESS_CAPTURA", id, payload, false);
+    return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "PENDIENTE"));
+  }
+
+  private UUID encolarRender(UUID caseId, UUID minutaId, String sessionIdOcr) {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("minutaId", minutaId.toString());
+    payload.put("sessionIdOcr", sessionIdOcr == null ? "" : sessionIdOcr);
+    return encolar("MINUTA_RENDER", caseId, payload, false);
+  }
+
+  /** Job con la identidad del usuario: el worker la restaura para RLS y auditoría. */
+  private UUID encolar(String tipo, UUID expedienteId, Map<String, Object> extra, boolean unicoActivo) {
+    AuthPrincipal principal = AuthContext.require();
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("expedienteId", expedienteId.toString());
+    payload.putAll(extra);
+    payload.put("userId", principal.userId() == null ? "" : principal.userId().toString());
+    payload.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
+    payload.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
+    String cuerpo;
+    try {
+      cuerpo = json.writeValueAsString(payload);
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo encolar la tarea " + tipo + ".");
+    }
+    return unicoActivo
+        ? jobs.encolarSiActivo(principal.tenantId(), tipo, expedienteId.toString(), cuerpo)
+        : jobs.encolar(principal.tenantId(), tipo, cuerpo);
   }
 
   @GetMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/datos-biess")

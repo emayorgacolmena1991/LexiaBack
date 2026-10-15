@@ -27,17 +27,23 @@ public class IngestaJobQueue {
 
   @Transactional
   public UUID encolar(UUID tenantId, String tipo, String payload) {
+    return encolar(tenantId, tipo, payload, 0);
+  }
+
+  @Transactional
+  public UUID encolar(UUID tenantId, String tipo, String payload, int prioridad) {
     UUID id = UUID.randomUUID();
     entityManager
         .createNativeQuery(
             """
-            INSERT INTO app.jobs (id, tenant_id, tipo, payload)
-            VALUES (:id, :tenantId, :tipo, CAST(:payload AS jsonb))
+            INSERT INTO app.jobs (id, tenant_id, tipo, payload, prioridad)
+            VALUES (:id, :tenantId, :tipo, CAST(:payload AS jsonb), :prioridad)
             """)
         .setParameter("id", id)
         .setParameter("tenantId", tenantId)
         .setParameter("tipo", tipo)
         .setParameter("payload", payload)
+        .setParameter("prioridad", prioridad)
         .executeUpdate();
     return id;
   }
@@ -99,7 +105,7 @@ public class IngestaJobQueue {
                         (estado = 'PENDIENTE' AND run_at <= now())
                      OR (estado = 'EN_PROCESO' AND (locked_until IS NULL OR locked_until < now()))
                   )
-                ORDER BY created_at
+                ORDER BY prioridad DESC, created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """)
@@ -147,6 +153,7 @@ public class IngestaJobQueue {
         .executeUpdate();
   }
 
+  /** Backoff 15 s, 30 s, 60 s… Al tercer intento queda en {@code ERROR} (DLQ). */
   @Transactional
   public void fallar(UUID id, String workerId, String error) {
     entityManager
@@ -157,7 +164,7 @@ public class IngestaJobQueue {
                 error_log = :error,
                 worker_id = NULL,
                 locked_until = NULL,
-                run_at = now() + interval '15 seconds'
+                run_at = now() + make_interval(secs => 15 * power(2, GREATEST(intentos - 1, 0)))
             WHERE id = :id AND worker_id = :worker
             """)
         .setParameter("id", id)
