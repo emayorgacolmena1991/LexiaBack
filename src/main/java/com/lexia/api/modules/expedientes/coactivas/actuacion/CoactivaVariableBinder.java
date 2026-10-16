@@ -56,8 +56,12 @@ public class CoactivaVariableBinder {
     Map<String, String> manual = overrides == null ? Map.of() : overrides;
     boolean vigente = liquidacionVigente(capaSistema, capaIa, hoy);
     if (!vigente) {
+      String deuda = primero(capaSistema, capaIa, "monto_deuda_total");
+      String deudaLetras = primero(capaSistema, capaIa, "monto_deuda_total_letras");
       capaIa = sinLiquidacion(capaIa);
       capaSistema = sinLiquidacion(capaSistema);
+      // Vigencia caduca fechas/montos de liquidación, no la deuda del expediente.
+      restaurarDeudaComoLiquidacion(capaSistema, deuda, deudaLetras);
     }
 
     Map<String, String> extraidos = new LinkedHashMap<>();
@@ -141,6 +145,23 @@ public class CoactivaVariableBinder {
           }
         });
     return out;
+  }
+
+  /**
+   * Tras caducar la liquidación se eliminan tags {@code *liquidacion*}. Si el monto de deuda
+   * sigue disponible, se reexpone como {@code monto_liquidacion*} (alias de plantilla) sin
+   * reintroducir fechas vencidas.
+   */
+  private static void restaurarDeudaComoLiquidacion(
+      Map<String, String> sistema, String deuda, String deudaLetras) {
+    if (deuda == null) {
+      return;
+    }
+    // Tag de sistema: la deuda reexpuesta sigue la capa sistema (precedencia sobre IA).
+    sistema.put("monto_liquidacion", deuda);
+    if (deudaLetras != null) {
+      sistema.put("monto_liquidacion_letras", deudaLetras);
+    }
   }
 
   private static String primero(Map<String, String> sistema, Map<String, String> ia, String... keys) {

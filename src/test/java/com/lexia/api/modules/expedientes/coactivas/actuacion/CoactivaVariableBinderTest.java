@@ -61,4 +61,24 @@ class CoactivaVariableBinderTest {
     assertEquals("15.00", r.variables().get("monto_liquidacion"));
     assertEquals("SISTEMA", r.origenes().get("monto_liquidacion"));
   }
+
+  @Test
+  void liquidacionCaducaPeroConservaMontoDeDeudaEnTagLiquidacion() {
+    List<String> tags =
+        List.of("fecha_liquidacion", "monto_liquidacion", "monto_liquidacion_letras", "monto_deuda_total");
+    Map<String, String> ia =
+        Map.of(
+            "fecha_liquidacion", "1 de octubre de 2026",
+            "monto_deuda_total", "12,500.00",
+            "monto_deuda_total_letras", "DOCE MIL QUINIENTOS",
+            "monto_liquidacion", "99.00");
+    CoactivaVariableBinder.Resultado r = binder.resolver(tags, ia, Map.of(), Map.of(), HOY);
+
+    assertFalse(r.liquidacionVigente());
+    assertEquals("nodata", r.variables().get("fecha_liquidacion"));
+    assertEquals("12,500.00", r.variables().get("monto_liquidacion"));
+    assertEquals("DOCE MIL QUINIENTOS", r.variables().get("monto_liquidacion_letras"));
+    assertEquals("12,500.00", r.variables().get("monto_deuda_total"));
+    assertEquals("SISTEMA", r.origenes().get("monto_liquidacion"));
+  }
 }

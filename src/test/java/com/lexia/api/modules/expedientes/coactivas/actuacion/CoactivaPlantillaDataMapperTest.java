@@ -38,7 +38,13 @@ class CoactivaPlantillaDataMapperTest {
 
     assertEquals("JUAN CARLOS PEREZ LOPEZ", datos.valores().get("nombre_deudor_principal"));
     assertEquals("1310000001", datos.valores().get("cedula_deudor_principal"));
-    assertEquals(List.of("cedula_deudor_principal"), datos.discrepancias());
+    assertEquals(
+        List.of(
+            "cedula_deudor_principal",
+            "cedula_deudor_principal_1",
+            "cedula_deudor_1",
+            "cedula_receptor"),
+        datos.discrepancias());
     assertEquals("025-2024-00026", datos.valores().get("numero_juicio_coactivo"));
     assertEquals("juan.perez@mail.com", datos.valores().get("correo_notificacion_deudor"));
     assertEquals("MARIA DELEGADA", datos.valores().get("nombre_funcionario_coactiva"));
@@ -81,7 +87,7 @@ class CoactivaPlantillaDataMapperTest {
   void sinFuenteLaVariableQuedaFaltanteYNoSeInventa() {
     CoactivaExpediente exp = expediente();
     Fuentes f =
-        new Fuentes(exp, List.of(), null, null, null, null, new Config("", "", "", Map.of()));
+        new Fuentes(exp, List.of(), null, null, null, null, new Config("", "", "", Map.of()), null);
 
     PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(f, AHORA);
 
@@ -123,7 +129,8 @@ class CoactivaPlantillaDataMapperTest {
             base.oficina(),
             base.delegado(),
             base.secretarioNombre(),
-            base.config());
+            base.config(),
+            null);
 
     PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(f, AHORA);
 
@@ -186,6 +193,304 @@ class CoactivaPlantillaDataMapperTest {
     assertEquals(new BigDecimal("1234.50"), CoactivaPlantillaDataMapper.monto("$ 1.234,50"));
   }
 
+  @Test
+  void datosExtraidosAnidadosYAliasesLleganATagsDePlantilla() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("juicio", "025-2024-00099");
+    ocr.put("monto_mora", 12_500);
+    ocr.put(
+        "deudor",
+        Map.of("nombre", "el señor ANA DEUDORA", "cedula", "1711111111", "correo", "ana@mail.com"));
+    ocr.put("garante", Map.of("nombre", "PEDRO GARANTE", "cedula", "1722222222"));
+    ocr.put("liquidacion", Map.of("fecha", "5 de octubre de 2026", "total", 12_500));
+    ocr.put("honorarios", Map.of("monto", "172.50", "cuenta", "3001234567"));
+    ocr.put(
+        "cuentas_embargadas",
+        List.of(Map.of("numero_cuenta", "2200111111", "titular", "DEUDOR", "monto_retenido", 100)));
+
+    // Sin juicio/participantes estructurados: los grupos anidados del OCR deben poblar los tags.
+    Fuentes base = fuentes(ocr);
+    CoactivaExpediente expSinJuicio =
+        CoactivaExpediente.create(TENANT, UUID.randomUUID(), null, null);
+    expSinJuicio.setDatosBase(null, 2024, "PORTOVIEJO", 120);
+    Fuentes soloOcr =
+        new Fuentes(
+            expSinJuicio,
+            List.of(),
+            ocr,
+            base.oficina(),
+            base.delegado(),
+            base.secretarioNombre(),
+            base.config(),
+            null);
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(soloOcr, AHORA);
+    Map<String, Object> v = datos.valores();
+
+    assertEquals("025-2024-00099", v.get("numero_juicio_coactivo"));
+    assertEquals("025-2024-00099", v.get("numero_juicio"));
+    assertEquals("ANA DEUDORA", v.get("nombre_deudor_1"));
+    assertEquals("1711111111", v.get("cedula_deudor_principal"));
+    assertEquals("ana@mail.com", v.get("correo_notificacion_1"));
+    assertEquals("PEDRO GARANTE", v.get("nombre_garante_1"));
+    assertEquals("1722222222", v.get("cedula_garante_1"));
+    assertEquals("12,500.00", v.get("monto_deuda_total"));
+    assertEquals("12,500.00", v.get("monto_liquidacion"));
+    assertEquals("5 de octubre de 2026", v.get("fecha_liquidacion"));
+    assertEquals("5 de octubre de 2026", v.get("fecha_liquidacion_actualizada"));
+    assertEquals("172.50", v.get("monto_honorarios"));
+    assertEquals("172.50", v.get("valor_honorarios_total_num"));
+    assertEquals("3001234567", v.get("cuenta_honorarios_abogado"));
+    assertEquals("2200111111", v.get("numero_cuenta_1"));
+    assertEquals("Delegada", v.get("titulo_delegado"));
+  }
+
+  @Test
+  void fechaActaNoSeSustituyePorLaFechaDeActuacion() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("fecha_acta", "3 de marzo de 2024");
+    ocr.put("fecha_auto_designacion", "1 de febrero de 2024");
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(ocr), AHORA);
+
+    assertEquals("3 de marzo de 2024", datos.valores().get("fecha_acta"));
+    assertEquals("1 de febrero de 2024", datos.valores().get("fecha_auto_designacion"));
+    assertEquals("5 de octubre de 2026", datos.valores().get("fecha_actuacion"));
+    assertEquals("5 de octubre de 2026", datos.valores().get("fecha_providencia"));
+  }
+
+  @Test
+  void fechaActaDelSistemaNoDerivaElAutoNiPisaElOcrDelAuto() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("fecha_acta", "9 de septiembre de 2020");
+    ocr.put("fecha_auto_designacion", "1 de febrero de 2024");
+    Fuentes base = fuentes(ocr);
+    Fuentes conActa =
+        new Fuentes(
+            base.expediente(),
+            base.participantes(),
+            ocr,
+            base.oficina(),
+            base.delegado(),
+            base.secretarioNombre(),
+            base.config(),
+            LocalDate.of(2024, 3, 3));
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(conActa, AHORA);
+
+    assertEquals("3 de marzo de 2024", datos.valores().get("fecha_acta"));
+    assertEquals("1 de febrero de 2024", datos.valores().get("fecha_auto_designacion"));
+    assertFalse(datos.esDeOcr("fecha_acta"));
+    assertTrue(datos.esDeOcr("fecha_auto_designacion"));
+  }
+
+  @Test
+  void montoOriginalPrevaleceYElAliasHeredaLaDiscrepancia() {
+    Fuentes f = fuentes(ocrCompleto());
+    f.expediente().setMontoOriginal(new BigDecimal("14000.00"));
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(f, AHORA);
+
+    assertEquals("14,000.00", datos.valores().get("monto_deuda_total"));
+    assertEquals("14,000.00", datos.valores().get("monto_liquidacion"));
+    assertTrue(datos.discrepancias().contains("monto_deuda_total"));
+    assertTrue(datos.discrepancias().contains("monto_liquidacion"));
+  }
+
+  @Test
+  void tituloDistintoQuedaEnDiscrepancias() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("titulo_delegado", "Juez coactivo");
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(ocr), AHORA);
+
+    assertEquals("Delegada", datos.valores().get("titulo_delegado"));
+    assertTrue(datos.discrepancias().contains("titulo_delegado"));
+  }
+
+  @Test
+  void honorariosConservaElDesgloseDelOcr() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("monto_honorarios", "112.00");
+    ocr.put("valor_honorarios_subtotal", "100.00");
+    ocr.put("valor_iva_honorarios", "12.00");
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(ocr), AHORA);
+    Map<String, Object> v = datos.valores();
+
+    assertEquals("112.00", v.get("monto_honorarios"));
+    assertEquals("100.00", v.get("valor_honorarios_subtotal"));
+    assertEquals("12.00", v.get("valor_iva_honorarios"));
+    assertEquals("100.00", v.get("valor"));
+    assertEquals("12.00", v.get("iva"));
+  }
+
+  @Test
+  void claveExtraibleColapsaAliasYOmiteLoQueFijaElSistema() {
+    assertEquals("nombre_deudor_principal", CoactivaPlantillaDataMapper.claveExtraible("nombre_deudor_1"));
+    assertEquals("monto_embargo_total", CoactivaPlantillaDataMapper.claveExtraible("valor_embargo_num"));
+    assertEquals("monto_honorarios", CoactivaPlantillaDataMapper.claveExtraible("valor"));
+    assertEquals("fecha_acta", CoactivaPlantillaDataMapper.claveExtraible("fecha_acta"));
+    assertEquals("titulo_depositario", CoactivaPlantillaDataMapper.claveExtraible("titulo_depositario"));
+    assertEquals("titulo_secretario", CoactivaPlantillaDataMapper.claveExtraible("titulo_secretario"));
+    assertNull(CoactivaPlantillaDataMapper.claveExtraible("titulo_delegado"));
+    assertNull(CoactivaPlantillaDataMapper.claveExtraible("fecha_providencia"));
+    assertEquals(
+        "cedula_deudor_principal, fecha_acta, titulo_depositario, titulo_secretario",
+        CoactivaPlantillaDataMapper.textoExtraccion(
+            "[\"cedula_deudor_1\",\"fecha_providencia\",\"fecha_acta\",\"titulo_delegado\",\"titulo_depositario\",\"titulo_secretario\",\"cedula_deudor_principal\"]"));
+  }
+
+  @Test
+  void numeroZonaUsaAliasOcrSiElSistemaNoLoTieneYNoLoPisaSiLoTiene() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("numero_zona", "7");
+    Fuentes base = fuentes(ocr);
+    Fuentes sinZonal =
+        new Fuentes(
+            base.expediente(),
+            base.participantes(),
+            ocr,
+            base.oficina(),
+            base.delegado(),
+            base.secretarioNombre(),
+            new Config("", "", "", Map.of()),
+            null);
+
+    PlantillaDatos sinSistema = CoactivaPlantillaDataMapper.construir(sinZonal, AHORA);
+    assertEquals("7", sinSistema.valores().get("numero_zona"));
+    assertEquals("7", sinSistema.valores().get("numero_zonal"));
+    assertTrue(sinSistema.esDeOcr("numero_zona"));
+
+    PlantillaDatos conSistema = CoactivaPlantillaDataMapper.construir(base, AHORA);
+    assertEquals("4", conSistema.valores().get("numero_zona"));
+    assertEquals("4", conSistema.valores().get("numero_zonal"));
+    assertFalse(conSistema.esDeOcr("numero_zonal"));
+  }
+
+  @Test
+  void depositarioJudicialSaleDeLosAliasYDelTituloAnidado() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put(
+        "depositario",
+        Map.of(
+            "nombre_depositario", "el señor LUIS DEPOSITARIO",
+            "cedula_depositario", "091234567-8",
+            "titulo", "Abg."));
+    ocr.put("titulo_secretario", "Lcda.");
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(ocr), AHORA);
+
+    assertEquals("LUIS DEPOSITARIO", datos.valores().get("nombre_depositario_judicial"));
+    assertEquals("LUIS DEPOSITARIO", datos.valores().get("nombre_depositario"));
+    assertEquals("0912345678", datos.valores().get("cedula_depositario_judicial"));
+    assertEquals("0912345678", datos.valores().get("cedula_depositario"));
+    assertEquals("Abg.", datos.valores().get("titulo_depositario"));
+    assertEquals("Lcda.", datos.valores().get("titulo_secretario"));
+  }
+
+  @Test
+  void nombreSecretarioUsaOcrSoloSiNoHaySae() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("nombre_secretario", "Abg. ANA SECRETARIA");
+    Fuentes base = fuentes(ocr);
+    Fuentes sinSae =
+        new Fuentes(
+            base.expediente(),
+            base.participantes(),
+            ocr,
+            base.oficina(),
+            base.delegado(),
+            null,
+            base.config(),
+            null);
+
+    PlantillaDatos sinAsignacion = CoactivaPlantillaDataMapper.construir(sinSae, AHORA);
+    assertEquals("ANA SECRETARIA", sinAsignacion.valores().get("nombre_secretario"));
+    assertEquals("ANA SECRETARIA", sinAsignacion.valores().get("nombre_abogado_secretario"));
+
+    PlantillaDatos conSae = CoactivaPlantillaDataMapper.construir(base, AHORA);
+    assertEquals("CARLOS SECRETARIO", conSae.valores().get("nombre_secretario"));
+    assertFalse(conSae.esDeOcr("nombre_secretario"));
+  }
+
+  @Test
+  void normalizaClaveIaYNoCopiaNodata() {
+    Map<String, Object> raw = new LinkedHashMap<>();
+    raw.put("NUMERO_OPERACION", "OP-99");
+    raw.put("NombreDepositarioJudicial", "el señor LUIS DEPOSITARIO");
+    raw.put("montoHonorarios", "nodata");
+    raw.put("cedulaDepositario", null);
+
+    Map<String, Object> n = CoactivaPlantillaDataMapper.normalizarExtraidos(raw);
+    assertEquals("OP-99", n.get("numero_operacion"));
+    assertEquals("el señor LUIS DEPOSITARIO", n.get("nombre_depositario_judicial"));
+    assertFalse(n.containsKey("monto_honorarios"));
+    assertFalse(n.containsValue("nodata"));
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(raw), AHORA);
+    assertEquals("OP-778899", datos.valores().get("NUMERO_OPERACION"));
+    assertEquals("LUIS DEPOSITARIO", datos.valores().get("nombre_depositario_judicial"));
+    assertFalse(datos.valores().containsValue("nodata"));
+    assertTrue(datos.valores().values().stream().noneMatch(v -> v == null));
+  }
+
+  @Test
+  void normalizarExtraidosNoPierdeListasNiInventaClavesAmbiguas() {
+    Map<String, Object> raw = new LinkedHashMap<>();
+    raw.put("monto_mora", 100);
+    raw.put("liquidacion", Map.of("fecha", "1/10/2026", "total", 100));
+    raw.put("otro", Map.of("total", 999, "nombre_embargado", "X"));
+    raw.put("cuentas_embargadas", List.of(Map.of("numero_cuenta", "1")));
+
+    Map<String, Object> n = CoactivaPlantillaDataMapper.normalizarExtraidos(raw);
+
+    assertEquals(100, n.get("monto_deuda_total"));
+    assertEquals("1/10/2026", n.get("fecha_liquidacion"));
+    assertEquals(100, n.get("monto_liquidacion"));
+    assertFalse(n.containsKey("total"), "no aplastar liquidacion.total ni otro.total como tag total");
+    assertEquals("X", n.get("nombre_embargado"));
+    assertTrue(n.get("cuentas_embargadas") instanceof List);
+  }
+
+  @Test
+  void actaEmbargoChequeUsaDatosEstructuradosYOcrAnidado() {
+    Map<String, Object> ocr = new LinkedHashMap<>();
+    ocr.put("acta", Map.of("fecha", "3 de marzo de 2024"));
+    ocr.put("auto_designacion", Map.of("fecha", "1 de febrero de 2024"));
+    ocr.put(
+        "depositario_judicial",
+        Map.of("nombre", "el señor LUIS DEPOSITARIO", "cedula", "0912345678", "titulo", "Abg."));
+    ocr.put("secretario", Map.of("nombre", "Abg. ANA SECRETARIA", "titulo", "Lcda."));
+    Fuentes base = fuentes(ocr);
+    Fuentes sinSae =
+        new Fuentes(
+            base.expediente(),
+            base.participantes(),
+            ocr,
+            base.oficina(),
+            base.delegado(),
+            null,
+            base.config(),
+            null);
+
+    PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(sinSae, AHORA);
+    Map<String, Object> v = datos.valores();
+
+    assertEquals("0912345678", v.get("cedula_depositario"));
+    assertEquals("Portoviejo", v.get("ciudad"));
+    assertEquals("3 de marzo de 2024", v.get("fecha_acta"));
+    assertEquals("1 de febrero de 2024", v.get("fecha_auto_designacion"));
+    assertEquals("MARIA DELEGADA", v.get("nombre_delegado"));
+    assertEquals("LUIS DEPOSITARIO", v.get("nombre_depositario"));
+    assertEquals("ANA SECRETARIA", v.get("nombre_secretario"));
+    assertEquals("025-2024-00026", v.get("numero_proceso"));
+    assertEquals("4", v.get("numero_zona"));
+    assertEquals("Delegada", v.get("titulo_delegado"));
+    assertEquals("Abg.", v.get("titulo_depositario"));
+    assertEquals("Lcda.", v.get("titulo_secretario"));
+    assertEquals("PORTOVIEJO", v.get("zona"));
+  }
+
   // ---------------------------------------------------------------------------
 
   static Fuentes fuentes(Map<String, Object> ocr) {
@@ -211,7 +516,8 @@ class CoactivaPlantillaDataMapperTest {
             "",
             "coactiva@banecuador.fin.ec",
             "estudio@juridico.ec",
-            CoactivaPlantillaDataMapper.parsearZonales("PORTOVIEJO=4")));
+            CoactivaPlantillaDataMapper.parsearZonales("PORTOVIEJO=4")),
+        null);
   }
 
   static CoactivaExpediente expediente() {

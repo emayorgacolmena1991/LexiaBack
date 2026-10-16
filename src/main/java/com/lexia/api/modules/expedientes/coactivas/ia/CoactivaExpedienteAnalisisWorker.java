@@ -11,6 +11,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaTareaSugerida;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaTareaSugeridaRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipante;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaDataMapper;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipanteRepository;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico.Documento;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser.Parse;
@@ -426,7 +427,7 @@ public class CoactivaExpedienteAnalisisWorker {
       sb.append("- ")
           .append(fila.getPlantillaArchivo())
           .append(": ")
-          .append(fila.getVariablesRequeridas())
+          .append(CoactivaPlantillaDataMapper.textoExtraccion(fila.getVariablesRequeridas()))
           .append('\n');
     }
     return sb.toString();
