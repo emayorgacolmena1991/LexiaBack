@@ -180,10 +180,12 @@ public class EscrituracionAbogadoController {
   public ResponseEntity<AnalisisEncolado> analizarIa(
       @PathVariable UUID id, @RequestBody(required = false) AnalysisRequestDTO request) {
     iaAnalysis.exigirExpediente(id);
+    String sessionId = request == null || request.sessionId() == null ? "" : request.sessionId();
+    iaAnalysis.exigirTextoOcr(id, sessionId);
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("forceReanalysis", request != null && Boolean.TRUE.equals(request.forceReanalysis()));
-    payload.put("sessionIdOcr", request == null || request.sessionId() == null ? "" : request.sessionId());
-    UUID jobId = encolar("ESCRITURACION_ANALISIS", id, payload, true);
+    payload.put("sessionIdOcr", sessionId);
+    UUID jobId = encolar("IA_ANALISIS", id, payload, true);
     return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "PENDIENTE"));
   }
 
@@ -256,7 +258,7 @@ public class EscrituracionAbogadoController {
       @PathVariable UUID id,
       @PathVariable String tipoMinuta,
       @RequestBody(required = false) PreviewMinutaRequest request) {
-    return pdf(id, minutaGeneration.previsualizar(id, tipoMinuta, request));
+    return pdf(minutaGeneration.previsualizar(id, tipoMinuta, request));
   }
 
   @GetMapping("/minutas/{minutaId}/variables")
@@ -279,13 +281,25 @@ public class EscrituracionAbogadoController {
   @PostMapping(value = "/minutas/{minutaId}/preview", produces = MediaType.APPLICATION_PDF_VALUE)
   public ResponseEntity<byte[]> previewPorMinuta(
       @PathVariable UUID minutaId, @RequestBody(required = false) PreviewMinutaRequest request) {
-    return pdf(null, minutaGeneration.previsualizarPorMinuta(minutaId, request));
+    return pdf(minutaGeneration.previsualizarPorMinuta(minutaId, request));
   }
 
-  private ResponseEntity<byte[]> pdf(UUID caseId, MinutaGenerationService.PreviewMinuta preview) {
-    if (preview.nuevo() && caseId != null) {
-      encolarRender(caseId, preview.minutaId(), null);
-    }
+  @PostMapping("/minutas/{minutaId}/enriquecer")
+  public ResponseEntity<AnalisisEncolado> enriquecerMinuta(@PathVariable UUID minutaId) {
+    UUID caseId = minutaGeneration.exigirEscritura(minutaId);
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("minutaId", minutaId.toString());
+    payload.put("sessionIdOcr", "");
+    UUID jobId = encolar("MINUTA_ENRIQUECER", caseId, payload, false);
+    return ResponseEntity.accepted().body(new AnalisisEncolado(jobId, "PENDIENTE"));
+  }
+
+  @GetMapping(value = "/minutas/{minutaId}/enriquecer/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter streamEnriquecer(@PathVariable UUID minutaId) {
+    return sse.abrir(minutaGeneration.expedienteDe(minutaId));
+  }
+
+  private ResponseEntity<byte[]> pdf(MinutaGenerationService.PreviewMinuta preview) {
     return ResponseEntity.ok()
         .header("X-Minuta-Id", preview.minutaId().toString())
         .header(

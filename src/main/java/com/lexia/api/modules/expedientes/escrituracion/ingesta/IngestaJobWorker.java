@@ -38,7 +38,15 @@ public class IngestaJobWorker {
   private static final Logger LOG = LoggerFactory.getLogger(IngestaJobWorker.class);
   private static final String NODE = UUID.randomUUID().toString();
   static final Collection<String> TIPOS_ESCRITURACION =
-      List.of("ESCRITURACION_ANALISIS", "OCR_EXTRACTION", "IA_ANALYSIS", "BIESS_CAPTURA", "MINUTA_RENDER");
+      List.of(
+          "IA_ANALISIS",
+          "OCR_EXTRACTION",
+          "OCR_CONSOLIDAR",
+          "IA_ANALISIS_PROFUNDO",
+          "BIESS_CAPTURA",
+          "MINUTA_RENDER",
+          "MINUTA_ENRIQUECER",
+          "UPLOAD_PROCESAR");
   static final Collection<String> TIPOS_COACTIVA =
       List.of("COACTIVA_DIAGNOSTICO", "COACTIVA_VALIDACION_ANEXO");
 
@@ -138,20 +146,40 @@ public class IngestaJobWorker {
     IngestaJobQueue.Job actual = job.get();
     LOG.info("Tarea tomada app.jobs id={} tipo={}", actual.id(), actual.tipo());
     RlsConnectionProvider.setTenantId(actual.tenantId());
+    LOG.info("worker tenant aplicado job={} tenant={}", actual.id(), actual.tenantId());
     try {
-      if ("ESCRITURACION_ANALISIS".equals(actual.tipo())) {
+      if ("IA_ANALISIS".equals(actual.tipo())) {
         correrEscrituracion(actual);
       } else if ("BIESS_CAPTURA".equals(actual.tipo())) {
         correrCapturaBiess(actual);
-      } else if ("MINUTA_RENDER".equals(actual.tipo())) {
+      } else if ("MINUTA_RENDER".equals(actual.tipo()) || "MINUTA_ENRIQUECER".equals(actual.tipo())) {
         correrMinuta(actual);
+      } else if ("IA_ANALISIS_PROFUNDO".equals(actual.tipo())) {
+        correrProfundo(actual);
       } else {
         ingesta.ejecutarJob(actual);
       }
       cola.completar(actual.id(), NODE);
     } catch (RuntimeException ex) {
-      LOG.warn("job {} falló: {}", actual.id(), ex.getMessage());
-      cola.fallar(actual.id(), NODE, ex.getMessage());
+      if (sinOcrRecuperable(actual.tipo(), ex.getMessage())) {
+        LOG.info(
+            "worker-reprogramado job={} motivo=SIN_TEXTO_OCR intento={}/10",
+            actual.id(),
+            actual.intentos());
+        cola.reprogramar(actual.id(), NODE, "SIN_TEXTO_OCR");
+        if (agotado(actual.intentos())) {
+          UUID expediente = uuidEn(actual.payload(), "expedienteId");
+          if (expediente != null) {
+            sse.publicar(
+                expediente,
+                "ANALYSIS_FAILED",
+                Map.of("motivo", "SIN_TEXTO_OCR", "error", ex.getMessage()));
+          }
+        }
+      } else {
+        LOG.warn("job {} falló: {}", actual.id(), ex.getMessage());
+        cola.fallar(actual.id(), NODE, ex.getMessage());
+      }
     } finally {
       AuthContext.clear();
       TenantContext.clear();
@@ -219,6 +247,14 @@ public class IngestaJobWorker {
     }
   }
 
+  static boolean sinOcrRecuperable(String tipo, String mensaje) {
+    return "IA_ANALISIS".equals(tipo) && mensaje != null && mensaje.contains("Sin texto OCR");
+  }
+
+  static boolean agotado(int intento) {
+    return intento >= 10;
+  }
+
   /** {@code CAST(payload AS text)} devuelve el jsonb normalizado ({@code "k": "v"}): hay que parsearlo. */
   private UUID uuidEn(String payload, String campo) {
     try {
@@ -277,13 +313,57 @@ public class IngestaJobWorker {
     if (servicio == null) {
       throw new IllegalStateException("Minutas no disponible");
     }
-    var minuta =
-        servicio.enriquecerConIa(
-            UUID.fromString(nodo.path("minutaId").asText()), nodo.path("sessionIdOcr").asText(""));
+    UUID minutaId = UUID.fromString(nodo.path("minutaId").asText());
+    String session = nodo.path("sessionIdOcr").asText("");
+    if ("MINUTA_ENRIQUECER".equals(job.tipo())) {
+      UUID expedienteId = uuid(nodo, "expedienteId");
+      if (expedienteId != null) {
+        sse.publicar(expedienteId, "ENRIQUECER_STARTED", Map.of("minutaId", minutaId.toString()));
+      }
+      try {
+        var minuta = servicio.enriquecerConIa(minutaId, session);
+        sse.publicar(
+            minuta.caseId(),
+            "ENRIQUECER_COMPLETED",
+            Map.of("minutaId", minuta.minutaId().toString(), "variables_pendientes", minuta.pendientes()));
+      } catch (RuntimeException ex) {
+        if (expedienteId != null) {
+          sse.publicar(
+              expedienteId,
+              "ENRIQUECER_FAILED",
+              Map.of("error", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()));
+        }
+        throw ex;
+      }
+      return;
+    }
+    var minuta = servicio.renderSinLlm(minutaId);
     sse.publicar(
         minuta.caseId(),
         "MINUTA_READY",
         Map.of("minutaId", minuta.minutaId().toString(), "variables_pendientes", minuta.pendientes()));
+  }
+
+  private void correrProfundo(IngestaJobQueue.Job job) {
+    JsonNode nodo = comoUsuario(job);
+    UUID expedienteId = UUID.fromString(nodo.path("expedienteId").asText());
+    IaAnalysisService servicio = escrituracion.getIfAvailable();
+    if (servicio == null) {
+      throw new IllegalStateException("Análisis de escrituración no disponible");
+    }
+    sse.publicar(expedienteId, "ANALYSIS_STARTED", Map.of("jobId", job.id().toString(), "etapa", "profunda"));
+    try {
+      var resultado =
+          servicio.analizarProfundo(
+              expedienteId, new AnalysisRequestDTO(true, nodo.path("sessionIdOcr").asText("")));
+      sse.publicar(expedienteId, "ANALYSIS_COMPLETED", resultado);
+    } catch (RuntimeException ex) {
+      String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+      sse.publicar(expedienteId, "ANALYSIS_FAILED", Map.of("error", msg));
+      throw ex;
+    } finally {
+      IaAnalysisService.limpiarProfundo();
+    }
   }
 
   private void correrEscrituracion(IngestaJobQueue.Job job) {
@@ -294,7 +374,7 @@ public class IngestaJobWorker {
       throw new IllegalStateException("Análisis de escrituración no disponible");
     }
     LOG.info(
-        "[WORKER] Tarea tomada app.jobs id={} tipo=ESCRITURACION_ANALISIS. Ejecutando LLM...",
+        "[WORKER] Tarea tomada app.jobs id={} tipo=IA_ANALISIS. Ejecutando LLM...",
         job.id());
     sse.publicar(expedienteId, "ANALYSIS_STARTED", Map.of("jobId", job.id().toString()));
     try {
@@ -303,13 +383,28 @@ public class IngestaJobWorker {
           servicio.analizarExpedienteConPromptProducto(
               expedienteId,
               new AnalysisRequestDTO(force, nodo.path("sessionIdOcr").asText("")));
-      sse.publicar(expedienteId, "ANALYSIS_COMPLETED", resultado);
+      Map<String, Object> data = new java.util.LinkedHashMap<>();
+      data.putAll(json.convertValue(resultado, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+      if (IaAnalysisService.profundoPendiente()) {
+        data.put("profundoPendiente", true);
+      }
+      sse.publicar(expedienteId, "ANALYSIS_COMPLETED", data);
+      String batch = nodo.path("batchId").asText("");
+      if (!batch.isBlank()) {
+        ingesta.marcarAnalisis(UUID.fromString(batch), nodo.path("clientRowId").asText(""), true, "OK");
+        sse.publicar(UUID.fromString(batch), "ANALYSIS_COMPLETED", Map.of("expedienteId", expedienteId.toString()));
+      }
       LOG.info(
           "[WORKER OK] Dictamen guardado en app.extracted_data y app.title_study. SSE emitido.");
     } catch (RuntimeException ex) {
+      if (sinOcrRecuperable("IA_ANALISIS", ex.getMessage())) {
+        throw ex;
+      }
       String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
       sse.publicar(expedienteId, "ANALYSIS_FAILED", Map.of("error", msg));
       throw ex;
+    } finally {
+      IaAnalysisService.limpiarProfundo();
     }
   }
 

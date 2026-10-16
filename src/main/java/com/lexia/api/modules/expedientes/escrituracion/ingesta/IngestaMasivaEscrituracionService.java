@@ -25,7 +25,9 @@ import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.CrearLoteRequest;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.FilaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.FilaStatus;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.ItemPendiente;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.UploadAceptado;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
@@ -36,20 +38,33 @@ import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateRequest;
 import com.lexia.api.modules.ia.llm.IaConsumoContexto;
 import com.lexia.api.modules.ia.ocr.OcrTextSanitizerService;
 import com.lexia.api.modules.tenancy.TenantContext;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -83,7 +98,16 @@ public class IngestaMasivaEscrituracionService {
   private final IngestaJobQueue jobs;
   private final ObjectMapper json;
   private final Executor ocrExecutor;
+  private final int timeoutMinutos;
   private final ConcurrentHashMap<UUID, Lote> lotes = new ConcurrentHashMap<>();
+  /** Latido OCR_PROGRESS. Hilo daemon: no bloquea el apagado. */
+  private final ScheduledExecutorService pulso =
+      Executors.newSingleThreadScheduledExecutor(
+          r -> {
+            Thread hilo = new Thread(r, "ocr-pulso");
+            hilo.setDaemon(true);
+            return hilo;
+          });
   private final Set<String> enVuelo = ConcurrentHashMap.newKeySet();
   /** ponytail: 4 llamadas Azure a la vez. Subir el permiso si cambia la cuota. */
   private final Semaphore azure = new Semaphore(4);
@@ -101,7 +125,8 @@ public class IngestaMasivaEscrituracionService {
       OcrTextSanitizerService sanitizer,
       IngestaJobQueue jobs,
       ObjectMapper json,
-      @Qualifier("ocrExecutor") Executor ocrExecutor) {
+      @Qualifier("ocrExecutor") Executor ocrExecutor,
+      @Value("${lexia.ocr.azure.timeout-min:5}") int timeoutMinutos) {
     this.carga = carga;
     this.casos = casos;
     this.borradores = borradores;
@@ -115,6 +140,7 @@ public class IngestaMasivaEscrituracionService {
     this.jobs = jobs;
     this.json = json;
     this.ocrExecutor = ocrExecutor;
+    this.timeoutMinutos = Math.max(1, timeoutMinutos);
   }
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -142,47 +168,31 @@ public class IngestaMasivaEscrituracionService {
   }
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
-  public LoteStatus subir(UUID batchId, AsignacionesPayload payload, List<MultipartFile> files) {
+  public UploadAceptado subir(UUID batchId, AsignacionesPayload payload, List<MultipartFile> files) {
     Lote lote = require(batchId);
-    AuthContext.require();
+    AuthPrincipal principal = AuthContext.require();
     List<AsignacionArchivo> asignaciones = payload == null ? List.of() : payload.archivos();
     List<MultipartFile> binarios = files == null ? List.of() : files;
     if (asignaciones.isEmpty() || asignaciones.size() != binarios.size()) {
       throw ApiException.badRequest("Cada archivo debe traer su asignación (clientRowId y tipo).");
     }
-    List<Fila> tocadas = new ArrayList<>();
+    List<ItemPendiente> items = new ArrayList<>();
     for (int i = 0; i < asignaciones.size(); i++) {
       AsignacionArchivo asignacion = asignaciones.get(i);
       MultipartFile file = binarios.get(i);
       Fila fila = fila(lote, asignacion.clientRowId());
-      exigirBorrador(fila, asignacion.borradorId());
-      String sesion = exigirExpediente(fila);
       if (file == null || file.isEmpty()) {
         throw ApiException.badRequest("Archivo vacío en la fila " + fila.clientRowId + ".");
       }
+      String nombre = StringUtils.hasText(file.getOriginalFilename()) ? file.getOriginalFilename() : "archivo";
       String tipo = tipoDe(fila, asignacion.tipoDocumento());
-      DocumentoCargadoDTO doc = carga.subir(sesion, file);
-      if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
-        carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
-      }
-      synchronized (fila) {
-        fila.archivos.add(Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo));
-        fila.ocrEstado = "PENDIENTE";
-        fila.semaforo = "GRIS";
-        fila.observaciones = null;
-      }
-      if (!tocadas.contains(fila)) {
-        tocadas.add(fila);
-      }
+      Path path = volcar(file);
+      String docId = "PEND-" + UUID.randomUUID().toString().substring(0, 8);
+      encolarUpload(
+          principal, lote.id, fila.clientRowId, asignacion.borradorId(), tipo, nombre, path, docId, file.getSize());
+      items.add(new ItemPendiente(fila.clientRowId, docId, nombre, "PENDIENTE"));
     }
-    if (tocadas.isEmpty()) {
-      throw ApiException.badRequest("No se guardó ningún archivo.");
-    }
-    synchronized (lote) {
-      lote.fase = "ARCHIVOS";
-    }
-    persistir(lote);
-    return lote.snapshot();
+    return new UploadAceptado(lote.id, items);
   }
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -257,7 +267,7 @@ public class IngestaMasivaEscrituracionService {
     }
     persistir(lote);
     if (soloIa) {
-      encolarIa(lote, fila, principal);
+      encolarConsolidar(lote, fila, principal);
     } else {
       encolarOcr(lote, fila, principal);
     }
@@ -337,7 +347,7 @@ public class IngestaMasivaEscrituracionService {
     }
     persistir(lote);
     for (Fila fila : objetivo) {
-      encolarIa(lote, fila, principal);
+      encolarConsolidar(lote, fila, principal);
     }
     return lote.snapshot();
   }
@@ -382,36 +392,78 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private void encolarOcr(Lote lote, Fila fila, AuthPrincipal principal) {
-    String llave = lote.id + ":" + fila.clientRowId + ":ocr";
+    for (Archivo archivo : fila.archivos) {
+      String llave = lote.id + ":" + archivo.fileId + ":ocr";
+      if (!enVuelo.add(llave)) {
+        continue;
+      }
+      publicarJob("OCR_EXTRACTION", lote, fila, principal, archivo.fileId);
+    }
+  }
+
+  private void encolarConsolidar(Lote lote, Fila fila, AuthPrincipal principal) {
+    if (fila.expedienteId == null) {
+      return;
+    }
+    String llave = lote.id + ":" + fila.clientRowId + ":consolidar";
     if (!enVuelo.add(llave)) {
       return;
     }
-    publicarJob("OCR_EXTRACTION", lote, fila, principal);
+    publicarJob("OCR_CONSOLIDAR", lote, fila, principal, null);
   }
 
-  private void encolarIa(Lote lote, Fila fila, AuthPrincipal principal) {
+  private void encolarAnalisis(Lote lote, Fila fila, AuthPrincipal principal) {
+    if (fila.expedienteId == null) {
+      return;
+    }
     String llave = lote.id + ":" + fila.clientRowId + ":ia";
     if (!enVuelo.add(llave)) {
       return;
     }
-    publicarJob("IA_ANALYSIS", lote, fila, principal);
+    Map<String, String> body = identidad(lote, fila, principal);
+    body.put("expedienteId", fila.expedienteId.toString());
+    body.put("sessionIdOcr", fila.expedienteId.toString());
+    body.put("force", "false");
+    body.put("forceReanalysis", "false");
+    try {
+      jobs.encolar(
+          principal.tenantId(),
+          "IA_ANALISIS",
+          json.writeValueAsString(body),
+          0,
+          lote.id + ":" + fila.clientRowId + ":ia");
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo encolar el análisis de " + fila.clientRowId + ".");
+    }
   }
 
-  private void publicarJob(String tipo, Lote lote, Fila fila, AuthPrincipal principal) {
-    String payload;
+  private void publicarJob(String tipo, Lote lote, Fila fila, AuthPrincipal principal, String docId) {
+    Map<String, String> body = identidad(lote, fila, principal);
+    if (docId != null) {
+      body.put("docId", docId);
+    }
+    if (fila.expedienteId != null) {
+      body.put("expedienteId", fila.expedienteId.toString());
+    }
+    String clave =
+        "OCR_EXTRACTION".equals(tipo)
+            ? lote.id + ":" + docId
+            : "OCR_CONSOLIDAR".equals(tipo) ? lote.id + ":" + fila.clientRowId : null;
     try {
-      payload =
-          json.writeValueAsString(
-              Map.of(
-                  "batchId", lote.id.toString(),
-                  "clientRowId", fila.clientRowId,
-                  "userId", principal.userId().toString(),
-                  "membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString(),
-                  "sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString()));
+      jobs.encolar(principal.tenantId(), tipo, json.writeValueAsString(body), 0, clave);
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar la fila " + fila.clientRowId + ".");
     }
-    jobs.encolar(principal.tenantId(), tipo, payload);
+  }
+
+  private static Map<String, String> identidad(Lote lote, Fila fila, AuthPrincipal principal) {
+    Map<String, String> body = new LinkedHashMap<>();
+    body.put("batchId", lote.id.toString());
+    body.put("clientRowId", fila.clientRowId);
+    body.put("userId", principal.userId().toString());
+    body.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
+    body.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
+    return body;
   }
 
   public void ejecutarJob(IngestaJobQueue.Job job) {
@@ -429,10 +481,25 @@ public class IngestaMasivaEscrituracionService {
     try {
       UUID batchId = UUID.fromString(nodo.path("batchId").asText());
       String clientRowId = nodo.path("clientRowId").asText();
-      if ("OCR_EXTRACTION".equals(job.tipo())) {
-        correrOcr(batchId, clientRowId);
-      } else if ("IA_ANALYSIS".equals(job.tipo())) {
-        correrIa(batchId, clientRowId);
+      if ("UPLOAD_PROCESAR".equals(job.tipo())) {
+        procesarUpload(nodo, job.intentos());
+      } else if ("OCR_EXTRACTION".equals(job.tipo())) {
+        String docId = nodo.path("docId").asText("");
+        RuntimeException fallo = null;
+        try {
+          correrOcr(batchId, clientRowId, job.intentos(), docId);
+        } catch (RuntimeException ex) {
+          fallo = ex;
+          marcarDocFallido(batchId, clientRowId, docId, mensaje(ex));
+        }
+        encadenarConsolidado(batchId);
+        if (fallo != null) {
+          throw fallo;
+        }
+      } else if ("OCR_CONSOLIDAR".equals(job.tipo())) {
+        correrConsolidar(batchId, clientRowId);
+      } else if ("IA_ANALISIS".equals(job.tipo())) {
+        throw IngestaJobQueue.noEsJob(job.tipo());
       } else {
         throw IngestaJobQueue.noEsJob(job.tipo());
       }
@@ -440,6 +507,11 @@ public class IngestaMasivaEscrituracionService {
       String llave = nodo.path("batchId").asText() + ":" + nodo.path("clientRowId").asText();
       enVuelo.remove(llave + ":ocr");
       enVuelo.remove(llave + ":ia");
+      enVuelo.remove(llave + ":consolidar");
+      String docId = nodo.path("docId").asText("");
+      if (!docId.isBlank()) {
+        enVuelo.remove(nodo.path("batchId").asText() + ":" + docId + ":ocr");
+      }
       AuthContext.clear();
       TenantContext.clear();
     }
@@ -452,15 +524,23 @@ public class IngestaMasivaEscrituracionService {
     return UUID.fromString(value);
   }
 
-  private void correrOcr(UUID batchId, String clientRowId) {
+  private void correrOcr(UUID batchId, String clientRowId, int intento, String docId) {
     Lote lote = require(batchId);
     Fila fila = fila(lote, clientRowId);
     List<Archivo> pendientes;
     String sesion;
     synchronized (fila) {
+      for (Archivo archivo : fila.archivos) {
+        if ("TIMEOUT_AZURE".equals(archivo.mensaje)) {
+          archivo.reset();
+        }
+      }
       sesion = fila.expedienteId == null ? null : fila.expedienteId.toString();
       pendientes = new ArrayList<>();
       for (Archivo archivo : fila.archivos) {
+        if (StringUtils.hasText(docId) && !docId.equals(archivo.fileId)) {
+          continue;
+        }
         if (!archivo.ocrListo) {
           pendientes.add(archivo);
         }
@@ -468,14 +548,33 @@ public class IngestaMasivaEscrituracionService {
     }
     List<CompletableFuture<Void>> trabajos = new ArrayList<>();
     for (Archivo archivo : pendientes) {
+      Map<String, Object> started = new LinkedHashMap<>();
+      started.put("itemId", fila.clientRowId);
+      started.put("docId", archivo.fileId);
+      started.put("nombre", archivo.nombre);
+      eventos.publicar(lote.id, "OCR_STARTED", started);
+      LOG.info("SSE emitido tipo=OCR_STARTED batchId={} docId={}", lote.id, archivo.fileId);
       trabajos.add(
           CompletableFuture.runAsync(
-              () -> leerArchivo(lote.id, fila.clientRowId, sesion, archivo), ocrExecutor));
+              HiloConTenant.copiar(
+                  () -> leerArchivo(lote.id, fila.clientRowId, sesion, archivo, intento)),
+              ocrExecutor));
     }
-    CompletableFuture.allOf(trabajos.toArray(CompletableFuture[]::new)).join();
+    try {
+      CompletableFuture.allOf(trabajos.toArray(CompletableFuture[]::new)).join();
+    } catch (CompletionException ex) {
+      Throwable causa = ex.getCause() == null ? ex : ex.getCause();
+      if (causa instanceof RuntimeException rte) {
+        throw rte;
+      }
+      throw ex;
+    }
     List<String> faltantes = documentosFaltantes(fila);
     synchronized (fila) {
-      fila.cerrarOcr(faltantes);
+      boolean lista = fila.archivos.stream().allMatch(archivo -> archivo.ocrListo);
+      if (lista) {
+        fila.cerrarOcr(faltantes);
+      }
     }
     synchronized (lote) {
       lote.refrescarFaseOcr();
@@ -483,15 +582,114 @@ public class IngestaMasivaEscrituracionService {
     persistir(lote);
   }
 
-  private void leerArchivo(UUID batchId, String itemId, String sesion, Archivo archivo) {
+  /** El job que termina sigue EN_PROCESO, así que 1 activo es "ya no queda otro". Un archivo caído no frena al resto. */
+  static boolean listoParaConsolidar(int ocrActivos, int uploadsActivos) {
+    return ocrActivos <= 1 && uploadsActivos == 0;
+  }
+
+  private void encadenarConsolidado(UUID batchId) {
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    int ocr = jobs.activosEnLote(principal.tenantId(), "OCR_EXTRACTION", batchId.toString());
+    int uploads = jobs.activosEnLote(principal.tenantId(), "UPLOAD_PROCESAR", batchId.toString());
+    if (!listoParaConsolidar(ocr, uploads)) {
+      return;
+    }
+    for (Fila fila : lote.filas) {
+      synchronized (fila) {
+        for (Archivo archivo : fila.archivos) {
+          if (!archivo.ocrListo) {
+            archivo.fallo("OCR no completó.");
+          }
+        }
+      }
+      encolarConsolidar(lote, fila, principal);
+    }
+    persistir(lote);
+  }
+
+  private void marcarDocFallido(UUID batchId, String clientRowId, String docId, String error) {
+    try {
+      Lote lote = require(batchId);
+      Fila fila = fila(lote, clientRowId);
+      synchronized (fila) {
+        for (Archivo archivo : fila.archivos) {
+          if (StringUtils.hasText(docId) && !docId.equals(archivo.fileId)) {
+            continue;
+          }
+          if (!archivo.ocrListo) {
+            archivo.fallo(error);
+          }
+        }
+      }
+      persistir(lote);
+    } catch (RuntimeException ex) {
+      LOG.warn("no se pudo cerrar el OCR {}: {}", docId, ex.getMessage());
+    }
+  }
+
+  private void correrConsolidar(UUID batchId, String clientRowId) {
+    Lote lote = require(batchId);
+    Fila fila = fila(lote, clientRowId);
+    AuthPrincipal principal = AuthContext.require();
+    String texto = sanitizer.limpiar(fila.textoConsolidado());
+    if (!StringUtils.hasText(texto) || fila.expedienteId == null) {
+      synchronized (fila) {
+        fila.iaEstado = "ERROR";
+        fila.iaResumen = "Sin texto OCR para analizar.";
+      }
+      persistir(lote);
+      eventos.publicar(
+          batchId,
+          "ERROR",
+          Map.of("motivo", "SIN_TEXTO_OCR", "detalle", "Sin texto OCR para analizar.", "expedienteId",
+              fila.expedienteId == null ? "" : fila.expedienteId.toString()));
+      return;
+    }
+    String sessionId = fila.expedienteId.toString();
+    ocr.consolidate(new ConsolidateRequest(sessionId, texto));
+    synchronized (fila) {
+      fila.iaEstado = "EN_PROCESO";
+    }
+    persistir(lote);
+    eventos.publicar(
+        batchId,
+        "CONSOLIDADO_READY",
+        Map.of(
+            "expedienteId", sessionId,
+            "secciones", OcrExpedienteTexto.contarDocumentos(texto),
+            "chars", texto.length()));
+    encolarAnalisis(lote, fila, principal);
+  }
+
+  public void marcarAnalisis(UUID batchId, String clientRowId, boolean ok, String resumen) {
+    try {
+      Lote lote = require(batchId);
+      Fila fila = fila(lote, clientRowId);
+      synchronized (fila) {
+        fila.iaEstado = ok ? "OK" : "ERROR";
+        fila.iaResumen = resumen;
+      }
+      synchronized (lote) {
+        lote.refrescarFaseIa();
+      }
+      persistir(lote);
+    } catch (RuntimeException ex) {
+      LOG.warn("no se pudo marcar el análisis del lote {}: {}", batchId, ex.getMessage());
+    }
+  }
+
+  private void leerArchivo(UUID batchId, String itemId, String sesion, Archivo archivo, int intento) {
     if (sesion == null) {
       synchronized (archivo) {
         archivo.fallo("Sin expediente. No se llama a OCR.");
       }
-      eventos.publicar(batchId, "OCR_FAILED", Map.of("itemId", itemId, "error", archivo.mensaje));
+      emitirFallo(batchId, itemId, archivo, "SIN_EXPEDIENTE");
       return;
     }
-    eventos.publicar(batchId, "OCR_STARTED", Map.of("itemId", itemId, "docId", archivo.fileId));
+    ScheduledFuture<?> latido =
+        pulso.scheduleAtFixedRate(
+            () -> emitirProgreso(batchId, itemId, archivo), 5, 5, TimeUnit.SECONDS);
     azure.acquireUninterruptibly();
     try {
       StoredDoc guardado = carga.requireStoredDoc(sesion, archivo.fileId);
@@ -499,15 +697,14 @@ public class IngestaMasivaEscrituracionService {
         synchronized (archivo) {
           archivo.fallo("El archivo no está guardado. No se llama a OCR.");
         }
-        eventos.publicar(batchId, "OCR_FAILED", Map.of("itemId", itemId, "error", archivo.mensaje));
+        emitirFallo(batchId, itemId, archivo, "SIN_BYTES");
         return;
       }
-      AnalyzeSingleResponse respuesta =
-          ocr.analyzeSingle(new AnalyzeSingleRequest(sesion, archivo.fileId, archivo.tipo));
+      AnalyzeSingleResponse respuesta = analizarConTope(sesion, archivo);
       synchronized (archivo) {
         archivo.aplicar(respuesta);
       }
-      Map<String, Object> data = new java.util.LinkedHashMap<>();
+      Map<String, Object> data = new LinkedHashMap<>();
       data.put("itemId", itemId);
       data.put("docId", archivo.fileId);
       if ("CACHE".equals(respuesta.origen())) {
@@ -519,14 +716,195 @@ public class IngestaMasivaEscrituracionService {
         data.put("ms", respuesta.duracionMs());
         eventos.publicar(batchId, "OCR_DONE", data);
       }
+    } catch (TimeoutException ex) {
+      synchronized (archivo) {
+        archivo.fallo("TIMEOUT_AZURE");
+      }
+      emitirFallo(batchId, itemId, archivo, "TIMEOUT_AZURE");
+      if (intento >= 3) {
+        cerrarTimeout(batchId, itemId);
+      }
+      throw new IllegalStateException("TIMEOUT_AZURE");
     } catch (RuntimeException ex) {
       synchronized (archivo) {
         archivo.fallo(mensaje(ex));
       }
-      eventos.publicar(batchId, "OCR_FAILED", Map.of("itemId", itemId, "error", archivo.mensaje));
+      emitirFallo(batchId, itemId, archivo, "OCR_ERROR");
     } finally {
+      latido.cancel(false);
       azure.release();
     }
+  }
+
+  /** El future corre en el common pool: el hilo de ocrExecutor no espera un cupo de su propio pool. */
+  private AnalyzeSingleResponse analizarConTope(String sesion, Archivo archivo)
+      throws TimeoutException {
+    CompletableFuture<AnalyzeSingleResponse> futuro =
+        CompletableFuture.supplyAsync(
+            HiloConTenant.copiar(
+                () -> ocr.analyzeSingle(new AnalyzeSingleRequest(sesion, archivo.fileId, archivo.tipo))));
+    try {
+      return futuro.get(timeoutMinutos, TimeUnit.MINUTES);
+    } catch (TimeoutException ex) {
+      futuro.cancel(true);
+      throw ex;
+    } catch (InterruptedException ex) {
+      futuro.cancel(true);
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("OCR interrumpido.");
+    } catch (ExecutionException ex) {
+      futuro.cancel(true);
+      Throwable causa = ex.getCause() == null ? ex : ex.getCause();
+      if (causa instanceof RuntimeException rte) {
+        throw rte;
+      }
+      throw new IllegalStateException(causa.getMessage() == null ? "OCR falló." : causa.getMessage());
+    }
+  }
+
+  private void encolarUpload(
+      AuthPrincipal principal,
+      UUID batchId,
+      String clientRowId,
+      String borradorId,
+      String tipo,
+      String nombre,
+      Path path,
+      String docId,
+      long bytes) {
+    Map<String, String> body = new LinkedHashMap<>();
+    body.put("batchId", batchId.toString());
+    body.put("clientRowId", clientRowId);
+    body.put("borradorId", borradorId == null ? "" : borradorId);
+    body.put("tipo", tipo == null ? "" : tipo);
+    body.put("nombre", nombre);
+    body.put("path", path.toAbsolutePath().toString());
+    body.put("docId", docId);
+    body.put("userId", principal.userId().toString());
+    body.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
+    body.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
+    try {
+      jobs.encolar(
+          principal.tenantId(),
+          "UPLOAD_PROCESAR",
+          json.writeValueAsString(body),
+          0,
+          batchId + ":" + clientRowId + ":" + nombre + ":" + bytes);
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo encolar el archivo " + nombre + ".");
+    }
+  }
+
+  private void procesarUpload(com.fasterxml.jackson.databind.JsonNode nodo, int intento) {
+    UUID batchId = UUID.fromString(nodo.path("batchId").asText());
+    String clientRowId = nodo.path("clientRowId").asText();
+    Lote lote = require(batchId);
+    Fila fila = fila(lote, clientRowId);
+    Path path = Path.of(nodo.path("path").asText(""));
+    try {
+      String sesion = exigirExpediente(fila);
+      exigirBorrador(fila, nodo.path("borradorId").asText(null));
+      String nombre = nodo.path("nombre").asText("archivo");
+      String tipo = nodo.path("tipo").asText(null);
+      boolean ya;
+      synchronized (fila) {
+        ya = fila.archivos.stream().anyMatch(archivo -> nombre.equals(archivo.nombre));
+      }
+      if (!ya) {
+        byte[] bytes = Files.readAllBytes(path);
+        DocumentoCargadoDTO doc = carga.subir(sesion, new BytesFile(nombre, bytes));
+        if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
+          carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
+        }
+        synchronized (fila) {
+          fila.archivos.add(Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo));
+          fila.ocrEstado = "PENDIENTE";
+          fila.semaforo = "GRIS";
+          fila.observaciones = null;
+        }
+      }
+      int quedan =
+          jobs.activos(AuthContext.require().tenantId(), "UPLOAD_PROCESAR", batchId.toString(), clientRowId);
+      if (quedan <= 1) {
+        synchronized (fila) {
+          fila.ocrEstado = "PROCESANDO";
+        }
+        synchronized (lote) {
+          lote.fase = "OCR";
+        }
+        persistir(lote);
+        encolarOcr(lote, fila, AuthContext.require());
+        eventos.publicar(
+            lote.id, "BATCH_STARTED", Map.of("batchId", lote.id.toString(), "total", fila.archivos.size()));
+      }
+      Files.deleteIfExists(path);
+    } catch (RuntimeException ex) {
+      if (intento >= 3) {
+        synchronized (fila) {
+          fila.ocrEstado = "ERROR";
+          fila.semaforo = "ROJO";
+          fila.observaciones = mensaje(ex);
+        }
+        persistir(lote);
+        return;
+      }
+      throw ex;
+    } catch (IOException ex) {
+      if (intento >= 3) {
+        synchronized (fila) {
+          fila.ocrEstado = "ERROR";
+          fila.semaforo = "ROJO";
+          fila.observaciones = "No se pudo leer el archivo temporal.";
+        }
+        persistir(lote);
+        return;
+      }
+      throw ApiException.badRequest("No se pudo leer el archivo temporal.");
+    }
+  }
+
+  private static Path volcar(MultipartFile file) {
+    try {
+      Path dir = Path.of("data", "ingesta");
+      Files.createDirectories(dir);
+      Path dest = dir.resolve(UUID.randomUUID() + ".bin");
+      try (InputStream in = file.getInputStream()) {
+        Files.copy(in, dest);
+      }
+      return dest;
+    } catch (IOException ex) {
+      throw ApiException.badRequest("No se pudo guardar el archivo.");
+    }
+  }
+
+  private void emitirProgreso(UUID batchId, String itemId, Archivo archivo) {
+    try {
+      Map<String, Object> data = new LinkedHashMap<>();
+      data.put("itemId", itemId);
+      data.put("docId", archivo.fileId);
+      data.put("pct", -1);
+      eventos.publicar(batchId, "OCR_PROGRESS", data);
+    } catch (RuntimeException ex) {
+      LOG.debug("OCR_PROGRESS no emitido: {}", ex.getMessage());
+    }
+  }
+
+  private void emitirFallo(UUID batchId, String itemId, Archivo archivo, String motivo) {
+    Map<String, Object> data = new LinkedHashMap<>();
+    data.put("itemId", itemId);
+    data.put("docId", archivo.fileId);
+    data.put("error", archivo.mensaje == null ? motivo : archivo.mensaje);
+    data.put("motivo", motivo);
+    eventos.publicar(batchId, "OCR_FAILED", data);
+  }
+
+  private void cerrarTimeout(UUID batchId, String clientRowId) {
+    Lote lote = require(batchId);
+    Fila fila = fila(lote, clientRowId);
+    synchronized (fila) {
+      fila.cerrarOcr(List.of());
+    }
+    persistir(lote);
   }
 
   private void correrIa(UUID batchId, String clientRowId) {
@@ -619,7 +997,7 @@ public class IngestaMasivaEscrituracionService {
       if ("PROCESANDO".equals(fila.ocrEstado)) {
         encolarOcr(lote, fila, principal);
       } else if ("EN_PROCESO".equals(fila.iaEstado)) {
-        encolarIa(lote, fila, principal);
+        encolarAnalisis(lote, fila, principal);
       }
     }
   }
@@ -1101,6 +1479,57 @@ public class IngestaMasivaEscrituracionService {
     private ArchivoStatus status() {
       return new ArchivoStatus(
           fileId, nombre, tipo, semaforo, confianza, legible, mensaje, recortar(texto, TEXTO_PREVIEW), origen, ocrMs);
+    }
+  }
+
+  /** Multipart en memoria para reusar {@link CargaDocumentoService#subir} desde el worker. */
+  private static final class BytesFile implements MultipartFile {
+    private final String nombre;
+    private final byte[] bytes;
+
+    private BytesFile(String nombre, byte[] bytes) {
+      this.nombre = nombre;
+      this.bytes = bytes;
+    }
+
+    @Override
+    public String getName() {
+      return "file";
+    }
+
+    @Override
+    public String getOriginalFilename() {
+      return nombre;
+    }
+
+    @Override
+    public String getContentType() {
+      return "application/octet-stream";
+    }
+
+    @Override
+    public boolean isEmpty() {
+      return bytes.length == 0;
+    }
+
+    @Override
+    public long getSize() {
+      return bytes.length;
+    }
+
+    @Override
+    public byte[] getBytes() {
+      return bytes;
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return new ByteArrayInputStream(bytes);
+    }
+
+    @Override
+    public void transferTo(java.io.File dest) throws IOException {
+      Files.write(dest.toPath(), bytes);
     }
   }
 }

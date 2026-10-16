@@ -68,4 +68,8 @@ public final class IngestaMasivaDtos {
       int rojos,
       boolean cotejoHabilitado,
       List<FilaStatus> filas) {}
+
+  public record UploadAceptado(UUID batchId, List<ItemPendiente> items) {}
+
+  public record ItemPendiente(String itemId, String docId, String nombre, String estado) {}
 }

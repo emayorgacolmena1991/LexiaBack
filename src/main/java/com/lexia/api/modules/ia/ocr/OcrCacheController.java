@@ -70,29 +70,7 @@ public class OcrCacheController {
   public ResponseEntity<CotejoResponse> cotejo(
       @PathVariable String sessionId, @RequestParam(required = false) String caseId) {
     CotejoResponse body = cotejoService.cotejar(sessionId, caseId);
-    if (!"SIN_EXTRACCION".equals(body.estado())) {
-      return ResponseEntity.ok(body);
-    }
-    String expediente = caseId != null && !caseId.isBlank() ? caseId : sessionId;
-    AuthPrincipal principal = AuthContext.require();
-    Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("expedienteId", expediente);
-    payload.put("forceReanalysis", false);
-    payload.put("sessionIdOcr", sessionId);
-    payload.put("userId", principal.userId() == null ? "" : principal.userId().toString());
-    payload.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
-    payload.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
-    String cuerpo;
-    try {
-      cuerpo = json.writeValueAsString(payload);
-    } catch (JsonProcessingException ex) {
-      throw ApiException.badRequest("No se pudo encolar el análisis.");
-    }
-    UUID jobId = jobs.encolarSiActivo(principal.tenantId(), "ESCRITURACION_ANALISIS", expediente, cuerpo);
-    return ResponseEntity.accepted()
-        .body(
-            new CotejoResponse(
-                body.sessionId(), body.resumen(), body.comparaciones(), body.grupos(), "EN_ANALISIS", jobId));
+    return ResponseEntity.ok(body);
   }
 
   /** El texto ya quedó en caché. El job corre el LLM; el stream no tiene que esperar un POST aparte. */
@@ -123,9 +101,9 @@ public class OcrCacheController {
     payload.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
     try {
       jobs.encolarSiActivo(
-          principal.tenantId(), "ESCRITURACION_ANALISIS", expediente.toString(), json.writeValueAsString(payload));
+          principal.tenantId(), "IA_ANALISIS", expediente.toString(), json.writeValueAsString(payload));
       LOG.info(
-          "[JOB ENCOLADO] Tarea insertada en app.jobs tipo=ESCRITURACION_ANALISIS expediente={}",
+          "[JOB ENCOLADO] Tarea insertada en app.jobs tipo=IA_ANALISIS expediente={}",
           expediente);
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar el análisis.");

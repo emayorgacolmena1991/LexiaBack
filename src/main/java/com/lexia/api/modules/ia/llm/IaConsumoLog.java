@@ -31,8 +31,8 @@ public class IaConsumoLog {
               """
               INSERT INTO app.ia_log_consumo
                 (id, tenant_id, expediente_id, modelo_usado, prompt_tokens, completion_tokens,
-                 costo_estimado, tiempo_respuesta_ms)
-              VALUES (:id, :tenantId, :expedienteId, :modelo, :prompt, :completion, :costo, :ms)
+                 costo_estimado, tiempo_respuesta_ms, etapa)
+              VALUES (:id, :tenantId, :expedienteId, :modelo, :prompt, :completion, :costo, :ms, :etapa)
               """)
           .setParameter("id", UUID.randomUUID())
           .setParameter("tenantId", AuthContext.get().tenantId())
@@ -42,6 +42,7 @@ public class IaConsumoLog {
           .setParameter("completion", completionTokens)
           .setParameter("costo", costo(modelo, promptTokens, completionTokens))
           .setParameter("ms", ms)
+          .setParameter("etapa", IaConsumoContexto.etapa())
           .executeUpdate();
     } catch (RuntimeException ex) {
       LOG.warn("No se pudo guardar ia_log_consumo: {}", ex.getMessage());

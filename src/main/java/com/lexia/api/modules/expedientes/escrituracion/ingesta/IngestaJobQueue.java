@@ -6,6 +6,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Repository
 public class IngestaJobQueue {
+
+  private static final Logger LOG = LoggerFactory.getLogger(IngestaJobQueue.class);
 
   public record Job(UUID id, UUID tenantId, String tipo, String payload, int intentos) {}
 
@@ -46,6 +50,56 @@ public class IngestaJobQueue {
         .setParameter("prioridad", prioridad)
         .executeUpdate();
     return id;
+  }
+
+  /**
+   * Una sola fila viva por clave. El índice parcial suelta la clave cuando el job sale de PENDIENTE/EN_PROCESO,
+   * así un reintento posterior sí puede encolar.
+   */
+  @Transactional
+  public UUID encolar(UUID tenantId, String tipo, String payload, int prioridad, String clave) {
+    if (clave == null || clave.isBlank()) {
+      return encolar(tenantId, tipo, payload, prioridad);
+    }
+    UUID id = UUID.randomUUID();
+    int filas =
+        entityManager
+            .createNativeQuery(
+                """
+                INSERT INTO app.jobs (id, tenant_id, tipo, payload, prioridad, idempotency_key)
+                VALUES (:id, :tenantId, :tipo, CAST(:payload AS jsonb), :prioridad, :clave)
+                ON CONFLICT DO NOTHING
+                """)
+            .setParameter("id", id)
+            .setParameter("tenantId", tenantId)
+            .setParameter("tipo", tipo)
+            .setParameter("payload", payload)
+            .setParameter("prioridad", prioridad)
+            .setParameter("clave", clave)
+            .executeUpdate();
+    if (filas == 1) {
+      return id;
+    }
+    LOG.warn("job duplicado tipo={} clave={}", tipo, clave);
+    @SuppressWarnings("unchecked")
+    List<?> rows =
+        entityManager
+            .createNativeQuery(
+                """
+                SELECT id FROM app.jobs
+                WHERE tenant_id = :tenant AND tipo = :tipo AND idempotency_key = :clave
+                  AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                ORDER BY created_at
+                LIMIT 1
+                """)
+            .setParameter("tenant", tenantId)
+            .setParameter("tipo", tipo)
+            .setParameter("clave", clave)
+            .getResultList();
+    if (rows.isEmpty()) {
+      return id;
+    }
+    return UUID.fromString(String.valueOf(rows.get(0)));
   }
 
   /** No apila otro análisis si ya hay uno pendiente o en curso para el expediente. */
@@ -139,6 +193,49 @@ public class IngestaJobQueue {
             ((Number) row[4]).intValue() + 1));
   }
 
+  /** Jobs del mismo archivo aún en cola o en curso, incluido el que está corriendo. */
+  @Transactional(readOnly = true)
+  public int activos(UUID tenantId, String tipo, String batchId, String clientRowId) {
+    Number n =
+        (Number)
+            entityManager
+                .createNativeQuery(
+                    """
+                    SELECT count(*) FROM app.jobs
+                    WHERE tenant_id = :tenant
+                      AND tipo = :tipo
+                      AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                      AND payload->>'batchId' = :batch
+                      AND payload->>'clientRowId' = :fila
+                    """)
+                .setParameter("tenant", tenantId)
+                .setParameter("tipo", tipo)
+                .setParameter("batch", batchId)
+                .setParameter("fila", clientRowId)
+                .getSingleResult();
+    return n == null ? 0 : n.intValue();
+  }
+
+  @Transactional(readOnly = true)
+  public int activosEnLote(UUID tenantId, String tipo, String batchId) {
+    Number n =
+        (Number)
+            entityManager
+                .createNativeQuery(
+                    """
+                    SELECT count(*) FROM app.jobs
+                    WHERE tenant_id = :tenant
+                      AND tipo = :tipo
+                      AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                      AND payload->>'batchId' = :batch
+                    """)
+                .setParameter("tenant", tenantId)
+                .setParameter("tipo", tipo)
+                .setParameter("batch", batchId)
+                .getSingleResult();
+    return n == null ? 0 : n.intValue();
+  }
+
   @Transactional
   public void completar(UUID id, String workerId) {
     entityManager
@@ -148,6 +245,26 @@ public class IngestaJobQueue {
             SET estado = 'COMPLETADO', run_at = now(), locked_until = NULL
             WHERE id = :id AND worker_id = :worker
             """)
+        .setParameter("id", id)
+        .setParameter("worker", workerId)
+        .executeUpdate();
+  }
+
+  /** Falta OCR: espera 30 s. Al décimo intento queda en ERROR. */
+  @Transactional
+  public void reprogramar(UUID id, String workerId, String motivo) {
+    entityManager
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET estado = CASE WHEN intentos >= 10 THEN 'ERROR' ELSE 'PENDIENTE' END,
+                error_log = :motivo,
+                worker_id = NULL,
+                locked_until = NULL,
+                run_at = now() + interval '30 seconds'
+            WHERE id = :id AND worker_id = :worker
+            """)
+        .setParameter("motivo", motivo)
         .setParameter("id", id)
         .setParameter("worker", workerId)
         .executeUpdate();

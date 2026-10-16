@@ -76,7 +76,7 @@ class IngestaJobAislamientoTest {
     UUID archivo = UUID.randomUUID();
     when(cola.reclamar(anyString(), any())).thenAnswer(inv -> {
       Collection<?> tipos = inv.getArgument(1);
-      if (!tipos.contains("COACTIVA_DIAGNOSTICO") || tipos.contains("ESCRITURACION_ANALISIS")) {
+      if (!tipos.contains("COACTIVA_DIAGNOSTICO") || tipos.contains("IA_ANALISIS")) {
         return Optional.empty();
       }
       return Optional.of(new IngestaJobQueue.Job(
@@ -92,9 +92,9 @@ class IngestaJobAislamientoTest {
         Set.copyOf(pedido).equals(Set.copyOf(IngestaJobWorker.TIPOS_COACTIVA))));
     assertTrue(tipos.getAllValues().stream()
         .filter(pedido -> pedido.contains("COACTIVA_DIAGNOSTICO"))
-        .noneMatch(pedido -> pedido.contains("ESCRITURACION_ANALISIS")
+        .noneMatch(pedido -> pedido.contains("IA_ANALISIS")
             || pedido.contains("OCR_EXTRACTION")
-            || pedido.contains("IA_ANALYSIS")));
+            || pedido.contains("OCR_CONSOLIDAR")));
     verify(diagnostico, timeout(2000)).ejecutar(tenant, archivo);
     verify(ingesta, never()).ejecutarJob(any());
   }
@@ -107,7 +107,7 @@ class IngestaJobAislamientoTest {
     when(query.setParameter(anyString(), any())).thenReturn(query);
     when(query.getResultList()).thenReturn(List.of());
 
-    new IngestaJobQueue(em).reclamar("nodo", List.of("ESCRITURACION_ANALISIS", "OCR_EXTRACTION", "IA_ANALYSIS"));
+    new IngestaJobQueue(em).reclamar("nodo", List.of("IA_ANALISIS", "OCR_EXTRACTION", "OCR_CONSOLIDAR"));
 
     ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
     verify(em).createNativeQuery(sql.capture());
@@ -117,6 +117,6 @@ class IngestaJobAislamientoTest {
     int enProceso = q.indexOf("estado = 'EN_PROCESO'");
     assertTrue(filtro >= 0 && filtro < pendiente && filtro < enProceso);
     assertTrue(q.indexOf("locked_until < now()") > enProceso);
-    verify(query).setParameter("tipos", List.of("ESCRITURACION_ANALISIS", "OCR_EXTRACTION", "IA_ANALYSIS"));
+    verify(query).setParameter("tipos", List.of("IA_ANALISIS", "OCR_EXTRACTION", "OCR_CONSOLIDAR"));
   }
 }

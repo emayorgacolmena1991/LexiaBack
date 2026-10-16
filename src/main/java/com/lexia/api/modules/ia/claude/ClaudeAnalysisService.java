@@ -261,7 +261,11 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     }
 
     String ultimoDiagnostico = "sin respuesta";
-    for (String modelo : modelos) {
+    List<String> orden = solo(true);
+    if (orden.isEmpty()) {
+      return ExtraccionMinutaVivienda.error("No hay modelo Haiku configurado para la minuta.");
+    }
+    for (String modelo : orden) {
       for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
         try {
           LOG.info(

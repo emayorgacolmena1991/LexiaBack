@@ -1,0 +1,28 @@
+# 2. ARQUITECTURA & SEGURIDAD LEXIA
+- Stack: Angular ↔ Spring Boot ↔ PostgreSQL (RLS multi-tenant).
+- RLS: Toda fila lleva `tenant_id`. `RlsConnectionProvider` debe fijar `app.current_tenant_id` en la conexión SQL. Prohibido cruzar datos entre tenants.
+- Auth: `SessionAuthFilter` + `AuthorizationService` con cookie `LEXIA_SID`.
+- Prompts: Catálogo vive en DB, no en el despliegue. Guardar versión de prompt, modelo y hash del doc.
+- Optimización LLM: Pre-filtrar secciones relevantes. Caché por `hash(PDF) + versión_prompt + modelo + etapa`.
+- Model Routing: Barato (clasificar), Medio (extraer), Grande (dictamen).
+- Frontend: SSE o polling adaptativo (2s → 5s → 10s). Nunca polling agresivo.
+
+# 3. PROCESAMIENTO ASÍNCRONO DE IA (JOBS & WORKERS)
+- Desacoplamiento: Endpoints de OCR/IA/procesos pesados devuelven HTTP 202 Inmediato (`{ jobId, estado: "PENDIENTE" }`).
+- PROHIBIDO: Llamadas síncronas a OCR (Azure Document Intelligence) o LLM dentro del ciclo HTTP.
+- Persistencia en `app.jobs`:
+  * Worker claim: `SELECT ... FROM app.jobs WHERE estado='PENDIENTE' AND tipo IN (...) AND run_at <= now() ORDER BY prioridad DESC, created_at FOR UPDATE SKIP LOCKED LIMIT 1`.
+  * Filtro estricto por tipo de worker (`WHERE tipo IN (...)`) para evitar cruce de dominios entre workers (Ej: Escrituración vs Coactivas).
+  * Fijar `app.current_tenant_id` en la conexión del job.
+  * Heartbeat: Renovar `lease_until` periódicamente. Si expira, queda disponible.
+  * Reintentos con backoff exponencial → mover a DLQ tras N fallos.
+
+# 4. FLUJO DE DATOS, IA Y FEEDBACK
+- Realtime: SSE (`SseEmitter`) en `GET /api/v1/.../events` respetando RLS.
+- Contexto Acumulativo: Prompt inyecta historial/diagnóstico + nueva pieza. NUNCA sobrescribir análisis previos (agregar nueva versión).
+- Respuestas LLM: Forzar `response_format: json_object`. NUNCA devolver texto libre al front (parsear, validar, persistir).
+- Abogado confirma siempre la acción final en UI.
+
+# 5. REGLAS DE NEGOCIO & HOTFIXES ESPECÍFICOS
+1. Minuta Generation: PROHIBIDO retornar HTTP 422 en `MinutaGenerationService`. Si faltan datos en la extracción, insertar placeholders `{{COMPLETAR_TAG}}` y responder HTTP 200/201 para edición en frontend.
+2. Claude Timeout: Read timeout fijado en 120s para llamadas LLM cuando el texto consolidado supere los 100,000 caracteres.

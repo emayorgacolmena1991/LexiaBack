@@ -3,7 +3,9 @@ package com.lexia.api.modules.expedientes.escrituracion;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.common.api.Precondicion;
 import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
@@ -13,8 +15,10 @@ import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService;
 import com.lexia.api.modules.ia.llm.IaConsumoContexto;
+import com.lexia.api.modules.ia.llm.IaModelRouting;
 import com.lexia.api.modules.ia.ocr.OcrTextSanitizerService;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService.Ejecucion;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
@@ -29,6 +33,7 @@ import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDT
 import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto;
 import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto.DocOcr;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
+import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -53,6 +58,8 @@ import org.springframework.util.StringUtils;
 public class IaAnalysisService {
 
   private static final Logger LOG = LoggerFactory.getLogger(IaAnalysisService.class);
+  private static final ThreadLocal<Boolean> MODO_PROFUNDO = new ThreadLocal<>();
+  private static final ThreadLocal<Boolean> PROFUNDO_PENDIENTE = new ThreadLocal<>();
   private static final Set<String> GRUPOS = Set.of("comprador", "vendedor", "inmueble");
   private static final Pattern OBS =
       Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$");
@@ -70,6 +77,7 @@ public class IaAnalysisService {
   private final AuthorizationService authorization;
   private final ObjectMapper objectMapper;
   private final OcrTextSanitizerService sanitizer;
+  private final IngestaJobQueue jobs;
 
   public IaAnalysisService(
       LegalCaseRepository legalCases,
@@ -84,7 +92,8 @@ public class IaAnalysisService {
       DocumentosExtraidosStore documentos,
       AuthorizationService authorization,
       ObjectMapper objectMapper,
-      OcrTextSanitizerService sanitizer) {
+      OcrTextSanitizerService sanitizer,
+      IngestaJobQueue jobs) {
     this.legalCases = legalCases;
     this.borradores = borradores;
     this.writingFiles = writingFiles;
@@ -98,6 +107,28 @@ public class IaAnalysisService {
     this.authorization = authorization;
     this.objectMapper = objectMapper;
     this.sanitizer = sanitizer;
+    this.jobs = jobs;
+  }
+
+  public static boolean profundoPendiente() {
+    return Boolean.TRUE.equals(PROFUNDO_PENDIENTE.get());
+  }
+
+  public static void limpiarProfundo() {
+    PROFUNDO_PENDIENTE.remove();
+    MODO_PROFUNDO.remove();
+  }
+
+  /** Sonnet sobre el análisis de Haiku ya guardado. No vuelve a encolar. */
+  @Transactional
+  public ProcesarExpedienteCompletoResult analizarProfundo(
+      UUID expedienteId, AnalysisRequestDTO request) {
+    MODO_PROFUNDO.set(true);
+    try {
+      return analizarExpedienteConPromptProducto(expedienteId, request);
+    } finally {
+      MODO_PROFUNDO.remove();
+    }
   }
 
   public void exigirExpediente(UUID expedienteId) {
@@ -158,13 +189,14 @@ public class IaAnalysisService {
     }
 
     boolean force = request != null && Boolean.TRUE.equals(request.forceReanalysis());
-    if (!force && borrador != null) {
+    boolean profundo = Boolean.TRUE.equals(MODO_PROFUNDO.get());
+    if (!profundo && !force && borrador != null) {
       ProcesarExpedienteCompletoResult cachedDraft = readDraftStudy(borrador);
       if (cachedDraft != null) {
         return cachedDraft;
       }
     }
-    if (!force && writingFile != null) {
+    if (!profundo && !force && writingFile != null) {
       ProcesarExpedienteCompletoResult cached =
           loadCached(expedienteId, tenantId, writingFile, productCode);
       if (cached != null) {
@@ -180,7 +212,10 @@ public class IaAnalysisService {
     IaConsumoContexto.setExpediente(expedienteId);
     Ejecucion ejecucion;
     try {
-      ejecucion = llm.ejecutar(ocrText, productCode, canton);
+      ejecucion =
+          profundo
+              ? llm.ejecutarProfundo(ocrText, productCode, canton)
+              : llm.ejecutar(ocrText, productCode, canton);
     } finally {
       IaConsumoContexto.clear();
     }
@@ -221,6 +256,17 @@ public class IaAnalysisService {
           expedienteId);
     }
 
+    boolean escalar =
+        !profundo && !ejecucion.desdeCache() && IaModelRouting.necesitaPesado(ext);
+    LOG.info(
+        "routing-analisis caseId={} rapido=true profundo={} motivo={}",
+        expedienteId,
+        escalar,
+        escalar ? IaModelRouting.motivo(ext) : null);
+    if (escalar) {
+      encolarProfundo(expedienteId, request);
+    }
+
     LOG.info(
         "analizar-ia id={} product={} key={} documentos={} estado={}",
         expedienteId,
@@ -229,6 +275,30 @@ public class IaAnalysisService {
         documentosExtraidos.size(),
         response.dictamen() == null ? null : response.dictamen().estado());
     return response;
+  }
+
+  private void encolarProfundo(UUID expedienteId, AnalysisRequestDTO request) {
+    if (jobs == null) {
+      return;
+    }
+    AuthPrincipal principal = AuthContext.get();
+    if (principal == null) {
+      return;
+    }
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("expedienteId", expedienteId.toString());
+    payload.put("forceReanalysis", false);
+    payload.put("sessionIdOcr", request == null || request.sessionId() == null ? "" : request.sessionId());
+    payload.put("userId", principal.userId() == null ? "" : principal.userId().toString());
+    payload.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
+    payload.put(
+        "membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
+    try {
+      jobs.encolar(principal.tenantId(), "IA_ANALISIS_PROFUNDO", objectMapper.writeValueAsString(payload), -1);
+      PROFUNDO_PENDIENTE.set(true);
+    } catch (JsonProcessingException ex) {
+      LOG.warn("No se pudo encolar IA_ANALISIS_PROFUNDO caseId={}: {}", expedienteId, ex.getMessage());
+    }
   }
 
   private ProcesarExpedienteCompletoResult readDraftStudy(ExpedienteBorrador borrador) {
@@ -385,6 +455,28 @@ public class IaAnalysisService {
     ObservacionesCotejo.reemplazar(titleObservations, tenantId, study.getId(), entradas);
   }
 
+  /** No encola el estudio si no hay texto. El worker reprograma si el OCR llega después. */
+  public void exigirTextoOcr(UUID expedienteId, String sessionId) {
+    String code =
+        legalCases
+            .findById(expedienteId)
+            .map(LegalCase::getCode)
+            .orElse("");
+    try {
+      loadOcrMarcado(expedienteId, code, new AnalysisRequestDTO(false, sessionId));
+    } catch (ApiException ex) {
+      if (ex.getMessage() != null && ex.getMessage().contains("Sin texto OCR")) {
+        throw Precondicion.fallo(
+            "POST analizar-ia",
+            "SIN_TEXTO_OCR",
+            "Debes ejecutar OCR antes del análisis IA",
+            "POST /api/v1/ocr/azure/analyze-single",
+            Map.of("expedienteId", expedienteId.toString()));
+      }
+      throw ex;
+    }
+  }
+
   /**
    * OCR por archivo (caché de sesión o {@code documento_texto_ocr}). No une binarios.
    */
@@ -410,12 +502,48 @@ public class IaAnalysisService {
               + " case="
               + expedienteId);
     }
+    logExcluidos(expedienteId, candidates, marcado);
     LOG.info(
         "analizar-ia OCR caseId={} chars={} documentos={}",
         expedienteId,
         marcado.length(),
         OcrExpedienteTexto.contarDocumentos(marcado));
     return marcado;
+  }
+
+  private void logExcluidos(UUID expedienteId, List<String> candidates, String marcado) {
+    String texto = marcado == null ? "" : marcado;
+    for (String id : candidates) {
+      List<OcrFileResult> results = ocrCache.listResults(id);
+      if (results.isEmpty()) {
+        continue;
+      }
+      for (OcrFileResult archivo : results) {
+        if (archivo == null || !StringUtils.hasText(archivo.fileId())) {
+          continue;
+        }
+        if (texto.contains("id=\"" + archivo.fileId().trim() + "\"")) {
+          continue;
+        }
+        String motivo = motivoExclusion(archivo);
+        LOG.info(
+            "analizar-ia documento excluido docId={} motivo={} caseId={}",
+            archivo.fileId(),
+            motivo,
+            expedienteId);
+      }
+      return;
+    }
+  }
+
+  private static String motivoExclusion(OcrFileResult archivo) {
+    if (!archivo.legible()) {
+      return "SIN_OCR";
+    }
+    if (!StringUtils.hasText(archivo.textoExtraido())) {
+      return "VACIO";
+    }
+    return "TIPO_NO_ELEGIBLE";
   }
 
   private String ocrDesdeDb(List<String> ids) {
@@ -431,6 +559,12 @@ public class IaAnalysisService {
       String consolidado = "";
       for (DocumentoTextoOcr row : rows) {
         if (row == null || !StringUtils.hasText(row.getTextoOcr())) {
+          if (row != null && !"consolidado".equals(row.getIdDocumento())) {
+            LOG.info(
+                "analizar-ia documento excluido docId={} motivo={}",
+                row.getIdDocumento(),
+                row.getTextoOcr() == null ? "SIN_OCR" : "VACIO");
+          }
           continue;
         }
         if ("consolidado".equals(row.getIdDocumento())) {

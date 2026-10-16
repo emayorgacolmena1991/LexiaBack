@@ -25,4 +25,27 @@ public final class IaModelRouting {
     }
     return "REJECTED".equalsIgnoreCase(dictamen.estado());
   }
+
+  /** {@code null} si el cotejo liviano alcanza. */
+  public static String motivo(ExtraccionExpedienteCompleto extraccion) {
+    if (extraccion == null
+        || extraccion.payload() == null
+        || extraccion.payload().dictamen() == null
+        || !necesitaPesado(extraccion)) {
+      return null;
+    }
+    for (Observacion obs : extraccion.payload().dictamen().observaciones()) {
+      String nivel = obs.severidad() == null ? "" : obs.severidad().trim().toUpperCase();
+      if (nivel.equals("HIGH") || nivel.equals("ALTA")) {
+        return "INCOHERENCIA_ALTA";
+      }
+    }
+    for (Observacion obs : extraccion.payload().dictamen().observaciones()) {
+      String nivel = obs.severidad() == null ? "" : obs.severidad().trim().toUpperCase();
+      if (nivel.equals("MEDIUM") || nivel.equals("MEDIA")) {
+        return "OBSERVACION_MEDIA";
+      }
+    }
+    return "INCOHERENCIA_ALTA";
+  }
 }

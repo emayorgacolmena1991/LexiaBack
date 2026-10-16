@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.escrituracion.ingesta;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.AsignacionesPayload;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.CrearLoteRequest;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaDtos.UploadAceptado;
 import jakarta.validation.Valid;
 import java.util.Map;
 import java.util.UUID;
@@ -38,7 +39,7 @@ public class IngestaMasivaEscrituracionController {
   }
 
   @PostMapping(value = "/{batchId}/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public ResponseEntity<LoteStatus> subir(
+  public ResponseEntity<UploadAceptado> subir(
       @PathVariable UUID batchId,
       @Valid @RequestPart("asignaciones") AsignacionesPayload asignaciones,
       MultipartHttpServletRequest request) {
@@ -58,8 +59,9 @@ public class IngestaMasivaEscrituracionController {
   }
 
   @PostMapping("/{batchId}/ejecutar-ocr")
-  public ResponseEntity<LoteStatus> ejecutarOcr(@PathVariable UUID batchId) {
-    return ResponseEntity.accepted().body(ingesta.ejecutarOcr(batchId));
+  public ResponseEntity<Map<String, String>> ejecutarOcr(@PathVariable UUID batchId) {
+    return ResponseEntity.status(HttpStatus.GONE)
+        .body(Map.of("message", "ejecutar-ocr fue retirado. El upload encadena el OCR."));
   }
 
   @PostMapping({"/{batchId}/filas/{itemId}/reintentar", "/{batchId}/reintentar/{itemId}"})
@@ -79,7 +81,8 @@ public class IngestaMasivaEscrituracionController {
   }
 
   @PostMapping("/{batchId}/process-ia")
-  public ResponseEntity<LoteStatus> procesarIa(@PathVariable UUID batchId) {
-    return ResponseEntity.accepted().body(ingesta.procesarIa(batchId));
+  public ResponseEntity<Map<String, String>> procesarIa(@PathVariable UUID batchId) {
+    return ResponseEntity.status(HttpStatus.GONE)
+        .body(Map.of("message", "process-ia fue retirado. OCR_CONSOLIDAR encola el análisis."));
   }
 }

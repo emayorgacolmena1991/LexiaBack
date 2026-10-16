@@ -80,7 +80,8 @@ class IaAnalysisServiceDraftTest {
             documentos,
             authorization,
             new ObjectMapper(),
-            new OcrTextSanitizerService());
+            new OcrTextSanitizerService(),
+            null);
   }
 
   @AfterEach

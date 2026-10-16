@@ -55,7 +55,8 @@ public class BatchEventPublisherService {
   }
 
   public SseEmitter abrir(UUID batchId) {
-    SseEmitter emitter = new SseEmitter(30L * 60L * 1000L);
+    // 15 min: Azure puede usar sus 5 y detrás van consolidar e IA. 5 min cortaba el stream a mitad.
+    SseEmitter emitter = new SseEmitter(15L * 60L * 1000L);
     emisores.computeIfAbsent(batchId, id -> new CopyOnWriteArrayList<>()).add(emitter);
     Runnable quitar = () -> {
       List<SseEmitter> lista = emisores.get(batchId);
@@ -63,8 +64,14 @@ public class BatchEventPublisherService {
         lista.remove(emitter);
       }
     };
-    emitter.onCompletion(quitar);
-    emitter.onTimeout(quitar);
+    emitter.onCompletion(() -> {
+      LOG.info("SSE completado {}", batchId);
+      quitar.run();
+    });
+    emitter.onTimeout(() -> {
+      LOG.warn("SSE timeout {}", batchId);
+      quitar.run();
+    });
     emitter.onError(error -> quitar.run());
     return emitter;
   }

@@ -174,7 +174,14 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/csrf"),
                         paths.matcher("/api/v1/auth/invite/accept"),
                         paths.matcher("/api/v1/auth/password/forgot"),
-                        paths.matcher("/api/v1/auth/password/reset"))
+                        paths.matcher("/api/v1/auth/password/reset"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/escrituracion/ingesta-masiva/{batchId}/stream"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/escrituracion/expedientes/{id}/stream"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/expedientes/{id}/escrituracion/analizar-ia/stream"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/expedientes/{id}/captura-biess/stream"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/expedientes/{id}/escrituracion/captura-biess/stream"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/minutas/{minutaId}/enriquecer/stream"),
+                        paths.matcher(HttpMethod.GET, "/api/v1/coactivas/expedientes/{id}/stream"))
                     .permitAll()
                     // TICKET-DEV-401B: /api/v1/cache/** (E03 consolidate + E04 cotejo) requiere sesión.
                     .requestMatchers(

@@ -8,6 +8,7 @@ public final class IaConsumoContexto {
   public record Uso(UUID expedienteId, String modelo, int promptTokens, int completionTokens, long ms) {}
 
   private static final ThreadLocal<UUID> EXPEDIENTE = new ThreadLocal<>();
+  private static final ThreadLocal<String> ETAPA = new ThreadLocal<>();
   private static final ThreadLocal<Uso> ULTIMO = new ThreadLocal<>();
 
   private IaConsumoContexto() {}
@@ -21,6 +22,15 @@ public final class IaConsumoContexto {
     return EXPEDIENTE.get();
   }
 
+  /** {@code rapida}, {@code profunda} o {@code enriquecimiento}. */
+  public static void setEtapa(String etapa) {
+    ETAPA.set(etapa);
+  }
+
+  public static String etapa() {
+    return ETAPA.get();
+  }
+
   public static void anotar(String modelo, int promptTokens, int completionTokens, long ms) {
     ULTIMO.set(new Uso(EXPEDIENTE.get(), modelo, promptTokens, completionTokens, ms));
   }
@@ -31,5 +41,6 @@ public final class IaConsumoContexto {
 
   public static void clear() {
     EXPEDIENTE.remove();
+    ETAPA.remove();
   }
 }

@@ -298,9 +298,7 @@ public class MinutaGenerationService {
     if (base == null) {
       base = datosBase(tenantId, caseId, legalCase, sessionIdHint, draft.getProductCode(), draft.getTemplateKind());
     }
-    MinutaViviendaData ia =
-        extraerConIa(
-            tenantId, legalCase, sessionIdHint, draft.getProductCode(), draft.getTemplateKind(), true);
+    MinutaViviendaData ia = iaEnriquecida(tenantId, caseId, legalCase, sessionIdHint, draft, base);
     if (!completarVacios(base, ia)) {
       return new MinutaRenderizada(
           caseId, minutaId, pendientes(descriptor, renderizado == null ? base : renderizado));
@@ -323,6 +321,87 @@ public class MinutaGenerationService {
     List<String> pendientes = pendientes(descriptor, data);
     LOG.info("Minuta enriquecida con IA case={} draft={} pendientes={}", caseId, minutaId, pendientes.size());
     return new MinutaRenderizada(caseId, minutaId, pendientes);
+  }
+
+  /**
+   * Job {@code MINUTA_RENDER}: poi-tl con las variables ya resueltas. Sin LLM.
+   * Lo que falte queda como placeholder.
+   */
+  @Transactional
+  public MinutaRenderizada renderSinLlm(UUID minutaId) {
+    MinutaDraft draft = draftDe(minutaId);
+    UUID caseId = caseIdDe(draft);
+    UUID tenantId = draft.getTenantId();
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(draft.getProductCode(), draft.getTemplateKind());
+    MinutaViviendaData data = loadData(draft);
+    if (data == null) {
+      data = new MinutaViviendaData();
+      completarDesdeConsolidado(tenantId, caseId, data);
+      aplicarDatosBiessGuardados(tenantId, caseId, data, draft.getProductCode(), draft.getTemplateKind());
+      ExpedienteVariablesService.letrasDesdeMonto(data);
+    }
+    byte[] docx = renderer.renderVivienda(descriptor, data);
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+    List<String> pendientes = pendientes(descriptor, data);
+    LOG.info(
+        "MINUTA_RENDER poi-tl case={} draft={} pendientes={} sin LLM",
+        caseId,
+        minutaId,
+        pendientes.size());
+    return new MinutaRenderizada(caseId, minutaId, pendientes);
+  }
+
+  @Transactional(readOnly = true)
+  public UUID expedienteDe(UUID minutaId) {
+    authorization.requirePermission("expedientes:caso:leer");
+    return caseIdDe(minutaId);
+  }
+
+  @Transactional(readOnly = true)
+  public UUID exigirEscritura(UUID minutaId) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    return caseIdDe(minutaId);
+  }
+
+  /** Caché por hash del borrador. Haiku solo si el borrador cambió. */
+  private MinutaViviendaData iaEnriquecida(
+      UUID tenantId,
+      UUID caseId,
+      LegalCase legalCase,
+      String sessionIdHint,
+      MinutaDraft draft,
+      MinutaViviendaData base) {
+    String version =
+        VERSION_MINUTA + ":enriquecer:" + draft.getProductCode() + ":" + draft.getTemplateKind();
+    String hash = DocumentoCacheStore.sha256(json(base));
+    var hit = documentoCache.buscar(tenantId, hash, version);
+    if (hit.isPresent() && StringUtils.hasText(hit.get().resultadoJson())) {
+      try {
+        LOG.info("MINUTA_ENRIQUECER cache hit case={} draft={}", caseId, draft.getId());
+        return objectMapper.readValue(hit.get().resultadoJson(), MinutaViviendaData.class);
+      } catch (IOException e) {
+        LOG.warn("MINUTA_ENRIQUECER cache ilegible case={}", caseId);
+      }
+    }
+    IaConsumoContexto.setExpediente(caseId);
+    IaConsumoContexto.setEtapa("enriquecimiento");
+    MinutaViviendaData ia;
+    try {
+      ia =
+          extraerConIa(
+              tenantId, legalCase, sessionIdHint, draft.getProductCode(), draft.getTemplateKind(), true);
+    } finally {
+      IaConsumoContexto.clear();
+    }
+    if (ia != null && ia.toTemplateMap().values().stream().anyMatch(v -> !MinutaViviendaData.isMissing(v))) {
+      String modelo = IaConsumoContexto.ultimo() == null ? "haiku" : IaConsumoContexto.ultimo().modelo();
+      documentoCache.guardar(tenantId, hash, version, modelo, null, json(ia));
+    }
+    return ia;
   }
 
   /** Copia de {@code ia} solo los campos que {@code base} tiene vacíos. */
