@@ -456,14 +456,44 @@ public class CargaDocumentoService {
         .toList();
   }
 
-  /** OCR durable si el id ya es expediente; si no, queda en RAM del borrador. */
+  /** OCR durable en {@code documento_texto_ocr}. La caché de borrador queda como espejo. */
+  @org.springframework.transaction.annotation.Transactional
   public void guardarResultadoOcr(String idExpediente, DocumentoOcrResultadoDTO resultado) {
+    if (resultado == null || !org.springframework.util.StringUtils.hasText(idExpediente)) {
+      return;
+    }
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
     if (official != null) {
       caseDocs.guardarOcr(official, resultado);
       return;
     }
     guardarOcrEnMemoria(idExpediente, resultado);
+    var principal = com.lexia.api.modules.auth.AuthContext.get();
+    DocumentoTextoOcr row =
+        ocrRepository
+            .findByIdExpedienteAndIdDocumento(idExpediente, resultado.idDocumento())
+            .orElseGet(DocumentoTextoOcr::new);
+    if (principal != null) {
+      row.setTenantId(principal.tenantId());
+    }
+    row.setIdExpediente(idExpediente);
+    row.setIdDocumento(resultado.idDocumento());
+    row.setTipoDocumento(resultado.tipoDocumento());
+    row.setTextoOcr(resultado.textoOcr());
+    row.setAnalisisJson(resultado.analisisJson());
+    row.setEstadoDoc(
+        org.springframework.util.StringUtils.hasText(resultado.estado())
+            ? resultado.estado()
+            : "EN_PROCESO");
+    row.setMotivo(resultado.motivo());
+    row.setConfianza(resultado.confianza());
+    ocrRepository.save(row);
+  }
+
+  /** Borra una fila de {@code app.documento_texto_ocr} (ej. el consolidado antes de reprocesar). */
+  @org.springframework.transaction.annotation.Transactional
+  public void borrarOcr(String idExpediente, String idDocumento) {
+    ocrRepository.deleteByIdExpedienteAndIdDocumento(idExpediente, idDocumento);
   }
 
   /** Guarda resultado OCR+Gemini solo en RAM del borrador. */

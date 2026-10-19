@@ -53,6 +53,14 @@ public final class IngestaMasivaDtos {
       String iaResumen,
       List<ArchivoStatus> archivos) {}
 
+  public record ResumenLote(
+      UUID batchId,
+      int totalItems,
+      int completados,
+      int enProceso,
+      int fallidos,
+      long tiempoEstimadoRestanteSegundos) {}
+
   public record LoteStatus(
       UUID batchId,
       String fase,

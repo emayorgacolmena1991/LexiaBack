@@ -5,6 +5,7 @@ import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionesPayload;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.CrearLoteRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.MediaType;
@@ -43,10 +44,12 @@ public class IngestaMasivaEscrituracionController {
     return ingesta.subir(batchId, asignaciones, request.getFiles("files"));
   }
 
-  @PostMapping(value = "/{batchId}/filas/{clientRowId}/reemplazar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  @PostMapping(
+      value = {"/{batchId}/filas/{itemId}/reemplazar", "/{batchId}/items/{itemId}/reemplazar"},
+      consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public LoteStatus reemplazar(
       @PathVariable UUID batchId,
-      @PathVariable String clientRowId,
+      @PathVariable("itemId") String clientRowId,
       @RequestParam("file") MultipartFile file,
       @RequestParam(value = "tipoDocumento", required = false) String tipoDocumento,
       @RequestParam(value = "fileId", required = false) String fileId) {
@@ -58,9 +61,14 @@ public class IngestaMasivaEscrituracionController {
     return ingesta.ejecutarOcr(batchId);
   }
 
-  @PostMapping("/{batchId}/filas/{clientRowId}/reintentar")
-  public LoteStatus reintentar(@PathVariable UUID batchId, @PathVariable String clientRowId) {
-    return ingesta.reintentar(batchId, clientRowId);
+  @PostMapping({"/{batchId}/filas/{itemId}/reintentar", "/{batchId}/items/{itemId}/reintentar"})
+  public LoteStatus reintentar(@PathVariable UUID batchId, @PathVariable String itemId) {
+    return ingesta.reintentarItem(batchId, itemId);
+  }
+
+  @GetMapping("/{batchId}/resumen")
+  public ResumenLote resumen(@PathVariable UUID batchId) {
+    return ingesta.resumen(batchId);
   }
 
   @GetMapping(value = "/{batchId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

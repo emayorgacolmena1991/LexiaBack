@@ -1,7 +1,10 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchRequest;
@@ -39,16 +42,19 @@ public class OcrAzureBatchService {
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
   private final OcrSessionCacheService cache;
+  private final DocumentoTextoOcrRepository ocrRepository;
   private final Executor ocrExecutor;
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
       CargaDocumentoService cargaDocumentoService,
       OcrSessionCacheService cache,
+      DocumentoTextoOcrRepository ocrRepository,
       @Qualifier("ocrExecutor") Executor ocrExecutor) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
+    this.ocrRepository = ocrRepository;
     this.ocrExecutor = ocrExecutor;
   }
 
@@ -249,8 +255,25 @@ public class OcrAzureBatchService {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String sessionId = request.sessionId().trim();
-    String content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
+    StringBuilder unido = new StringBuilder();
+    for (DocumentoTextoOcr row : ocrRepository.findByIdExpedienteOrderByCreatedAtAsc(sessionId)) {
+      if (row == null || "consolidado".equals(row.getIdDocumento()) || !StringUtils.hasText(row.getTextoOcr())) {
+        continue;
+      }
+      String tipo = StringUtils.hasText(row.getTipoDocumento()) ? row.getTipoDocumento() : "DOCUMENTO";
+      unido.append("=== DOCUMENTO: ").append(tipo).append(" ===\n");
+      unido.append(row.getTextoOcr().trim()).append("\n\n");
+    }
+    String content = unido.toString().trim();
+    if (!StringUtils.hasText(content)) {
+      content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
+    }
     cache.putConsolidated(sessionId, content);
+    int confianza = 100;
+    cargaDocumentoService.guardarResultadoOcr(
+        sessionId,
+        new DocumentoOcrResultadoDTO(
+            "consolidado", "consolidado", "CONSOLIDADO", content, null, "LEGIBLE", null, confianza));
     return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
   }
 

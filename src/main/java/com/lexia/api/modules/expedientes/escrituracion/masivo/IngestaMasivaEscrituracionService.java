@@ -1,7 +1,15 @@
 package com.lexia.api.modules.expedientes.escrituracion.masivo;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import jakarta.persistence.EntityManager;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import org.hibernate.Session;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
@@ -30,8 +38,10 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarDocumento;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
+import com.lexia.api.modules.tenancy.TenantContext;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -69,7 +79,8 @@ public class IngestaMasivaEscrituracionService {
   private final JobRepository jobs;
   private final DocumentoTextoOcrRepository textoOcr;
   private final ObjectMapper objectMapper;
-  private final Map<UUID, Lote> lotes = new ConcurrentHashMap<>();
+  private final EntityManager entityManager;
+  private final TransactionTemplate tx;
   private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> streams = new ConcurrentHashMap<>();
 
   public IngestaMasivaEscrituracionService(
@@ -82,7 +93,9 @@ public class IngestaMasivaEscrituracionService {
       ProductoBiessService productos,
       JobRepository jobs,
       DocumentoTextoOcrRepository textoOcr,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      EntityManager entityManager,
+      PlatformTransactionManager transactionManager) {
     this.carga = carga;
     this.casos = casos;
     this.borradores = borradores;
@@ -93,6 +106,8 @@ public class IngestaMasivaEscrituracionService {
     this.jobs = jobs;
     this.textoOcr = textoOcr;
     this.objectMapper = objectMapper;
+    this.entityManager = entityManager;
+    this.tx = new TransactionTemplate(transactionManager);
   }
 
   public LoteStatus crear(CrearLoteRequest request) {
@@ -112,7 +127,7 @@ public class IngestaMasivaEscrituracionService {
       lote.filas.add(crearFila(principal, fila));
     }
     lote.fase = "CREADO";
-    lotes.put(lote.id, lote);
+    persistir(lote);
     LOG.info("ingesta-masiva lote={} filas={} tenant={}", lote.id, lote.filas.size(), principal.tenantId());
     return lote.snapshot();
   }
@@ -159,6 +174,7 @@ public class IngestaMasivaEscrituracionService {
     synchronized (lote) {
       lote.fase = "ARCHIVOS";
     }
+    persistir(lote);
     return lote.snapshot();
   }
 
@@ -196,6 +212,7 @@ public class IngestaMasivaEscrituracionService {
         }
       }
     }
+    persistir(lote);
     return lote.snapshot();
   }
 
@@ -225,6 +242,8 @@ public class IngestaMasivaEscrituracionService {
         fila.iaEstado = "PENDIENTE";
         fila.iaResumen = null;
         fila.observaciones = null;
+        fila.inicioMs = 0;
+        fila.duracionMs = 0;
       }
     }
     synchronized (lote) {
@@ -235,6 +254,7 @@ public class IngestaMasivaEscrituracionService {
         encolarProcesarDocumento(lote, fila, archivo, principal);
       }
     }
+    persistir(lote);
     return lote.snapshot();
   }
 
@@ -251,6 +271,7 @@ public class IngestaMasivaEscrituracionService {
     }
     String sesion = exigirExpediente(fila);
     String tipo = tipoDe(fila, tipoDocumento);
+    carga.borrarOcr(sesion, "consolidado");
     DocumentoCargadoDTO doc = carga.subir(sesion, file);
     if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
       carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
@@ -268,11 +289,9 @@ public class IngestaMasivaEscrituracionService {
     synchronized (lote) {
       lote.fase = "OCR";
     }
-    if (fila.expedienteId != null) {
-      textoOcr.deleteByIdExpedienteAndIdDocumento(fila.expedienteId.toString(), "consolidado");
-    }
     Archivo ultimo = fila.archivos.get(fila.archivos.size() - 1);
     encolarProcesarDocumento(lote, fila, ultimo, principal);
+    persistir(lote);
     return lote.snapshot();
   }
 
@@ -334,7 +353,30 @@ public class IngestaMasivaEscrituracionService {
     return emitter;
   }
 
+  public ResumenLote resumen(UUID batchId) {
+    require(batchId);
+    int total = contar(batchId, null);
+    int completados = contar(batchId, "COMPLETADO");
+    int fallidos = contar(batchId, "ERROR");
+    int enProceso = contarEnProceso(batchId);
+    return new ResumenLote(batchId, total, completados, enProceso, fallidos, 0);
+  }
+
+  /** Reintento manual de una fila: borra el consolidado y reencola sus archivos. */
+  public LoteStatus reintentarItem(UUID batchId, String itemId) {
+    Fila fila = fila(require(batchId), itemId);
+    if (fila.expedienteId != null) {
+      carga.borrarOcr(fila.expedienteId.toString(), "consolidado");
+    }
+    return reintentar(batchId, itemId);
+  }
+
   private void encolarProcesarDocumento(Lote lote, Fila fila, Archivo archivo, AuthPrincipal principal) {
+    synchronized (fila) {
+      if (fila.inicioMs == 0) {
+        fila.inicioMs = System.currentTimeMillis();
+      }
+    }
     ProcesarDocumento payload =
         new ProcesarDocumento(
             lote.id,
@@ -354,7 +396,7 @@ public class IngestaMasivaEscrituracionService {
   }
 
   public void procesarDocumento(ProcesarDocumento payload) {
-    Lote lote = lotes.get(payload.loteId());
+    Lote lote = cargar(payload.tenantId(), payload.loteId());
     Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
     Archivo archivo = fila == null ? null : archivoDe(fila, payload.docId());
     try {
@@ -382,6 +424,7 @@ public class IngestaMasivaEscrituracionService {
       }
       if (!esUltimoArchivo(fila, payload.expedienteId())) {
         if (lote != null) {
+          persistir(lote);
           emitir(lote.id, "DOCUMENTO_LISTO", lote.snapshot());
         }
         return;
@@ -404,9 +447,11 @@ public class IngestaMasivaEscrituracionService {
           fila.iaEstado = "COMPLETADO";
           fila.iaResumen = resumen;
           fila.ocrEstado = "COMPLETADO";
+          fila.duracionMs = Math.max(0, System.currentTimeMillis() - fila.inicioMs);
         }
       }
       if (lote != null) {
+        persistir(lote);
         emitir(lote.id, "DOCUMENTO_LISTO", lote.snapshot());
       }
     } catch (RuntimeException ex) {
@@ -425,6 +470,7 @@ public class IngestaMasivaEscrituracionService {
         }
       }
       if (lote != null) {
+        persistir(lote);
         emitir(lote.id, "ERROR", lote.snapshot());
       }
       throw ex;
@@ -558,11 +604,188 @@ public class IngestaMasivaEscrituracionService {
 
   private Lote require(UUID batchId) {
     AuthPrincipal principal = AuthContext.require();
-    Lote lote = lotes.get(batchId);
-    if (lote == null || !lote.tenantId.equals(principal.tenantId())) {
+    Lote lote = cargar(principal.tenantId(), batchId);
+    if (lote == null) {
       throw ApiException.notFound("Lote de ingesta no encontrado.");
     }
     return lote;
+  }
+
+  private int contar(UUID loteId, String estado) {
+    String sql =
+        estado == null
+            ? "SELECT count(*)::int FROM app.ingesta_item WHERE lote_id = :lote"
+            : "SELECT count(*)::int FROM app.ingesta_item WHERE lote_id = :lote AND estado = :estado";
+    var q = entityManager.createNativeQuery(sql).setParameter("lote", loteId);
+    if (estado != null) {
+      q.setParameter("estado", estado);
+    }
+    return ((Number) q.getSingleResult()).intValue();
+  }
+
+  private int contarEnProceso(UUID loteId) {
+    return ((Number)
+            entityManager
+                .createNativeQuery(
+                    """
+                    SELECT count(*)::int FROM app.ingesta_item
+                    WHERE lote_id = :lote AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                    """)
+                .setParameter("lote", loteId)
+                .getSingleResult())
+        .intValue();
+  }
+
+  private void persistir(Lote lote) {
+    try {
+      persistirEnBd(lote);
+    } catch (Exception e) {
+      LOG.error("Error persistiendo lote: {}", e.getMessage(), e);
+      throw e;
+    }
+  }
+
+  /** Misma conexión de la transacción JPA: SET LOCAL y luego los INSERT. */
+  private void persistirEnBd(Lote lote) {
+    UUID tenant = lote.tenantId != null ? lote.tenantId : TenantContext.getTenantId();
+    int hechas = 0;
+    for (Fila fila : lote.filas) {
+      if ("COMPLETADO".equals(estadoItem(fila))) {
+        hechas++;
+      }
+    }
+    int completadas = hechas;
+    tx.executeWithoutResult(
+        status ->
+            entityManager.unwrap(Session.class).doWork(connection -> escribirLote(connection, lote, tenant, completadas)));
+  }
+
+  private void escribirLote(Connection connection, Lote lote, UUID tenant, int hechas) throws java.sql.SQLException {
+    try (PreparedStatement set =
+        connection.prepareStatement("SELECT set_config('app.current_tenant_id', ?, true)")) {
+      set.setString(1, tenant == null ? "" : tenant.toString());
+      set.execute();
+    }
+    try (PreparedStatement upsert =
+        connection.prepareStatement(
+            """
+            INSERT INTO app.ingesta_lote (id, tenant_id, estado, total_filas, filas_completadas)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+              estado = EXCLUDED.estado,
+              total_filas = EXCLUDED.total_filas,
+              filas_completadas = EXCLUDED.filas_completadas
+            """)) {
+      upsert.setObject(1, lote.id);
+      upsert.setObject(2, tenant);
+      upsert.setString(3, lote.fase);
+      upsert.setInt(4, lote.filas.size());
+      upsert.setInt(5, hechas);
+      upsert.executeUpdate();
+    }
+    try (PreparedStatement delete =
+        connection.prepareStatement(
+            "DELETE FROM app.ingesta_item WHERE lote_id = ? AND tenant_id = ?")) {
+      delete.setObject(1, lote.id);
+      delete.setObject(2, tenant);
+      delete.executeUpdate();
+    }
+    int orden = 0;
+    try (PreparedStatement insert =
+        connection.prepareStatement(
+            """
+            INSERT INTO app.ingesta_item
+              (id, tenant_id, lote_id, client_row_id, orden, expediente_id, borrador_id,
+               estado, porcentaje_progreso, error_log, detalle)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            """)) {
+      for (Fila fila : lote.filas) {
+        String estado = estadoItem(fila);
+        insert.setObject(1, UUID.randomUUID());
+        insert.setObject(2, tenant);
+        insert.setObject(3, lote.id);
+        insert.setString(4, fila.clientRowId);
+        insert.setInt(5, orden++);
+        insert.setObject(6, fila.expedienteId);
+        insert.setObject(7, fila.borradorId);
+        insert.setString(8, estado);
+        insert.setInt(9, "COMPLETADO".equals(estado) ? 100 : 0);
+        insert.setString(10, "ERROR".equals(estado) ? fila.observaciones : null);
+        insert.setString(11, json(fila));
+        insert.executeUpdate();
+      }
+    }
+  }
+
+  private Lote cargar(UUID tenantId, UUID loteId) {
+    List<?> fase =
+        entityManager
+            .createNativeQuery(
+                "SELECT estado FROM app.ingesta_lote WHERE id = :id AND tenant_id = :tenant")
+            .setParameter("id", loteId)
+            .setParameter("tenant", tenantId)
+            .getResultList();
+    if (fase.isEmpty()) {
+      return null;
+    }
+    Lote lote = new Lote(loteId, tenantId);
+    lote.fase = String.valueOf(fase.get(0));
+    List<?> rows =
+        entityManager
+            .createNativeQuery(
+                """
+                SELECT CAST(detalle AS text) FROM app.ingesta_item
+                WHERE lote_id = :id AND tenant_id = :tenant
+                ORDER BY orden
+                """)
+            .setParameter("id", loteId)
+            .setParameter("tenant", tenantId)
+            .getResultList();
+    for (Object row : rows) {
+      lote.filas.add(leerFila(String.valueOf(row)));
+    }
+    return lote;
+  }
+
+  private static String estadoItem(Fila fila) {
+    if ("ERROR".equals(fila.ocrEstado) || "ERROR".equals(fila.iaEstado)) {
+      return "ERROR";
+    }
+    if ("COMPLETADO".equals(fila.ocrEstado) || "COMPLETADO".equals(fila.iaEstado)) {
+      return "COMPLETADO";
+    }
+    if ("PROCESANDO".equals(fila.ocrEstado) || "EN_PROCESO".equals(fila.iaEstado)) {
+      return "EN_PROCESO";
+    }
+    return "PENDIENTE";
+  }
+
+  private String json(Fila fila) {
+    try {
+      ObjectMapper copia = objectMapper.copy();
+      copia.setVisibility(
+          copia
+              .getSerializationConfig()
+              .getDefaultVisibilityChecker()
+              .withFieldVisibility(JsonAutoDetect.Visibility.ANY));
+      return copia.writeValueAsString(fila);
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo guardar la fila " + fila.clientRowId + ".");
+    }
+  }
+
+  private Fila leerFila(String json) {
+    try {
+      ObjectMapper copia = objectMapper.copy();
+      copia.setVisibility(
+          copia
+              .getDeserializationConfig()
+              .getDefaultVisibilityChecker()
+              .withFieldVisibility(JsonAutoDetect.Visibility.ANY));
+      return copia.readValue(json, Fila.class);
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("El lote guardado no se puede leer.");
+    }
   }
 
   private static Fila fila(Lote lote, String clientRowId) {
@@ -696,10 +919,10 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private static final class Fila {
-    private final String clientRowId;
-    private final String productCode;
-    private final String canton;
-    private final String ingestionMode;
+    private String clientRowId;
+    private String productCode;
+    private String canton;
+    private String ingestionMode;
     private String codigo;
     private UUID borradorId;
     private UUID expedienteId;
@@ -709,7 +932,16 @@ public class IngestaMasivaEscrituracionService {
     private String observaciones;
     private String iaEstado = "PENDIENTE";
     private String iaResumen;
+    private long inicioMs;
+    private long duracionMs;
     private final List<Archivo> archivos = new ArrayList<>();
+
+    private Fila() {
+      this.clientRowId = null;
+      this.productCode = null;
+      this.canton = null;
+      this.ingestionMode = null;
+    }
 
     private Fila(String clientRowId, String codigo, String productCode, String canton, String ingestionMode) {
       this.clientRowId = clientRowId;
@@ -783,15 +1015,21 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private static final class Archivo {
-    private final String fileId;
-    private final String nombre;
-    private final String tipo;
+    private String fileId;
+    private String nombre;
+    private String tipo;
     private String semaforo = "GRIS";
     private int confianza;
     private boolean legible;
     private String mensaje;
-    private String texto;
+    @JsonIgnore private String texto;
     private boolean ocrListo;
+
+    private Archivo() {
+      this.fileId = null;
+      this.nombre = null;
+      this.tipo = null;
+    }
 
     private Archivo(String fileId, String nombre, String tipo) {
       this.fileId = fileId;
