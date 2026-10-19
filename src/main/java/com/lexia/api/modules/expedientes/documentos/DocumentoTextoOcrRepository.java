@@ -11,4 +11,6 @@ public interface DocumentoTextoOcrRepository extends JpaRepository<DocumentoText
       String idExpediente, String idDocumento);
 
   List<DocumentoTextoOcr> findByIdExpedienteOrderByCreatedAtAsc(String idExpediente);
+
+  void deleteByIdExpedienteAndIdDocumento(String idExpediente, String idDocumento);
 }

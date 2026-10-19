@@ -1,5 +1,7 @@
 package com.lexia.api.modules.expedientes.escrituracion.masivo;
 
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionesPayload;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.CrearLoteRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1/escrituracion/ingesta-masiva")
@@ -58,6 +61,14 @@ public class IngestaMasivaEscrituracionController {
   @PostMapping("/{batchId}/filas/{clientRowId}/reintentar")
   public LoteStatus reintentar(@PathVariable UUID batchId, @PathVariable String clientRowId) {
     return ingesta.reintentar(batchId, clientRowId);
+  }
+
+  @GetMapping(value = "/{batchId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter stream(@PathVariable UUID batchId) {
+    if (AuthContext.get() == null) {
+      throw AuthException.unauthorized("Sesión no válida o vencida.");
+    }
+    return ingesta.stream(batchId);
   }
 
   @GetMapping("/{batchId}/status")

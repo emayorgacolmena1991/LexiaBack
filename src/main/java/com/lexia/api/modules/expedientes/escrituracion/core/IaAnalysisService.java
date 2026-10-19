@@ -154,8 +154,10 @@ public class IaAnalysisService {
 
     String canton = legalCase != null ? resolveCanton(writingFile) : cantonOf(borrador);
     String ocrText =
-        loadOcrMarcado(
-            expedienteId, legalCase == null ? null : legalCase.getCode(), request);
+        force
+            ? ocrConsolidado(expedienteId)
+            : loadOcrMarcado(
+                expedienteId, legalCase == null ? null : legalCase.getCode(), request);
     Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
@@ -335,6 +337,20 @@ public class IaAnalysisService {
       }
     }
     ObservacionesCotejo.reemplazar(titleObservations, tenantId, study.getId(), entradas);
+  }
+
+  /** Reanálisis: solo el consolidado ya guardado por el worker. */
+  private String ocrConsolidado(UUID expedienteId) {
+    String texto =
+        documentoTextoOcr
+            .findByIdExpedienteAndIdDocumento(expedienteId.toString(), "consolidado")
+            .map(DocumentoTextoOcr::getTextoOcr)
+            .orElse("");
+    if (!StringUtils.hasText(texto)) {
+      throw ApiException.badRequest("Sin texto consolidado en documento_texto_ocr.");
+    }
+    LOG.info("analizar-ia OCR consolidado caseId={} chars={}", expedienteId, texto.length());
+    return OcrExpedienteTexto.envolverPlano(texto);
   }
 
   /**
