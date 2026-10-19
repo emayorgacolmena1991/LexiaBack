@@ -9,7 +9,7 @@ import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.ActualizarTipoRequest;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.BorradorResponse;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.CrearBorradorRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DocumentoRequisitoItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.DocumentoRequisitoItem;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.IniciarProcesamientoResponse;

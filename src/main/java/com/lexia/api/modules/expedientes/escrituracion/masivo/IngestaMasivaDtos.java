@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.escrituracion.ingesta;
+package com.lexia.api.modules.expedientes.escrituracion.masivo;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;

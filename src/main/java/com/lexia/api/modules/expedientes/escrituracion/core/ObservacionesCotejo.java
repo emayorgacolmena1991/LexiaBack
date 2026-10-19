@@ -1,6 +1,6 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.core;
 
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ObservacionCotejoItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ObservacionCotejoItem;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -14,14 +14,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Reemplaza observaciones abiertas del cotejo. La clave es código + mensaje. */
-final class ObservacionesCotejo {
+public final class ObservacionesCotejo {
 
   private static final Pattern DETALLE =
       Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$", Pattern.CASE_INSENSITIVE);
 
   private ObservacionesCotejo() {}
 
-  static void reemplazar(
+  public static void reemplazar(
       TitleObservationRepository repo, UUID tenantId, UUID studyId, List<Entrada> nuevas) {
     List<TitleObservation> actuales =
         repo.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(studyId, tenantId);
@@ -48,7 +48,7 @@ final class ObservacionesCotejo {
     }
   }
 
-  static List<ObservacionCotejoItem> pendientes(
+  public static List<ObservacionCotejoItem> pendientes(
       TitleObservationRepository repo, UUID tenantId, UUID studyId) {
     Map<String, ObservacionCotejoItem> unicas = new LinkedHashMap<>();
     for (TitleObservation row : repo.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(studyId, tenantId)) {
@@ -63,7 +63,7 @@ final class ObservacionesCotejo {
     return List.copyOf(items);
   }
 
-  static List<Entrada> desdeTextos(List<String> textos) {
+  public static List<Entrada> desdeTextos(List<String> textos) {
     List<Entrada> entradas = new ArrayList<>();
     if (textos == null) {
       return entradas;
@@ -128,7 +128,7 @@ final class ObservacionesCotejo {
     return "MEDIUM";
   }
 
-  record Entrada(String code, String severidad, String mensaje) {}
+  public record Entrada(String code, String severidad, String mensaje) {}
 
   private record Parsed(String code, String severidad, String mensaje) {}
 }

@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.secuencial;
 
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
@@ -6,8 +6,14 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.caso.CaseStageRepository;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoMinutaBorrador;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoEscrituracion;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoMinutaBorrador;
+import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraftRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservation;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;

@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.core;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,7 +12,7 @@ import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
-import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisDtos.AnalysisRequestDTO;
+import com.lexia.api.modules.expedientes.escrituracion.core.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService;
 import com.lexia.api.modules.ia.llm.ExpedienteCompletoLlmService.Ejecucion;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;

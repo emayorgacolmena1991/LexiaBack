@@ -36,8 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
-import com.lexia.api.modules.expedientes.escrituracion.ExpedienteEstadoService;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoEscrituracion;
+import com.lexia.api.modules.expedientes.escrituracion.secuencial.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 
 @Service

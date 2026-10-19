@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.secuencial;
 
 import com.lexia.api.modules.expedientes.caso.CaseService;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;

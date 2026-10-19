@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ValorExtraido;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ValorExtraido;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta.CampoPlantilla;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import java.math.BigDecimal;

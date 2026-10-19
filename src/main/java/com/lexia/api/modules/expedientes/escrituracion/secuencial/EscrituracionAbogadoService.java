@@ -1,13 +1,21 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.secuencial;
 
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ConfigurarProductoRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstudioTituloResponse;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.WritingSnapshot;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ConfigurarProductoRequest;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstudioTituloRequest;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstudioTituloResponse;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.MinutaItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ObservacionCotejoItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.WritingSnapshot;
+import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraftRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.ObservacionesCotejo;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudy;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.List;
 import java.util.Locale;
@@ -181,9 +189,9 @@ public class EscrituracionAbogadoService {
   }
 
   private EstudioTituloResponse toEstudio(TitleStudy study, UUID tenantId) {
-    List<EscrituracionDtos.ObservacionCotejoItem> abiertas =
+    List<ObservacionCotejoItem> abiertas =
         ObservacionesCotejo.pendientes(titleObservations, tenantId, study.getId());
-    List<String> open = abiertas.stream().map(EscrituracionDtos.ObservacionCotejoItem::mensaje).toList();
+    List<String> open = abiertas.stream().map(ObservacionCotejoItem::mensaje).toList();
     return new EstudioTituloResponse(study.getId(), study.getStatus(), study.getSummary(), open, abiertas);
   }
 

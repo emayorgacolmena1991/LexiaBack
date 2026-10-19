@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.core;
 
 import java.util.List;
 import java.util.Optional;

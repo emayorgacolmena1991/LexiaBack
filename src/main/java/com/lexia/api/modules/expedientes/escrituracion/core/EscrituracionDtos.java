@@ -1,4 +1,4 @@
-package com.lexia.api.modules.expedientes.escrituracion;
+package com.lexia.api.modules.expedientes.escrituracion.core;
 
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
