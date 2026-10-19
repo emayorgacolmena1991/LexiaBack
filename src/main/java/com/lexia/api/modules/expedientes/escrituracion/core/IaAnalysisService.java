@@ -159,7 +159,9 @@ public class IaAnalysisService {
     Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
-      throw ApiException.badRequest(
+      throw new ApiException(
+          org.springframework.http.HttpStatus.BAD_GATEWAY,
+          "LLM_FAILED",
           ext != null && StringUtils.hasText(ext.motivo())
               ? ext.motivo()
               : "No se obtuvo resultado de análisis IA.");

@@ -196,6 +196,20 @@ public class OcrAzureBatchService {
         estado);
   }
 
+  public String extraerTexto(byte[] bytes, String mimeType) {
+    if (bytes == null || bytes.length == 0) {
+      throw ApiException.badRequest("file requerido.");
+    }
+    if (!layoutService.isConfigured()) {
+      throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "AZURE_NOT_CONFIGURED",
+          "Azure Document Intelligence no configurado.");
+    }
+    LayoutExtractResult layout = layoutService.evaluarYExtraer(bytes, mimeType);
+    return layout.texto() == null ? "" : layout.texto();
+  }
+
   public ReuploadResponse reupload(
       String sessionId, String fileId, String tipoDocumento, MultipartFile file) {
     if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(fileId)) {

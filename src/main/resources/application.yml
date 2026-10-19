@@ -290,7 +290,7 @@ gemini:
 
 # gemini (default) | claude. Rollback: LLM_PROVIDER=gemini
 llm:
-  provider: ${LLM_PROVIDER:gemini}
+  provider: ${LLM_PROVIDER:claude}
 
 anthropic:
   api:

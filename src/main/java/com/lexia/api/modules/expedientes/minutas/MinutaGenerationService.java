@@ -332,6 +332,10 @@ public class MinutaGenerationService {
                     "Configura el producto BIESS antes de previsualizar la minuta."));
   }
 
+  public byte[] renderDocx(String productCode, String templateKind, MinutaViviendaData data) {
+    return renderer.renderVivienda(catalog.require(productCode, templateKind), data);
+  }
+
   @Transactional
   public MinutaItem generar(UUID caseId, CrearMinutaRequest request) {
     authorization.requirePermission("expedientes:caso:escribir");
