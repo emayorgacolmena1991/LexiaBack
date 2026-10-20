@@ -26,6 +26,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TimelineItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.UpdateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService.ArchivoContenido;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -146,6 +147,12 @@ public class CoactivaExpedienteController {
   @PostMapping("/expedientes/{id}/etapa")
   public ExpedienteDetalle cambiarEtapa(@PathVariable UUID id, @Valid @RequestBody CambioEtapaRequest request) {
     return service.cambiarEtapa(id, request);
+  }
+
+  @GetMapping("/expedientes/{id}/buscar")
+  public List<CoactivaPdfTexto.Coincidencia> buscar(
+      @PathVariable UUID id, @RequestParam(name = "q", defaultValue = "") String q) {
+    return service.buscarOcr(id, q);
   }
 
   @GetMapping("/expedientes/{id}/timeline")

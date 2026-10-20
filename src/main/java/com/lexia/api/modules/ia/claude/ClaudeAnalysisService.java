@@ -17,6 +17,7 @@ import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumento
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -53,7 +54,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final int MAX_TOKENS_VALIDACION = 1024;
   private static final int MAX_CHARS_DIAGNOSTICO = 120_000;
   /** Tope de la primera llamada. El fallo de expedientes grandes es este límite, no el timeout. */
-  private static final int MAX_TOKENS_DIAGNOSTICO = 4096;
+  private static final int MAX_TOKENS_DIAGNOSTICO = 8192;
   /** Un solo reintento, con esquema reducido, si la primera respuesta llega con stop_reason max_tokens. */
   private static final int MAX_TOKENS_DIAGNOSTICO_BREVE = 1024;
   private static final String ERROR_DIAGNOSTICO_TRUNCADO =
@@ -584,7 +585,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
                 + " con documento, fecha y foja solo si constan. No inventes evidencia.\n\n<expediente_ocr>\n"
             : "Diagnostica una sola etapa, la más probable. Justificación de máximo dos frases."
                 + " Una cita literal de hasta 180 caracteres, con documento, fecha y foja solo si constan."
-                + " No inventes evidencia ni rellenes nulls.\n\n<expediente_ocr>\n";
+                + " No inventes evidencia, pero SÍ devuelve null explícito en claves sin dato. No omitas claves.\n\n<expediente_ocr>\n";
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
     body.put("max_tokens", breve ? MAX_TOKENS_DIAGNOSTICO_BREVE : MAX_TOKENS_DIAGNOSTICO);
@@ -605,6 +606,68 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         instruccion + truncate(texto, MAX_CHARS_DIAGNOSTICO) + "\n</expediente_ocr>");
     return objectMapper.writeValueAsString(body);
   }
+
+  private static final String[] CLAVES_DATOS_EXTRAIDOS = {
+    "numero_juicio_coactivo",
+    "numero_operacion",
+    "nombre_deudor_principal_1",
+    "cedula_deudor_principal_1",
+    "correo_notificacion_1",
+    "nombre_deudor_principal_2",
+    "cedula_deudor_principal_2",
+    "nombre_garante_solidario_1",
+    "cedula_garante_solidario_1",
+    "nombre_garante_solidario_2",
+    "cedula_garante_solidario_2",
+    "monto_deuda_total",
+    "monto_credito_original",
+    "monto_retencion",
+    "monto_retencion_1",
+    "monto_retencion_2",
+    "monto_embargo_1",
+    "monto_embargo_2",
+    "monto_embargo_3",
+    "fecha_liquidacion",
+    "fecha_actuacion",
+    "hora_actuacion",
+    "fecha_providencia",
+    "fecha_embargo",
+    "fecha_orden_pago_inmediato",
+    "fecha_escrito_presentado",
+    "fecha_comprobante_pago",
+    "ciudad_actuacion",
+    "funcionario_coactiva",
+    "abogado_secretario",
+    "numero_resolucion_delegacion",
+    "fecha_resolucion_delegacion",
+    "nombre_gerente_general",
+    "numero_oficio",
+    "numero_oficio_retencion_1",
+    "numero_oficio_retencion_2",
+    "numero_cuenta_1",
+    "numero_cuenta_2",
+    "numero_cuenta_3",
+    "numero_cuenta_destino",
+    "numero_cuenta_embargada",
+    "numero_cuenta_retencion_1",
+    "numero_comprobante_pago",
+    "institucion_financiera",
+    "ruc_entidad_financiera",
+    "entidad_financiera_destino",
+    "tipo_cuenta_destino",
+    "nombre_coactivado",
+    "cedula_coactivado",
+    "calidad_coactivado",
+    "nombre_embargado",
+    "cedula_embargado",
+    "calidad_embargado",
+    "nombre_depositario",
+    "cedula_depositario",
+    "titulo_depositario",
+    "fecha_auto_designacion",
+    "numero_zona",
+    "objetivo_medida"
+  };
 
   private ObjectNode schemaDiagnostico() {
     ObjectNode doc = objectMapper.createObjectNode();
@@ -636,7 +699,13 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     alertas.putObject("items").put("type", "string").put("maxLength", 180);
     ObjectNode datos = props.putObject("datos_extraidos");
     datos.put("type", "object");
-    datos.put("description", "Como máximo 12 claves con valor literal. Omite null.");
+    datos.put(
+        "description",
+        "Objeto con TODAS las claves listadas en el system prompt. Valor literal del OCR si consta; null si no consta. No omitas claves. No inventes valores.");
+    ObjectNode datosProps = datos.putObject("properties");
+    for (String clave : CLAVES_DATOS_EXTRAIDOS) {
+      datosProps.putObject(clave).putArray("type").add("string").add("null");
+    }
     datos.put("additionalProperties", true);
     props
         .putObject("siguiente_accion_sugerida")
@@ -832,12 +901,12 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
             .timeout(limite)
             .header("x-api-key", apiKey)
             .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .header("content-type", "application/json; charset=utf-8")
+            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
             .build();
     HttpResponse<String> res;
     try {
-      res = http.send(req, HttpResponse.BodyHandlers.ofString());
+      res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     } catch (java.net.http.HttpTimeoutException timeout) {
       throw new LlmTimeoutException(
           "Claude no respondió en " + limite.toSeconds() + " segundos.", timeout);

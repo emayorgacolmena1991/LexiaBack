@@ -13,17 +13,28 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaTareaSuger
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipante;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaDataMapper;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaParticipanteRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico.Documento;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser.Parse;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
+import com.lexia.api.modules.ia.gemini.GeminiJsonSanitizer;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.tenancy.RlsConnectionProvider;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,8 +55,21 @@ import org.springframework.util.StringUtils;
 public class CoactivaExpedienteAnalisisWorker {
 
   private static final Logger LOG = LoggerFactory.getLogger(CoactivaExpedienteAnalisisWorker.class);
-  private static final int MAX_CHARS = 120_000;
+  private static final ObjectMapper JSON = new ObjectMapper();
+  /** ponytail: foja más larga que esto se parte en el último salto de línea. Subir si una foja no cabe. */
+  private static final int CHUNK_CHARS = 80_000;
   private static final int MAX_HISTORIAL = 12_000;
+  private static final int MAX_ALERTAS = 40;
+  /** ponytail: tope de ventanas; si un juicio nombra más depositarios, subir MAX_FRAGMENTOS. */
+  private static final int MAX_FRAGMENTOS = 12;
+  /** ponytail: 800 centrados en el hit. Subir VENTANA si la cédula queda a más de 400 caracteres. */
+  private static final int VENTANA = 800;
+  private static final Pattern DEPOSITARIO =
+      Pattern.compile("depositario", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+  private static final String ENCABEZADO_FRAGMENTOS =
+      "\n\n--- DATOS DEL DEPOSITARIO ENCONTRADOS EN EL TEXTO ---\n";
+  private static final String PROMPT_DEPOSITARIO =
+      "Eres un extractor de datos. Del siguiente texto, extrae el nombre completo, cédula y fecha de designación del Depositario Judicial. Devuelve SOLO un JSON con las claves nombre_depositario, cedula_depositario y fecha_auto_designacion.";
   private static final String HISTORIAL =
       """
       === HISTORIAL DE DIAGNÓSTICO PREVIO ===
@@ -149,6 +173,10 @@ public class CoactivaExpedienteAnalisisWorker {
     RlsConnectionProvider.setTenantId(tenantId);
     CoactivaArchivo archivo = cargarArchivo(tenantId, archivoId);
     if (archivo != null && !CoactivaArchivo.esExpedienteUnificado(archivo.getTipo())) {
+      LOG.info(
+          "Archivo tipo={} deriva a CoactivaValidacionIaWorker archivo={}",
+          archivo.getTipo(),
+          archivoId);
       validacion.ejecutar(tenantId, archivoId);
       avisar(archivo.getExpedienteId(), "ANALYSIS_COMPLETED");
       return;
@@ -220,6 +248,7 @@ public class CoactivaExpedienteAnalisisWorker {
   }
 
   private Resultado diagnosticar(CoactivaArchivo archivo, Contexto ctx, Previo previo) {
+    LOG.info("diag start archivo={} dummy={} configured={} etapa={}", archivo.getId(), dummy, analisis.isConfigured(), ctx.etapa());
     CoactivaPromptCatalog prompt =
         catalog.resolver(TIPO_PROMPT, ctx.etapa()).orElse(null);
     String system =
@@ -234,6 +263,7 @@ public class CoactivaExpedienteAnalisisWorker {
           : Resultado.error(ctx.etapa(), promptId, parsed.error());
     }
     if (!analisis.isConfigured()) {
+      LOG.warn("Diagnóstico sin proveedor IA archivo={}", archivo.getId());
       return Resultado.error(ctx.etapa(), promptId, "No hay un proveedor de IA configurado para diagnosticar.");
     }
     LOG.info("Paso 1 OCR Azure expediente archivo={}", archivo.getId());
@@ -245,23 +275,74 @@ public class CoactivaExpedienteAnalisisWorker {
             archivo.getMimeType(),
             archivo.getNombreOriginal());
     if (CoactivaPdfTexto.calidadInsuficiente(extraido)) {
+      LOG.warn("Diagnóstico OCR calidad insuficiente archivo={}", archivo.getId());
       return Resultado.calidad(ctx.etapa(), promptId, CoactivaPdfTexto.mensajeCalidad(extraido.paginas()));
     }
     if (!StringUtils.hasText(extraido.texto())) {
+      LOG.warn("Diagnóstico OCR sin texto archivo={}", archivo.getId());
       return Resultado.error(ctx.etapa(), promptId, "El PDF no contiene texto legible.");
     }
-    LOG.info("Paso 2 LLM archivo={} chars={}", archivo.getId(), extraido.caracteres());
-    ValidacionDocumentoJson raw =
-        analisis.diagnosticarCoactiva(
-            system
-                + CoactivaDiagnosticoParser.REGLAS_ETAPA
-                + CoactivaDiagnosticoParser.FORMATO_JSON,
-            textoConHistorial(extraido.texto(), previo));
-    if (raw.esError()) {
-      return Resultado.error(ctx.etapa(), promptId, raw.error());
+    List<String> bloques = partirOcr(extraido.texto());
+    String reglas =
+        system + CoactivaDiagnosticoParser.REGLAS_ETAPA + CoactivaDiagnosticoParser.FORMATO_JSON;
+    LOG.info(
+        "Paso 2 LLM archivo={} chars={} bloques={}",
+        archivo.getId(),
+        extraido.caracteres(),
+        bloques.size());
+    ObjectNode unido = null;
+    for (int i = 0; i < bloques.size(); i++) {
+      String texto = i == 0 ? textoConHistorial(bloques.get(i), previo) : bloques.get(i);
+      LOG.info(
+          "Paso 2 LLM bloque={}/{} archivo={} chars={}",
+          i + 1,
+          bloques.size(),
+          archivo.getId(),
+          texto.length());
+      ValidacionDocumentoJson raw = analisis.diagnosticarCoactiva(reglas, texto);
+      if (raw.esError()) {
+        LOG.warn(
+            "Paso 2 LLM error archivo={} bloque={}/{}: {}",
+            archivo.getId(),
+            i + 1,
+            bloques.size(),
+            truncate(raw.error(), 300));
+        return Resultado.error(ctx.etapa(), promptId, raw.error());
+      }
+      LOG.info(
+          "Claude raw archivo={} bloque={}/{} json={}",
+          archivo.getId(),
+          i + 1,
+          bloques.size(),
+          raw.json());
+      Parse parsed = parser.parse(raw.json());
+      if (!parsed.ok()) {
+        LOG.warn(
+            "Diagnóstico JSON inválido archivo={} bloque={}/{}: {}",
+            archivo.getId(),
+            i + 1,
+            bloques.size(),
+            truncate(parsed.error(), 300));
+        return Resultado.error(ctx.etapa(), promptId, parsed.error());
+      }
+      unido = unirDiagnostico(unido, parsed.diagnostico().json());
     }
-    Parse parsed = parser.parse(raw.json());
+    if (unido == null) {
+      return Resultado.error(ctx.etapa(), promptId, "La IA devolvió una respuesta vacía.");
+    }
+    unido = segundaPasadaDepositario(archivo.getId(), unido, extraido.texto());
+    String jsonUnido;
+    try {
+      jsonUnido = JSON.writeValueAsString(unido);
+    } catch (Exception e) {
+      return Resultado.error(ctx.etapa(), promptId, "No se pudo unir el diagnóstico por bloques.");
+    }
+    Parse parsed = parser.parse(jsonUnido);
     if (!parsed.ok()) {
+      LOG.warn(
+          "Diagnóstico JSON unificado inválido archivo={}: {}",
+          archivo.getId(),
+          truncate(parsed.error(), 300));
       return Resultado.error(ctx.etapa(), promptId, parsed.error());
     }
     return Resultado.ok(ctx.etapa(), promptId, parsed.diagnostico());
@@ -419,7 +500,7 @@ public class CoactivaExpedienteAnalisisWorker {
     }
     StringBuilder sb = new StringBuilder();
     sb.append(
-        "\n\nPlantillas de esta etapa. En datos_extraidos incluye solo variables que consten literalmente en el OCR; omite las demás:\n");
+        "\n\nPlantillas de esta etapa. En datos_extraidos incluye TODAS las variables del schema. Valor literal del OCR si consta; null si no consta. No omitas claves:\n");
     for (CoactivaPromptCatalog fila : filas) {
       if (fila.getVariablesRequeridas() == null || fila.getVariablesRequeridas().isBlank()) {
         continue;
@@ -445,13 +526,401 @@ public class CoactivaExpedienteAnalisisWorker {
         .orElse(null);
   }
 
+  private ObjectNode segundaPasadaDepositario(UUID archivoId, ObjectNode unido, String ocr) {
+    if (!vacio(unido.path("datos_extraidos").get("nombre_depositario"))) {
+      return unido;
+    }
+    String fragmentos = fragmentosClave(ocr);
+    if (!StringUtils.hasText(fragmentos)) {
+      return unido;
+    }
+    LOG.info("Paso 3 depositario archivo={} chars={}", archivoId, fragmentos.length());
+    ValidacionDocumentoJson raw = analisis.diagnosticarCoactiva(PROMPT_DEPOSITARIO, fragmentos);
+    if (raw.esError()) {
+      LOG.warn("Paso 3 depositario error archivo={}: {}", archivoId, truncate(raw.error(), 300));
+      return unido;
+    }
+    String solo = soloDepositario(raw.json());
+    if (solo == null) {
+      return unido;
+    }
+    LOG.info("Paso 3 depositario archivo={} json={}", archivoId, solo);
+    return unirDiagnostico(unido, solo);
+  }
+
+  /** Solo las tres claves, dentro de datos_extraidos, para que unirDiagnostico no mezcle otra etapa. */
+  private static String soloDepositario(String raw) {
+    JsonNode nodo;
+    try {
+      nodo = JSON.readTree(GeminiJsonSanitizer.limpiar(raw));
+    } catch (Exception e) {
+      return null;
+    }
+    if (nodo == null || !nodo.isObject()) {
+      return null;
+    }
+    JsonNode anidado = nodo.get("datos_extraidos");
+    ObjectNode datos = JSON.createObjectNode();
+    for (String clave : List.of("nombre_depositario", "cedula_depositario", "fecha_auto_designacion")) {
+      JsonNode valor = anidado != null && anidado.isObject() ? anidado.get(clave) : null;
+      if (vacio(valor)) {
+        valor = nodo.get(clave);
+      }
+      if (!vacio(valor)) {
+        datos.set(clave, valor.deepCopy());
+      }
+    }
+    if (datos.isEmpty()) {
+      return null;
+    }
+    ObjectNode root = JSON.createObjectNode();
+    root.set("datos_extraidos", datos);
+    try {
+      return JSON.writeValueAsString(root);
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  private static String fragmentosClave(String ocr) {
+    if (!StringUtils.hasText(ocr)) {
+      return "";
+    }
+    StringBuilder sb = new StringBuilder();
+    recolectar(ocr, DEPOSITARIO, sb, 0);
+    return sb.toString();
+  }
+
+  private static int recolectar(String ocr, Pattern clave, StringBuilder sb, int n) {
+    if (n >= MAX_FRAGMENTOS) {
+      return n;
+    }
+    for (String raw : ocr.split("\\R\\s*\\R")) {
+      if (n >= MAX_FRAGMENTOS) {
+        break;
+      }
+      String p = raw.trim();
+      if (p.isEmpty() || !clave.matcher(p).find()) {
+        continue;
+      }
+      if (p.length() <= VENTANA) {
+        sb.append(n == 0 ? ENCABEZADO_FRAGMENTOS : "\n\n").append(p);
+        n++;
+        continue;
+      }
+      Matcher m = clave.matcher(p);
+      int cubierto = -1;
+      while (n < MAX_FRAGMENTOS && m.find()) {
+        if (m.start() < cubierto) {
+          continue;
+        }
+        int start = Math.max(0, m.start() - VENTANA / 2);
+        int end = Math.min(p.length(), start + VENTANA);
+        start = Math.max(0, end - VENTANA);
+        sb.append(n == 0 ? ENCABEZADO_FRAGMENTOS : "\n\n").append(p, start, end);
+        cubierto = end;
+        n++;
+      }
+    }
+    return n;
+  }
+
   private static String textoConHistorial(String ocr, Previo previo) {
     if (previo == null || previo.json() == null || previo.json().isBlank() || "{}".equals(previo.json())) {
-      return truncate(ocr, MAX_CHARS);
+      return ocr;
     }
-    String prefix = HISTORIAL.formatted(truncate(previo.json(), MAX_HISTORIAL));
-    int room = Math.max(1_000, MAX_CHARS - prefix.length());
-    return prefix + "\n" + truncate(ocr, room);
+    return HISTORIAL.formatted(truncate(previo.json(), MAX_HISTORIAL)) + "\n" + ocr;
+  }
+
+  static List<String> partirOcr(String ocr) {
+    if (ocr == null || ocr.isBlank()) {
+      return List.of();
+    }
+    if (ocr.length() <= CHUNK_CHARS) {
+      return List.of(ocr);
+    }
+    List<String> partes = new ArrayList<>();
+    int i = 0;
+    while (i < ocr.length()) {
+      int fin = Math.min(ocr.length(), i + CHUNK_CHARS);
+      if (fin < ocr.length()) {
+        int corte = ultimoCorte(ocr, i, fin);
+        if (corte > i) {
+          fin = corte;
+        }
+      }
+      String parte = ocr.substring(i, fin).strip();
+      if (!parte.isEmpty()) {
+        partes.add(parte);
+      }
+      if (fin <= i) {
+        fin = Math.min(ocr.length(), i + CHUNK_CHARS);
+      }
+      i = fin;
+    }
+    return partes.isEmpty() ? List.of(ocr) : partes;
+  }
+
+  /** Última foja ({@code --- FOJA n ---}) o salto de página que cabe; si no hay, el último salto de línea. */
+  private static int ultimoCorte(String ocr, int desde, int hasta) {
+    int foja = ocr.lastIndexOf("\n--- FOJA ", hasta);
+    if (foja <= desde) {
+      foja = ocr.lastIndexOf("--- FOJA ", hasta);
+    }
+    if (foja > desde) {
+      return foja;
+    }
+    int pagina = ocr.lastIndexOf('\f', hasta - 1);
+    if (pagina > desde) {
+      return pagina;
+    }
+    int nl = ocr.lastIndexOf('\n', hasta - 1);
+    return nl > desde ? nl : hasta;
+  }
+
+  /**
+   * Primer valor útil gana. Un null o un hueco del bloque siguiente no pisa lo ya hallado;
+   * una clave que solo aparece después se agrega.
+   */
+  static ObjectNode unirDiagnostico(ObjectNode base, String json) {
+    JsonNode nodo;
+    try {
+      nodo = JSON.readTree(json);
+    } catch (Exception e) {
+      return base;
+    }
+    if (nodo == null || !nodo.isObject()) {
+      return base;
+    }
+    if (base == null) {
+      return (ObjectNode) nodo.deepCopy();
+    }
+    ObjectNode nuevo = (ObjectNode) nodo;
+    llenarDatos(objeto(base, "datos_extraidos"), nuevo.get("datos_extraidos"));
+    base.set(
+        "documentos_identificados",
+        unirDocumentos(base.get("documentos_identificados"), nuevo.get("documentos_identificados")));
+    base.set(
+        "alertas_inconsistencias",
+        unirTextos(base.get("alertas_inconsistencias"), nuevo.get("alertas_inconsistencias"), MAX_ALERTAS));
+    base.set(
+        "acciones_sugeridas",
+        unirAcciones(base.get("acciones_sugeridas"), nuevo.get("acciones_sugeridas")));
+    if (etapaMasAvanzada(codigoEtapa(nuevo), codigoEtapa(base))) {
+      JsonNode sugerida = nuevo.get("etapa_sugerida");
+      if (sugerida != null && sugerida.isObject()) {
+        base.set("etapa_sugerida", sugerida.deepCopy());
+      }
+      String codigo = codigoEtapa(nuevo);
+      if (codigo != null) {
+        base.put("etapa_procesal_detectada", codigo);
+      }
+      JsonNode suf = nuevo.get("suficiencia_documental");
+      if (suf != null && suf.isObject()) {
+        base.set("suficiencia_documental", suf.deepCopy());
+      }
+    }
+    base.put(
+        "porcentaje_completitud",
+        Math.max(base.path("porcentaje_completitud").asInt(0), nuevo.path("porcentaje_completitud").asInt(0)));
+    if (vacio(base.get("siguiente_accion_sugerida")) && !vacio(nuevo.get("siguiente_accion_sugerida"))) {
+      base.set("siguiente_accion_sugerida", nuevo.get("siguiente_accion_sugerida").deepCopy());
+    }
+    return base;
+  }
+
+  private static void llenarDatos(ObjectNode dest, JsonNode src) {
+    if (src == null || !src.isObject()) {
+      return;
+    }
+    src.fields()
+        .forEachRemaining(
+            e -> {
+              JsonNode valor = e.getValue();
+              if (vacio(valor)) {
+                return;
+              }
+              JsonNode previo = dest.get(e.getKey());
+              if (vacio(previo)) {
+                dest.set(e.getKey(), valor.deepCopy());
+              } else if (previo.isObject() && valor.isObject()) {
+                llenarDatos((ObjectNode) previo, valor);
+              } else if (previo.isArray() && valor.isArray()) {
+                dest.set(e.getKey(), unirArrays(previo, valor));
+              }
+            });
+  }
+
+  private static ObjectNode objeto(ObjectNode base, String campo) {
+    JsonNode n = base.get(campo);
+    if (n instanceof ObjectNode obj) {
+      return obj;
+    }
+    ObjectNode creado = JSON.createObjectNode();
+    base.set(campo, creado);
+    return creado;
+  }
+
+  private static ArrayNode unirDocumentos(JsonNode a, JsonNode b) {
+    Map<String, ObjectNode> porTipo = new LinkedHashMap<>();
+    agregarDocs(porTipo, a);
+    agregarDocs(porTipo, b);
+    ArrayNode arr = JSON.createArrayNode();
+    porTipo.values().forEach(arr::add);
+    return arr;
+  }
+
+  private static void agregarDocs(Map<String, ObjectNode> porTipo, JsonNode arr) {
+    if (arr == null || !arr.isArray()) {
+      return;
+    }
+    for (JsonNode item : arr) {
+      if (!item.isObject()) {
+        continue;
+      }
+      String tipo = item.path("tipo").asText("").trim();
+      if (tipo.isEmpty()) {
+        continue;
+      }
+      String key = tipo.toUpperCase(Locale.ROOT);
+      ObjectNode prev = porTipo.get(key);
+      if (prev == null || (item.path("presente").asBoolean(false) && !prev.path("presente").asBoolean(false))) {
+        porTipo.put(key, ((ObjectNode) item).deepCopy());
+        continue;
+      }
+      if (item.path("presente").asBoolean(false)) {
+        if (fojaVacia(prev.get("foja_inicio"))) {
+          copiar(prev, (ObjectNode) item, "foja_inicio");
+        }
+        if (fojaVacia(prev.get("foja_fin"))) {
+          copiar(prev, (ObjectNode) item, "foja_fin");
+        }
+      }
+      prev.put("presente", prev.path("presente").asBoolean(false) || item.path("presente").asBoolean(false));
+    }
+  }
+
+  private static void copiar(ObjectNode dest, ObjectNode src, String campo) {
+    JsonNode n = src.get(campo);
+    if (n != null && !n.isNull()) {
+      dest.set(campo, n.deepCopy());
+    }
+  }
+
+  private static boolean fojaVacia(JsonNode n) {
+    return n == null || n.isNull() || !n.isNumber() || n.asInt() <= 0;
+  }
+
+  private static ArrayNode unirTextos(JsonNode a, JsonNode b, int max) {
+    LinkedHashSet<String> items = new LinkedHashSet<>();
+    agregarTextos(items, a);
+    agregarTextos(items, b);
+    ArrayNode arr = JSON.createArrayNode();
+    int n = 0;
+    for (String s : items) {
+      if (n++ >= max) {
+        break;
+      }
+      arr.add(s);
+    }
+    return arr;
+  }
+
+  private static void agregarTextos(LinkedHashSet<String> items, JsonNode arr) {
+    if (arr == null || !arr.isArray()) {
+      return;
+    }
+    for (JsonNode item : arr) {
+      String v = item.isValueNode() ? item.asText("").trim() : item.toString();
+      if (!v.isEmpty()) {
+        items.add(v);
+      }
+    }
+  }
+
+  private static ArrayNode unirAcciones(JsonNode a, JsonNode b) {
+    Map<String, ObjectNode> porClave = new LinkedHashMap<>();
+    agregarAcciones(porClave, a);
+    agregarAcciones(porClave, b);
+    ArrayNode arr = JSON.createArrayNode();
+    porClave.values().forEach(arr::add);
+    return arr;
+  }
+
+  private static void agregarAcciones(Map<String, ObjectNode> porClave, JsonNode arr) {
+    if (arr == null || !arr.isArray()) {
+      return;
+    }
+    for (JsonNode item : arr) {
+      if (!item.isObject()) {
+        continue;
+      }
+      String codigo = item.path("codigo_accion").asText("").trim();
+      String titulo = item.path("titulo").asText("").trim();
+      String key = !codigo.isEmpty() ? codigo : titulo;
+      if (key.isEmpty() || porClave.containsKey(key)) {
+        continue;
+      }
+      porClave.put(key, ((ObjectNode) item).deepCopy());
+    }
+  }
+
+  private static ArrayNode unirArrays(JsonNode a, JsonNode b) {
+    ArrayNode out = JSON.createArrayNode();
+    LinkedHashSet<String> vistos = new LinkedHashSet<>();
+    agregarItems(out, vistos, a);
+    agregarItems(out, vistos, b);
+    return out;
+  }
+
+  private static void agregarItems(ArrayNode out, LinkedHashSet<String> vistos, JsonNode arr) {
+    for (JsonNode item : arr) {
+      if (vacio(item)) {
+        continue;
+      }
+      String clave = item.isValueNode() ? item.asText() : item.toString();
+      if (vistos.add(clave)) {
+        out.add(item.deepCopy());
+      }
+    }
+  }
+
+  private static String codigoEtapa(ObjectNode nodo) {
+    JsonNode sugerida = nodo.get("etapa_sugerida");
+    if (sugerida != null && sugerida.isObject()) {
+      String codigo = sugerida.path("codigo").asText("").trim();
+      if (!codigo.isEmpty()) {
+        return codigo;
+      }
+    }
+    String detectada = nodo.path("etapa_procesal_detectada").asText("").trim();
+    return detectada.isEmpty() ? null : detectada;
+  }
+
+  /** Gana el hito más avanzado. INDETERMINADA no pisa una etapa ya hallada. */
+  private static boolean etapaMasAvanzada(String nueva, String actual) {
+    return ordenEtapa(nueva) > ordenEtapa(actual);
+  }
+
+  private static int ordenEtapa(String codigo) {
+    if (codigo == null || codigo.isBlank() || "INDETERMINADA".equalsIgnoreCase(codigo)) {
+      return -1;
+    }
+    return CoactivaEtapa.parse(codigo).map(Enum::ordinal).orElse(-1);
+  }
+
+  private static boolean vacio(JsonNode n) {
+    if (n == null || n.isNull() || n.isMissingNode()) {
+      return true;
+    }
+    if (n.isTextual()) {
+      String s = n.asText().trim();
+      return s.isEmpty() || "[DATO EN TEXTO NO EXTRAÍDO POR IA]".equals(s);
+    }
+    if (n.isArray() || n.isObject()) {
+      return n.isEmpty();
+    }
+    return false;
   }
 
   private static String tipoPieza(CoactivaDiagnostico diag) {

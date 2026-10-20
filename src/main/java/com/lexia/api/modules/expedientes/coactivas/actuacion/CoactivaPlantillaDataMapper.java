@@ -478,7 +478,7 @@ public class CoactivaPlantillaDataMapper {
     }
     if (raw instanceof String s) {
       String t = s.trim();
-      if (t.isEmpty() || "null".equalsIgnoreCase(t) || "nodata".equalsIgnoreCase(t)) {
+      if (t.isEmpty() || "null".equalsIgnoreCase(t) || CoactivaVariableBinder.NODATA.equalsIgnoreCase(t)) {
         return null;
       }
     }
@@ -581,6 +581,17 @@ public class CoactivaPlantillaDataMapper {
     partirFecha(r, "fecha_embargo", "dia_embargo", "mes_embargo", "anio_embargo");
     partirFecha(r, "fecha_factura", "dia_factura", "mes_factura", "anio_factura");
     desglosarHonorarios(r, ocr);
+    copiarLetrasSiAusente(r, "monto_embargo_1");
+    copiarLetrasSiAusente(r, "monto_embargo_2");
+    copiarLetrasSiAusente(r, "monto_embargo_3");
+    copiarLetrasSiAusente(r, "monto_retencion_1");
+    copiarLetrasSiAusente(r, "monto_retencion_2");
+    copiarLetrasSiAusente(r, "monto_abono");
+    copiarLetrasSiAusente(r, "monto_credito_original");
+    copiarLetrasSiAusente(r, "monto_embargo_total");
+    desglosarFecha(r, "fecha_embargo", "anio_embargo", "mes_embargo", "dia_embargo");
+    desglosarFecha(r, "fecha_comprobante_pago", "anio_factura", "mes_factura", null);
+    derivarIva(r);
   }
 
   /**
@@ -620,6 +631,8 @@ public class CoactivaPlantillaDataMapper {
     m.put("monto_honorarios_letras", List.of("valor_honorarios_total_texto"));
     m.put("monto_abono", List.of("abono"));
     m.put("monto_embargo_total", List.of("embargo", "valor_embargo_num"));
+    m.put("monto_retencion", List.of("valor_retencion", "montoRetencion", "retencion", "monto_retencion_num", "valor_a_retenerse"));
+    m.put("monto_retencion_letras", List.of("valor_retencion_texto", "montoRetencionLetras", "valor_a_retenerse_texto"));
     m.put("fecha_auto_designacion", List.of("fecha_designacion", "fecha_auto_de_designacion", "fecha_designacion_depositario"));
     m.put("numero_resolucion_delegacion", List.of("NUMERO_RESOLUCION_DELEGACION"));
     m.put("fecha_resolucion_delegacion", List.of("FECHA_RESOLUCION_DELEGACION"));
@@ -952,7 +965,7 @@ public class CoactivaPlantillaDataMapper {
         continue;
       }
       String s = CoactivaTexto.blankToNull(v.toString());
-      if (s != null && !"null".equalsIgnoreCase(s) && !"nodata".equalsIgnoreCase(s)) {
+      if (s != null && !"null".equalsIgnoreCase(s) && !CoactivaVariableBinder.NODATA.equalsIgnoreCase(s)) {
         return s;
       }
     }
@@ -1119,7 +1132,7 @@ public class CoactivaPlantillaDataMapper {
         return;
       }
       String v = CoactivaTexto.blankToNull(valor);
-      if (v != null && !"null".equalsIgnoreCase(v) && !"nodata".equalsIgnoreCase(v)) {
+      if (v != null && !"null".equalsIgnoreCase(v) && !CoactivaVariableBinder.NODATA.equalsIgnoreCase(v)) {
         valores.put(variable, v);
       }
     }
@@ -1163,18 +1176,28 @@ public class CoactivaPlantillaDataMapper {
     }
 
     void copiarSiAusente(String origen, String destino) {
+      copiarSiAusente(origen, destino, null);
+    }
+
+    /** Si {@code valorLiteral} es null, copia el valor de {@code origen}. */
+    void copiarSiAusente(String origen, String destino, String valorLiteral) {
       if (valores.containsKey(destino)) {
         return;
       }
       Object v = valores.get(origen);
-      if (v != null && !v.toString().isBlank()) {
-        valores.put(destino, v);
-        if (desdeOcr.contains(origen)) {
-          desdeOcr.add(destino);
-        }
-        if (discrepancias.contains(origen)) {
-          anotarDiscrepancia(destino);
-        }
+      if (v == null || v.toString().isBlank()) {
+        return;
+      }
+      Object escrito = valorLiteral == null ? v : valorLiteral;
+      if (escrito.toString().isBlank()) {
+        return;
+      }
+      valores.put(destino, escrito);
+      if (desdeOcr.contains(origen)) {
+        desdeOcr.add(destino);
+      }
+      if (discrepancias.contains(origen)) {
+        anotarDiscrepancia(destino);
       }
     }
 
@@ -1268,5 +1291,52 @@ public class CoactivaPlantillaDataMapper {
       faltantes.forEach(t -> completos.putIfAbsent(t, ""));
       return completos;
     }
+  }
+
+  private static void copiarLetrasSiAusente(Resolver r, String tag) {
+    Object raw = r.valor(tag);
+    if (raw == null) {
+      return;
+    }
+    String letras = NumeroALetras.monto(raw.toString());
+    if (letras.isEmpty()) {
+      return;
+    }
+    r.copiarSiAusente(tag, tag + "_letras", letras.toUpperCase(ES));
+  }
+
+  /** ISO ({@code LocalDate.parse}). {@code dia} null omite el día. No pisa un desglose ya escrito. */
+  private static void desglosarFecha(Resolver r, String fechaKey, String anio, String mes, String dia) {
+    Object raw = r.valor(fechaKey);
+    if (raw == null) {
+      return;
+    }
+    LocalDate fecha;
+    try {
+      fecha = LocalDate.parse(raw.toString().trim());
+    } catch (java.time.format.DateTimeParseException e) {
+      return;
+    }
+    if (anio != null) {
+      r.derivado(fechaKey, anio, String.valueOf(fecha.getYear()));
+    }
+    if (mes != null) {
+      r.derivado(fechaKey, mes, fecha.getMonth().getDisplayName(TextStyle.FULL, ES));
+    }
+    if (dia != null) {
+      r.derivado(fechaKey, dia, String.valueOf(fecha.getDayOfMonth()));
+    }
+  }
+
+  /** 15 % de {@code monto_honorarios}. Solo rellena IVA ausente. */
+  private static void derivarIva(Resolver r) {
+    BigDecimal total = monto(r.valor("monto_honorarios"));
+    if (total == null) {
+      return;
+    }
+    BigDecimal iva = total.multiply(new BigDecimal("0.15")).setScale(2, RoundingMode.HALF_UP);
+    String texto = formatoMonto(iva);
+    r.derivado("monto_honorarios", "valor_iva_honorarios", texto);
+    r.derivado("monto_honorarios", "iva", texto);
   }
 }

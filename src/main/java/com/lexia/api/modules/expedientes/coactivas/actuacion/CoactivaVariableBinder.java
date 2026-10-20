@@ -12,11 +12,13 @@ import java.util.regex.Pattern;
 
 /**
  * Fusiona las capas de una actuación. Precedencia: IA &lt; sistema (delegado y liquidación) &lt;
- * overrides. Un tag sin dato queda como el literal {@code nodata}.
+ * overrides. {@code null} queda como {@code [NO ENCONTRADO EN EXPEDIENTE]}.
+ * El marcador de lectura fallida se conserva tal cual.
  */
 public class CoactivaVariableBinder {
 
-  public static final String NODATA = "nodata";
+  public static final String NODATA = "[NO ENCONTRADO EN EXPEDIENTE]";
+  public static final String NO_EXTRAIDO = "[DATO EN TEXTO NO EXTRAÍDO POR IA]";
   public static final String IA = "IA";
   public static final String SISTEMA = "SISTEMA";
   public static final String MANUAL = "MANUAL";
@@ -91,7 +93,7 @@ public class CoactivaVariableBinder {
       } else {
         valor = null;
       }
-      String visible = valor == null ? NODATA : valor;
+      String visible = valor == null ? NODATA : (NO_EXTRAIDO.equals(valor) ? NO_EXTRAIDO : valor);
       variables.put(tag, visible);
       if (NODATA.equals(visible)) {
         pendientes.add(tag);

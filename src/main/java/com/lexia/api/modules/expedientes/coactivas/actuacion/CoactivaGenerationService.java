@@ -143,7 +143,7 @@ public class CoactivaGenerationService {
     return respuesta(draft, ctx.plantilla(), resuelto);
   }
 
-  /** Payload persistido: sin null ni {@code nodata}. Esos tags siguen en {@code pendientes}. */
+  /** Payload persistido: sin null ni {@link CoactivaVariableBinder#NODATA}. Esos tags siguen en {@code pendientes}. */
   private static Map<String, String> sinMarcador(Map<String, String> variables) {
     Map<String, String> out = new LinkedHashMap<>();
     if (variables == null) {
@@ -266,7 +266,10 @@ public class CoactivaGenerationService {
         "Documento listo para firma: " + ctx.plantilla().getNombre(),
         criticas.isEmpty()
             ? "Estado GENERADO."
-            : "Estado GENERADO. Campos críticos confirmados en nodata: " + String.join(", ", criticas),
+            : "Estado GENERADO. Campos críticos confirmados en "
+                + CoactivaVariableBinder.NODATA
+                + ": "
+                + String.join(", ", criticas),
         principal.userId(),
         archivoId);
     ctx.expediente().setFechaUltimaActuacion(LocalDate.now(zona));

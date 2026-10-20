@@ -52,7 +52,7 @@ class CoactivaExpedienteReanalisisTest {
     service =
         new CoactivaExpedienteService(
             expedientes, null, null, null, eventos, archivos, null, null, null, null, authorization,
-            diagnostico, analisisRepo, null, null, null);
+            diagnostico, analisisRepo, null, null, null, null);
     expediente = CoactivaExpediente.create(TENANT, UUID.randomUUID(), "025-2024-00026", USER);
     when(expedientes.bloquear(expediente.getId(), TENANT)).thenReturn(Optional.of(expediente));
   }

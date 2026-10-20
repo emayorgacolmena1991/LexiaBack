@@ -418,19 +418,19 @@ class CoactivaPlantillaDataMapperTest {
     Map<String, Object> raw = new LinkedHashMap<>();
     raw.put("NUMERO_OPERACION", "OP-99");
     raw.put("NombreDepositarioJudicial", "el señor LUIS DEPOSITARIO");
-    raw.put("montoHonorarios", "nodata");
+    raw.put("montoHonorarios", CoactivaVariableBinder.NODATA);
     raw.put("cedulaDepositario", null);
 
     Map<String, Object> n = CoactivaPlantillaDataMapper.normalizarExtraidos(raw);
     assertEquals("OP-99", n.get("numero_operacion"));
     assertEquals("el señor LUIS DEPOSITARIO", n.get("nombre_depositario_judicial"));
     assertFalse(n.containsKey("monto_honorarios"));
-    assertFalse(n.containsValue("nodata"));
+    assertFalse(n.containsValue(CoactivaVariableBinder.NODATA));
 
     PlantillaDatos datos = CoactivaPlantillaDataMapper.construir(fuentes(raw), AHORA);
     assertEquals("OP-778899", datos.valores().get("NUMERO_OPERACION"));
     assertEquals("LUIS DEPOSITARIO", datos.valores().get("nombre_depositario_judicial"));
-    assertFalse(datos.valores().containsValue("nodata"));
+    assertFalse(datos.valores().containsValue(CoactivaVariableBinder.NODATA));
     assertTrue(datos.valores().values().stream().noneMatch(v -> v == null));
   }
 

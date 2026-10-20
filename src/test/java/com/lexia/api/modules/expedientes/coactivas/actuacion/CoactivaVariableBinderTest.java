@@ -29,9 +29,21 @@ class CoactivaVariableBinderTest {
     assertEquals("MANUAL", r.origenes().get("numero_juicio_coactivo"));
     assertEquals("RES-9", r.variables().get("numero_resolucion_delegacion"));
     assertEquals("SISTEMA", r.origenes().get("numero_resolucion_delegacion"));
-    assertEquals("nodata", r.variables().get("ciudad_actuacion"));
+    assertEquals(CoactivaVariableBinder.NODATA, r.variables().get("ciudad_actuacion"));
     assertTrue(r.pendientes().contains("ciudad_actuacion"));
     assertEquals("123", r.valoresExtraidos().get("numero_juicio_coactivo"));
+  }
+
+  @Test
+  void nullEsNodataYMarcadorDeLecturaSeConserva() {
+    List<String> tags = List.of("hora_actuacion", "numero_oficio");
+    Map<String, String> ia = Map.of("numero_oficio", CoactivaVariableBinder.NO_EXTRAIDO);
+    CoactivaVariableBinder.Resultado r = binder.resolver(tags, ia, Map.of(), Map.of(), HOY);
+
+    assertEquals(CoactivaVariableBinder.NODATA, r.variables().get("hora_actuacion"));
+    assertTrue(r.pendientes().contains("hora_actuacion"));
+    assertEquals(CoactivaVariableBinder.NO_EXTRAIDO, r.variables().get("numero_oficio"));
+    assertFalse(r.pendientes().contains("numero_oficio"));
   }
 
   @Test
@@ -45,8 +57,8 @@ class CoactivaVariableBinderTest {
     CoactivaVariableBinder.Resultado r = binder.resolver(tags, ia, Map.of(), Map.of(), HOY);
 
     assertFalse(r.liquidacionVigente());
-    assertEquals("nodata", r.variables().get("fecha_liquidacion"));
-    assertEquals("nodata", r.variables().get("monto_liquidacion"));
+    assertEquals(CoactivaVariableBinder.NODATA, r.variables().get("fecha_liquidacion"));
+    assertEquals(CoactivaVariableBinder.NODATA, r.variables().get("monto_liquidacion"));
     assertEquals("77", r.variables().get("numero_juicio_coactivo"));
     assertEquals("IA", r.origenes().get("numero_juicio_coactivo"));
   }
@@ -75,7 +87,7 @@ class CoactivaVariableBinderTest {
     CoactivaVariableBinder.Resultado r = binder.resolver(tags, ia, Map.of(), Map.of(), HOY);
 
     assertFalse(r.liquidacionVigente());
-    assertEquals("nodata", r.variables().get("fecha_liquidacion"));
+    assertEquals(CoactivaVariableBinder.NODATA, r.variables().get("fecha_liquidacion"));
     assertEquals("12,500.00", r.variables().get("monto_liquidacion"));
     assertEquals("DOCE MIL QUINIENTOS", r.variables().get("monto_liquidacion_letras"));
     assertEquals("12,500.00", r.variables().get("monto_deuda_total"));

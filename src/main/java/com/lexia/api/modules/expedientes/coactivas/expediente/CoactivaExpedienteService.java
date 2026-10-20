@@ -35,6 +35,8 @@ import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoMerge;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto;
+import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
@@ -91,6 +93,7 @@ public class CoactivaExpedienteService {
   private final CoactivaDiagnosticoParser diagnosticoParser;
   private final CoactivaTareaSugeridaRepository tareas;
   private final AppUserRepository usuarios;
+  private final DocumentoCacheStore cache;
 
   private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
   private static final String ANALISIS_INTERRUMPIDO = "El análisis IA se interrumpió. Vuelve a analizar el expediente.";
@@ -111,7 +114,8 @@ public class CoactivaExpedienteService {
       CoactivaAnalisisRepository analisisRepo,
       CoactivaDiagnosticoParser diagnosticoParser,
       CoactivaTareaSugeridaRepository tareas,
-      AppUserRepository usuarios) {
+      AppUserRepository usuarios,
+      DocumentoCacheStore cache) {
     this.expedientes = expedientes;
     this.participantes = participantes;
     this.notificaciones = notificaciones;
@@ -128,6 +132,7 @@ public class CoactivaExpedienteService {
     this.diagnosticoParser = diagnosticoParser;
     this.tareas = tareas;
     this.usuarios = usuarios;
+    this.cache = cache;
   }
 
   // ---------------------------------------------------------------------------
@@ -893,6 +898,29 @@ public class CoactivaExpedienteService {
     }
     expediente.touch(principal.userId());
     recalcular(expediente);
+  }
+
+  @Transactional(readOnly = true)
+  public List<CoactivaPdfTexto.Coincidencia> buscarOcr(UUID id, String q) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    CoactivaExpediente expediente = require(tenantId, id);
+    return CoactivaPdfTexto.buscar(textoOcrGuardado(tenantId, expediente.getAnalisisArchivoId()), q);
+  }
+
+  private String textoOcrGuardado(UUID tenantId, UUID archivoId) {
+    if (archivoId == null || cache == null) {
+      return "";
+    }
+    CoactivaArchivo archivo = archivos.findByIdAndTenantIdAndDeletedAtIsNull(archivoId, tenantId).orElse(null);
+    String sha = archivo == null ? null : archivo.getSha256();
+    if (sha == null || sha.isBlank()) {
+      return "";
+    }
+    return cache
+        .buscar(tenantId, sha, CoactivaPdfTexto.VERSION_CACHE)
+        .map(DocumentoCacheStore.Hit::textoOcr)
+        .orElse("");
   }
 
   @Transactional(readOnly = true)
