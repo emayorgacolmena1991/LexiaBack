@@ -142,6 +142,8 @@ public class IngestaMasivaEscrituracionService {
       throw ApiException.badRequest("Cada archivo debe traer su asignación (clientRowId y tipo).");
     }
     List<Fila> tocadas = new ArrayList<>();
+    record ArchivoParaEncolar(Fila fila, Archivo archivo) {}
+    List<ArchivoParaEncolar> archivosParaEncolar = new ArrayList<>();
     LOG.info("Iniciando encolado de archivos. Total: {}", binarios.size());
     for (int i = 0; i < asignaciones.size(); i++) {
       AsignacionArchivo asignacion = asignaciones.get(i);
@@ -161,12 +163,14 @@ public class IngestaMasivaEscrituracionService {
         Archivo archivo = Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo);
         synchronized (fila) {
           fila.archivos.add(archivo);
-          fila.ocrEstado = "PROCESANDO";
-          fila.semaforo = "GRIS";
-          fila.iaEstado = "PENDIENTE";
-          fila.observaciones = null;
+          if (!"ERROR".equals(fila.ocrEstado)) {
+            fila.ocrEstado = "PROCESANDO";
+            fila.semaforo = "GRIS";
+            fila.iaEstado = "PENDIENTE";
+            fila.observaciones = null;
+          }
         }
-        encolarProcesarDocumento(lote, fila, archivo, principal);
+        archivosParaEncolar.add(new ArchivoParaEncolar(fila, archivo));
       } catch (Exception e) {
         String detalle =
             e instanceof RuntimeException re ? mensaje(re) : e.getMessage();
@@ -174,7 +178,18 @@ public class IngestaMasivaEscrituracionService {
           detalle = e.getClass().getSimpleName();
         }
         LOG.error("Fallo al procesar archivo en fila {}", fila.clientRowId, e);
+        String nombre =
+            file != null && StringUtils.hasText(file.getOriginalFilename())
+                ? file.getOriginalFilename()
+                : "archivo";
+        String tipoFallo =
+            StringUtils.hasText(asignacion.tipoDocumento())
+                ? asignacion.tipoDocumento().trim()
+                : "DOCUMENTO";
         synchronized (fila) {
+          Archivo fallido = Archivo.nuevo("upload-error-" + UUID.randomUUID(), nombre, tipoFallo);
+          fallido.fallo(detalle);
+          fila.archivos.add(fallido);
           fila.ocrEstado = "ERROR";
           fila.semaforo = "ROJO";
           fila.iaEstado = "ERROR";
@@ -191,9 +206,12 @@ public class IngestaMasivaEscrituracionService {
       }
       UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
       for (Fila tocada : tocadas) {
-        actualizarItemEnBd(lote.id, tenant, tocada);
+        actualizarItemEnBd(lote.id, tenant, tocada, false);
       }
       actualizarContadoresLote(lote.id, tenant, lote.fase);
+      for (ArchivoParaEncolar pendiente : archivosParaEncolar) {
+        encolarProcesarDocumento(lote, pendiente.fila(), pendiente.archivo(), principal);
+      }
     }
     return cargar(principal.tenantId(), batchId).snapshot();
   }
@@ -234,7 +252,7 @@ public class IngestaMasivaEscrituracionService {
     }
     UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
     for (Fila fila : objetivo) {
-      actualizarItemEnBd(lote.id, tenant, fila);
+      actualizarItemEnBd(lote.id, tenant, fila, false);
     }
     actualizarContadoresLote(lote.id, tenant, lote.fase);
     return cargar(principal.tenantId(), batchId).snapshot();
@@ -279,7 +297,7 @@ public class IngestaMasivaEscrituracionService {
       }
     }
     UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
-    actualizarItemEnBd(lote.id, tenant, fila);
+    actualizarItemEnBd(lote.id, tenant, fila, false);
     actualizarContadoresLote(lote.id, tenant, lote.fase);
     return cargar(principal.tenantId(), batchId).snapshot();
   }
@@ -318,7 +336,7 @@ public class IngestaMasivaEscrituracionService {
     Archivo ultimo = fila.archivos.get(fila.archivos.size() - 1);
     encolarProcesarDocumento(lote, fila, ultimo, principal);
     UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
-    actualizarItemEnBd(lote.id, tenant, fila);
+    actualizarItemEnBd(lote.id, tenant, fila, false);
     actualizarContadoresLote(lote.id, tenant, lote.fase);
     return cargar(principal.tenantId(), batchId).snapshot();
   }
@@ -467,7 +485,10 @@ public class IngestaMasivaEscrituracionService {
         }
       }
       if (fila != null && lote != null) {
-        persistirItemWorker(lote, fila);
+        if (!actualizarItemEnBd(lote.id, tenantId, fila, true)) {
+          return;
+        }
+        actualizarContadoresLote(lote.id, tenantId, lote.fase);
       }
       lote = cargar(tenantId, loteId);
       fila = lote == null ? null : filaONull(lote, payload.itemId());
@@ -487,6 +508,12 @@ public class IngestaMasivaEscrituracionService {
         bloquearExpedientePorArchivosConError(lote, fila, tenantId, loteId, payload.itemId());
         return;
       }
+      if (!intentarTomarControlIa(loteId, tenantId, payload.itemId())) {
+        LOG.info("IA omitida: otro worker ya consolidó la fila {}", payload.itemId());
+        return;
+      }
+      lote = cargar(tenantId, loteId);
+      fila = lote == null ? null : filaONull(lote, payload.itemId());
       String unido = textoConsolidado(sesion);
       if (!StringUtils.hasText(unido)) {
         archivo = fila == null ? archivo : archivoDe(fila, payload.docId());
@@ -603,8 +630,40 @@ public class IngestaMasivaEscrituracionService {
 
   private void persistirItemWorker(Lote lote, Fila fila) {
     UUID tenant = lote.tenantId != null ? lote.tenantId : TenantContext.getTenantId();
-    actualizarItemEnBd(lote.id, tenant, fila);
+    actualizarItemEnBd(lote.id, tenant, fila, false);
     actualizarContadoresLote(lote.id, tenant, lote.fase);
+  }
+
+  /**
+   * Un solo worker por fila puede pasar de PENDIENTE a CONSOLIDANDO (disparo de IA).
+   *
+   * @return true si este worker tomó el lock
+   */
+  private boolean intentarTomarControlIa(UUID loteId, UUID tenant, String clientRowId) {
+    int[] filas = new int[1];
+    tx.executeWithoutResult(
+        status ->
+            entityManager
+                .unwrap(Session.class)
+                .doWork(
+                    connection -> {
+                      aplicarTenant(connection, tenant);
+                      try (PreparedStatement update =
+                          connection.prepareStatement(
+                              """
+                              UPDATE app.ingesta_item
+                              SET detalle = jsonb_set(detalle, '{iaEstado}', '"CONSOLIDANDO"', true),
+                                  estado = 'EN_PROCESO'
+                              WHERE client_row_id = ? AND lote_id = ? AND tenant_id = ?
+                                AND COALESCE(detalle->>'iaEstado', 'PENDIENTE') = 'PENDIENTE'
+                              """)) {
+                        update.setString(1, clientRowId);
+                        update.setObject(2, loteId);
+                        update.setObject(3, tenant);
+                        filas[0] = update.executeUpdate();
+                      }
+                    }));
+    return filas[0] == 1;
   }
 
   private void emitirLoteActualizado(UUID tenantId, UUID loteId) {
@@ -861,8 +920,14 @@ public class IngestaMasivaEscrituracionService {
     }
   }
 
-  /** Actualiza una sola fila del lote (workers concurrentes sin pisar otras filas). */
-  private void actualizarItemEnBd(UUID loteId, UUID tenant, Fila fila) {
+  /**
+   * Actualiza una sola fila del lote.
+   *
+   * @param soloSiIaLibre si true, no sobrescribe filas en CONSOLIDANDO/COMPLETADO (OCR concurrente)
+   * @return filas actualizadas (&gt; 0)
+   */
+  private boolean actualizarItemEnBd(UUID loteId, UUID tenant, Fila fila, boolean soloSiIaLibre) {
+    int[] filas = new int[1];
     tx.executeWithoutResult(
         status ->
             entityManager
@@ -871,13 +936,16 @@ public class IngestaMasivaEscrituracionService {
                     connection -> {
                       aplicarTenant(connection, tenant);
                       String estado = estadoItem(fila);
-                      try (PreparedStatement update =
-                          connection.prepareStatement(
-                              """
-                              UPDATE app.ingesta_item
-                              SET estado = ?, porcentaje_progreso = ?, error_log = ?, detalle = ?::jsonb
-                              WHERE client_row_id = ? AND lote_id = ? AND tenant_id = ?
-                              """)) {
+                      String sql =
+                          """
+                          UPDATE app.ingesta_item
+                          SET estado = ?, porcentaje_progreso = ?, error_log = ?, detalle = ?::jsonb
+                          WHERE client_row_id = ? AND lote_id = ? AND tenant_id = ?
+                          """
+                              + (soloSiIaLibre
+                                  ? " AND COALESCE(detalle->>'iaEstado', 'PENDIENTE') NOT IN ('CONSOLIDANDO', 'COMPLETADO')"
+                                  : "");
+                      try (PreparedStatement update = connection.prepareStatement(sql)) {
                         update.setString(1, estado);
                         update.setInt(2, "COMPLETADO".equals(estado) ? 100 : 0);
                         update.setString(3, "ERROR".equals(estado) ? fila.observaciones : null);
@@ -885,9 +953,10 @@ public class IngestaMasivaEscrituracionService {
                         update.setString(5, fila.clientRowId);
                         update.setObject(6, loteId);
                         update.setObject(7, tenant);
-                        update.executeUpdate();
+                        filas[0] = update.executeUpdate();
                       }
                     }));
+    return filas[0] > 0;
   }
 
   private void actualizarContadoresLote(UUID loteId, UUID tenant, String fase) {
@@ -968,7 +1037,9 @@ public class IngestaMasivaEscrituracionService {
     if ("COMPLETADO".equals(fila.ocrEstado) || "COMPLETADO".equals(fila.iaEstado)) {
       return "COMPLETADO";
     }
-    if ("PROCESANDO".equals(fila.ocrEstado) || "EN_PROCESO".equals(fila.iaEstado)) {
+    if ("PROCESANDO".equals(fila.ocrEstado)
+        || "EN_PROCESO".equals(fila.iaEstado)
+        || "CONSOLIDANDO".equals(fila.iaEstado)) {
       return "EN_PROCESO";
     }
     return "PENDIENTE";
