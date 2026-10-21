@@ -202,7 +202,7 @@ public class OcrAzureBatchService {
         estado);
   }
 
-  public String extraerTexto(byte[] bytes, String mimeType) {
+  public LayoutExtractResult evaluarYExtraer(byte[] bytes, String mimeType) {
     if (bytes == null || bytes.length == 0) {
       throw ApiException.badRequest("file requerido.");
     }
@@ -212,7 +212,11 @@ public class OcrAzureBatchService {
           "AZURE_NOT_CONFIGURED",
           "Azure Document Intelligence no configurado.");
     }
-    LayoutExtractResult layout = layoutService.evaluarYExtraer(bytes, mimeType);
+    return layoutService.evaluarYExtraer(bytes, mimeType);
+  }
+
+  public String extraerTexto(byte[] bytes, String mimeType) {
+    LayoutExtractResult layout = evaluarYExtraer(bytes, mimeType);
     return layout.texto() == null ? "" : layout.texto();
   }
 

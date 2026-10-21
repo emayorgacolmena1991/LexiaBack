@@ -40,6 +40,7 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.P
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
+import com.lexia.api.modules.ia.ocr.LayoutExtractResult;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.tenancy.TenantContext;
 import java.io.IOException;
@@ -146,37 +147,55 @@ public class IngestaMasivaEscrituracionService {
       AsignacionArchivo asignacion = asignaciones.get(i);
       MultipartFile file = binarios.get(i);
       Fila fila = fila(lote, asignacion.clientRowId());
-      exigirBorrador(fila, asignacion.borradorId());
-      String sesion = exigirExpediente(fila);
-      if (file == null || file.isEmpty()) {
-        throw ApiException.badRequest("Archivo vacío en la fila " + fila.clientRowId + ".");
+      try {
+        exigirBorrador(fila, asignacion.borradorId());
+        String sesion = exigirExpediente(fila);
+        if (file == null || file.isEmpty()) {
+          throw new IllegalStateException("Archivo vacío en la fila " + fila.clientRowId + ".");
+        }
+        String tipo = tipoDe(fila, asignacion.tipoDocumento());
+        DocumentoCargadoDTO doc = carga.subir(sesion, file);
+        if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
+          carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
+        }
+        Archivo archivo = Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo);
+        synchronized (fila) {
+          fila.archivos.add(archivo);
+          fila.ocrEstado = "PROCESANDO";
+          fila.semaforo = "GRIS";
+          fila.iaEstado = "PENDIENTE";
+          fila.observaciones = null;
+        }
+        encolarProcesarDocumento(lote, fila, archivo, principal);
+      } catch (Exception e) {
+        String detalle =
+            e instanceof RuntimeException re ? mensaje(re) : e.getMessage();
+        if (!StringUtils.hasText(detalle)) {
+          detalle = e.getClass().getSimpleName();
+        }
+        LOG.error("Fallo al procesar archivo en fila {}", fila.clientRowId, e);
+        synchronized (fila) {
+          fila.ocrEstado = "ERROR";
+          fila.semaforo = "ROJO";
+          fila.iaEstado = "ERROR";
+          fila.observaciones = detalle;
+        }
       }
-      String tipo = tipoDe(fila, asignacion.tipoDocumento());
-      DocumentoCargadoDTO doc = carga.subir(sesion, file);
-      if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
-        carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
-      }
-      Archivo archivo = Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo);
-      synchronized (fila) {
-        fila.archivos.add(archivo);
-        fila.ocrEstado = "PROCESANDO";
-        fila.semaforo = "GRIS";
-        fila.iaEstado = "PENDIENTE";
-        fila.observaciones = null;
-      }
-      encolarProcesarDocumento(lote, fila, archivo, principal);
       if (!tocadas.contains(fila)) {
         tocadas.add(fila);
       }
     }
-    if (tocadas.isEmpty()) {
-      throw ApiException.badRequest("No se guardó ningún archivo.");
+    if (!tocadas.isEmpty()) {
+      synchronized (lote) {
+        lote.fase = "ARCHIVOS";
+      }
+      UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+      for (Fila tocada : tocadas) {
+        actualizarItemEnBd(lote.id, tenant, tocada);
+      }
+      actualizarContadoresLote(lote.id, tenant, lote.fase);
     }
-    synchronized (lote) {
-      lote.fase = "ARCHIVOS";
-    }
-    persistir(lote);
-    return lote.snapshot();
+    return cargar(principal.tenantId(), batchId).snapshot();
   }
 
   public LoteStatus ejecutarOcr(UUID batchId) {
@@ -213,8 +232,12 @@ public class IngestaMasivaEscrituracionService {
         }
       }
     }
-    persistir(lote);
-    return lote.snapshot();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    for (Fila fila : objetivo) {
+      actualizarItemEnBd(lote.id, tenant, fila);
+    }
+    actualizarContadoresLote(lote.id, tenant, lote.fase);
+    return cargar(principal.tenantId(), batchId).snapshot();
   }
 
   public LoteStatus reintentar(UUID batchId, String clientRowId) {
@@ -255,8 +278,10 @@ public class IngestaMasivaEscrituracionService {
         encolarProcesarDocumento(lote, fila, archivo, principal);
       }
     }
-    persistir(lote);
-    return lote.snapshot();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    actualizarItemEnBd(lote.id, tenant, fila);
+    actualizarContadoresLote(lote.id, tenant, lote.fase);
+    return cargar(principal.tenantId(), batchId).snapshot();
   }
 
   public LoteStatus reemplazar(
@@ -292,8 +317,10 @@ public class IngestaMasivaEscrituracionService {
     }
     Archivo ultimo = fila.archivos.get(fila.archivos.size() - 1);
     encolarProcesarDocumento(lote, fila, ultimo, principal);
-    persistir(lote);
-    return lote.snapshot();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    actualizarItemEnBd(lote.id, tenant, fila);
+    actualizarContadoresLote(lote.id, tenant, lote.fase);
+    return cargar(principal.tenantId(), batchId).snapshot();
   }
 
   public LoteStatus status(UUID batchId) {
@@ -404,6 +431,8 @@ public class IngestaMasivaEscrituracionService {
     Lote lote = cargar(payload.tenantId(), payload.loteId());
     Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
     Archivo archivo = fila == null ? null : archivoDe(fila, payload.docId());
+    UUID tenantId = payload.tenantId();
+    UUID loteId = payload.loteId();
     try {
       if (payload.expedienteId() == null) {
         throw ApiException.badRequest("Sin expediente. No se llama a OCR.");
@@ -413,32 +442,61 @@ public class IngestaMasivaEscrituracionService {
       if (guardado.bytes() == null || guardado.bytes().length == 0) {
         throw ApiException.badRequest("El archivo no está guardado. No se llama a OCR.");
       }
-      String texto = ocr.extraerTexto(guardado.bytes(), guardado.mimeType());
+      LayoutExtractResult layout = ocr.evaluarYExtraer(guardado.bytes(), guardado.mimeType());
+      String texto = layout.texto() == null ? "" : layout.texto();
+      boolean legible =
+          layout.calidad() != null && layout.calidad().legible() && StringUtils.hasText(texto);
+      if (!legible) {
+        abortarErrorTecnicoArchivo(lote, fila, archivo, tenantId, loteId, payload.itemId(), MSG_ILEGIBLE);
+        return;
+      }
       String tipo = archivo == null ? payload.tipoDocumento() : archivo.tipo;
+      int confianza =
+          layout.calidad() == null ? 0 : porcentaje(layout.calidad().promedioConfianza());
       carga.guardarResultadoOcr(
           sesion,
           new DocumentoOcrResultadoDTO(
-              payload.docId(), guardado.nombreOriginal(), tipo, texto, null, "LEGIBLE", null, null));
+              payload.docId(), guardado.nombreOriginal(), tipo, texto, null, "LEGIBLE", null, confianza));
       if (archivo != null) {
         synchronized (archivo) {
           archivo.texto = texto;
-          archivo.legible = StringUtils.hasText(texto);
+          archivo.legible = true;
           archivo.ocrListo = true;
-          archivo.semaforo = archivo.legible ? "VERDE" : "NARANJA";
+          archivo.semaforo = semaforoDe(false, true, confianza);
+          archivo.confianza = confianza;
         }
+      }
+      if (fila != null && lote != null) {
+        persistirItemWorker(lote, fila);
+      }
+      lote = cargar(tenantId, loteId);
+      fila = lote == null ? null : filaONull(lote, payload.itemId());
+      if (filaExpedienteBloqueado(fila)) {
+        bloquearExpedientePorArchivosConError(lote, fila, tenantId, loteId, payload.itemId());
+        return;
       }
       if (!esUltimoArchivo(fila, payload.expedienteId())) {
         if (lote != null) {
-          persistir(lote);
-          emitir(lote.id, "DOCUMENTO_LISTO", lote.snapshot());
+          emitirLoteActualizado(tenantId, loteId);
         }
         return;
       }
+      lote = cargar(tenantId, loteId);
+      fila = lote == null ? null : filaONull(lote, payload.itemId());
+      if (filaExpedienteBloqueado(fila)) {
+        bloquearExpedientePorArchivosConError(lote, fila, tenantId, loteId, payload.itemId());
+        return;
+      }
       String unido = textoConsolidado(sesion);
+      if (!StringUtils.hasText(unido)) {
+        archivo = fila == null ? archivo : archivoDe(fila, payload.docId());
+        abortarErrorTecnicoArchivo(lote, fila, archivo, tenantId, loteId, payload.itemId(), MSG_ILEGIBLE);
+        return;
+      }
       carga.guardarResultadoOcr(
           sesion,
           new DocumentoOcrResultadoDTO(
-              "consolidado", "consolidado", "CONSOLIDADO", unido, null, "LEGIBLE", null, null));
+              "consolidado", "consolidado", "CONSOLIDADO", unido, null, "LEGIBLE", null, confianza));
       ProcesarExpedienteCompletoResult resultado =
           ia.analizarExpedienteConPromptProducto(
               payload.expedienteId(), new AnalysisRequestDTO(Boolean.TRUE, sesion));
@@ -455,33 +513,104 @@ public class IngestaMasivaEscrituracionService {
           fila.duracionMs = Math.max(0, System.currentTimeMillis() - fila.inicioMs);
         }
       }
-      if (lote != null) {
-        persistir(lote);
-        emitir(lote.id, "DOCUMENTO_LISTO", lote.snapshot());
+      if (fila != null && lote != null) {
+        persistirItemWorker(lote, fila);
+        emitirLoteActualizado(tenantId, loteId);
       }
     } catch (Exception ex) {
       String detalle = ex.getMessage() == null || ex.getMessage().isBlank() ? ex.getClass().getSimpleName() : ex.getMessage();
       LOG.error("job PROCESAR_DOCUMENTO ERROR payload={} error_log={}", payload, detalle);
-      if (fila != null) {
-        synchronized (fila) {
-          if (archivo != null) {
-            archivo.fallo(detalle);
-          }
-          fila.ocrEstado = "ERROR";
-          fila.iaEstado = "ERROR";
-          fila.semaforo = "ROJO";
-          fila.iaResumen = detalle;
-          fila.observaciones = detalle;
+      if (lote == null) {
+        lote = cargar(tenantId, loteId);
+      }
+      if (fila == null && lote != null) {
+        fila = filaONull(lote, payload.itemId());
+      }
+      archivo = fila == null ? archivo : archivoDe(fila, payload.docId());
+      abortarErrorTecnicoArchivo(lote, fila, archivo, tenantId, loteId, payload.itemId(), detalle);
+    }
+  }
+
+  private static final String MSG_ILEGIBLE = "El documento no contiene texto legible.";
+  private static final String MSG_EXPEDIENTE_BLOQUEADO =
+      "Expediente bloqueado. Corrija los archivos con error.";
+
+  private static String mensajeErrorTecnicoArchivo(String detalle) {
+    return "Error técnico en archivo: " + detalle;
+  }
+
+  /** Tras persistir el archivo actual, relee la fila desde BD (estado de otros workers). */
+  private static boolean filaExpedienteBloqueado(Fila fila) {
+    if (fila == null) {
+      return false;
+    }
+    synchronized (fila) {
+      if ("ERROR".equals(fila.ocrEstado) || "ERROR".equals(fila.iaEstado)) {
+        return true;
+      }
+      for (Archivo item : fila.archivos) {
+        if ("ROJO".equals(item.semaforo) || (item.ocrListo && !item.legible)) {
+          return true;
         }
       }
-      if (lote != null) {
-        try {
-          persistir(lote);
-        } catch (RuntimeException persistEx) {
-          LOG.error("Error persistiendo lote: {}", persistEx.getMessage(), persistEx);
-        }
-        emitirItemError(lote.id, payload.itemId(), detalle);
+    }
+    return false;
+  }
+
+  private void bloquearExpedientePorArchivosConError(
+      Lote lote, Fila fila, UUID tenantId, UUID loteId, String itemId) {
+    if (fila != null) {
+      synchronized (fila) {
+        fila.ocrEstado = "ERROR";
+        fila.semaforo = "ROJO";
+        fila.iaEstado = "ERROR";
+        fila.observaciones = MSG_EXPEDIENTE_BLOQUEADO;
+        fila.iaResumen = MSG_EXPEDIENTE_BLOQUEADO;
       }
+    }
+    if (fila != null && lote != null) {
+      persistirItemWorker(lote, fila);
+      emitirItemError(loteId, itemId, MSG_EXPEDIENTE_BLOQUEADO);
+    }
+  }
+
+  private void abortarErrorTecnicoArchivo(
+      Lote lote,
+      Fila fila,
+      Archivo archivo,
+      UUID tenantId,
+      UUID loteId,
+      String itemId,
+      String detalle) {
+    String observaciones = mensajeErrorTecnicoArchivo(detalle);
+    if (fila != null) {
+      synchronized (fila) {
+        if (archivo != null) {
+          archivo.fallo(detalle);
+        }
+        fila.ocrEstado = "ERROR";
+        fila.semaforo = "ROJO";
+        fila.iaEstado = "ERROR";
+        fila.observaciones = observaciones;
+        fila.iaResumen = observaciones;
+      }
+    }
+    if (fila != null && lote != null) {
+      persistirItemWorker(lote, fila);
+      emitirItemError(loteId, itemId, observaciones);
+    }
+  }
+
+  private void persistirItemWorker(Lote lote, Fila fila) {
+    UUID tenant = lote.tenantId != null ? lote.tenantId : TenantContext.getTenantId();
+    actualizarItemEnBd(lote.id, tenant, fila);
+    actualizarContadoresLote(lote.id, tenant, lote.fase);
+  }
+
+  private void emitirLoteActualizado(UUID tenantId, UUID loteId) {
+    Lote fresh = cargar(tenantId, loteId);
+    if (fresh != null) {
+      emitir(loteId, "DOCUMENTO_LISTO", fresh.snapshot());
     }
   }
 
@@ -679,11 +808,7 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private void escribirLote(Connection connection, Lote lote, UUID tenant, int hechas) throws java.sql.SQLException {
-    try (PreparedStatement set =
-        connection.prepareStatement("SELECT set_config('app.current_tenant_id', ?, true)")) {
-      set.setString(1, tenant == null ? "" : tenant.toString());
-      set.execute();
-    }
+    aplicarTenant(connection, tenant);
     try (PreparedStatement upsert =
         connection.prepareStatement(
             """
@@ -701,37 +826,108 @@ public class IngestaMasivaEscrituracionService {
       upsert.setInt(5, hechas);
       upsert.executeUpdate();
     }
-    try (PreparedStatement delete =
-        connection.prepareStatement(
-            "DELETE FROM app.ingesta_item WHERE lote_id = ? AND tenant_id = ?")) {
-      delete.setObject(1, lote.id);
-      delete.setObject(2, tenant);
-      delete.executeUpdate();
-    }
     int orden = 0;
-    try (PreparedStatement insert =
+    try (PreparedStatement upsertItem =
         connection.prepareStatement(
             """
             INSERT INTO app.ingesta_item
               (id, tenant_id, lote_id, client_row_id, orden, expediente_id, borrador_id,
                estado, porcentaje_progreso, error_log, detalle)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            ON CONFLICT (lote_id, client_row_id) DO UPDATE SET
+              orden = EXCLUDED.orden,
+              expediente_id = EXCLUDED.expediente_id,
+              borrador_id = EXCLUDED.borrador_id,
+              estado = EXCLUDED.estado,
+              porcentaje_progreso = EXCLUDED.porcentaje_progreso,
+              error_log = EXCLUDED.error_log,
+              detalle = EXCLUDED.detalle
             """)) {
       for (Fila fila : lote.filas) {
         String estado = estadoItem(fila);
-        insert.setObject(1, UUID.randomUUID());
-        insert.setObject(2, tenant);
-        insert.setObject(3, lote.id);
-        insert.setString(4, fila.clientRowId);
-        insert.setInt(5, orden++);
-        insert.setObject(6, fila.expedienteId);
-        insert.setObject(7, fila.borradorId);
-        insert.setString(8, estado);
-        insert.setInt(9, "COMPLETADO".equals(estado) ? 100 : 0);
-        insert.setString(10, "ERROR".equals(estado) ? fila.observaciones : null);
-        insert.setString(11, json(fila));
-        insert.executeUpdate();
+        upsertItem.setObject(1, UUID.randomUUID());
+        upsertItem.setObject(2, tenant);
+        upsertItem.setObject(3, lote.id);
+        upsertItem.setString(4, fila.clientRowId);
+        upsertItem.setInt(5, orden++);
+        upsertItem.setObject(6, fila.expedienteId);
+        upsertItem.setObject(7, fila.borradorId);
+        upsertItem.setString(8, estado);
+        upsertItem.setInt(9, "COMPLETADO".equals(estado) ? 100 : 0);
+        upsertItem.setString(10, "ERROR".equals(estado) ? fila.observaciones : null);
+        upsertItem.setString(11, json(fila));
+        upsertItem.executeUpdate();
       }
+    }
+  }
+
+  /** Actualiza una sola fila del lote (workers concurrentes sin pisar otras filas). */
+  private void actualizarItemEnBd(UUID loteId, UUID tenant, Fila fila) {
+    tx.executeWithoutResult(
+        status ->
+            entityManager
+                .unwrap(Session.class)
+                .doWork(
+                    connection -> {
+                      aplicarTenant(connection, tenant);
+                      String estado = estadoItem(fila);
+                      try (PreparedStatement update =
+                          connection.prepareStatement(
+                              """
+                              UPDATE app.ingesta_item
+                              SET estado = ?, porcentaje_progreso = ?, error_log = ?, detalle = ?::jsonb
+                              WHERE client_row_id = ? AND lote_id = ? AND tenant_id = ?
+                              """)) {
+                        update.setString(1, estado);
+                        update.setInt(2, "COMPLETADO".equals(estado) ? 100 : 0);
+                        update.setString(3, "ERROR".equals(estado) ? fila.observaciones : null);
+                        update.setString(4, json(fila));
+                        update.setString(5, fila.clientRowId);
+                        update.setObject(6, loteId);
+                        update.setObject(7, tenant);
+                        update.executeUpdate();
+                      }
+                    }));
+  }
+
+  private void actualizarContadoresLote(UUID loteId, UUID tenant, String fase) {
+    tx.executeWithoutResult(
+        status ->
+            entityManager
+                .unwrap(Session.class)
+                .doWork(
+                    connection -> {
+                      aplicarTenant(connection, tenant);
+                      try (PreparedStatement update =
+                          connection.prepareStatement(
+                              """
+                              UPDATE app.ingesta_lote SET
+                                estado = ?,
+                                total_filas = (
+                                  SELECT count(*)::int FROM app.ingesta_item
+                                  WHERE lote_id = ? AND tenant_id = ?),
+                                filas_completadas = (
+                                  SELECT count(*)::int FROM app.ingesta_item
+                                  WHERE lote_id = ? AND tenant_id = ? AND estado = 'COMPLETADO')
+                              WHERE id = ? AND tenant_id = ?
+                              """)) {
+                        update.setString(1, fase);
+                        update.setObject(2, loteId);
+                        update.setObject(3, tenant);
+                        update.setObject(4, loteId);
+                        update.setObject(5, tenant);
+                        update.setObject(6, loteId);
+                        update.setObject(7, tenant);
+                        update.executeUpdate();
+                      }
+                    }));
+  }
+
+  private static void aplicarTenant(Connection connection, UUID tenant) throws java.sql.SQLException {
+    try (PreparedStatement set =
+        connection.prepareStatement("SELECT set_config('app.current_tenant_id', ?, true)")) {
+      set.setString(1, tenant == null ? "" : tenant.toString());
+      set.execute();
     }
   }
 
