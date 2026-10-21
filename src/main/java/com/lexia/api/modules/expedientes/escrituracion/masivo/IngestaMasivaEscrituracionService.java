@@ -141,6 +141,7 @@ public class IngestaMasivaEscrituracionService {
       throw ApiException.badRequest("Cada archivo debe traer su asignación (clientRowId y tipo).");
     }
     List<Fila> tocadas = new ArrayList<>();
+    LOG.info("Iniciando encolado de archivos. Total: {}", binarios.size());
     for (int i = 0; i < asignaciones.size(); i++) {
       AsignacionArchivo asignacion = asignaciones.get(i);
       MultipartFile file = binarios.get(i);
@@ -391,6 +392,10 @@ public class IngestaMasivaEscrituracionService {
       jobs.encolar(principal.tenantId(), "PROCESAR_DOCUMENTO", objectMapper.writeValueAsString(payload));
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar el documento.");
+    } catch (Exception e) {
+      LOG.error("Fallo al insertar en app.jobs: ", e);
+      throw ApiException.badRequest(
+          "No se pudo encolar el procesamiento del documento. " + e.getMessage());
     }
     LOG.info("job PROCESAR_DOCUMENTO {}", payload);
   }
@@ -454,8 +459,8 @@ public class IngestaMasivaEscrituracionService {
         persistir(lote);
         emitir(lote.id, "DOCUMENTO_LISTO", lote.snapshot());
       }
-    } catch (RuntimeException ex) {
-      String detalle = mensaje(ex);
+    } catch (Exception ex) {
+      String detalle = ex.getMessage() == null || ex.getMessage().isBlank() ? ex.getClass().getSimpleName() : ex.getMessage();
       LOG.error("job PROCESAR_DOCUMENTO ERROR payload={} error_log={}", payload, detalle);
       if (fila != null) {
         synchronized (fila) {
@@ -470,10 +475,13 @@ public class IngestaMasivaEscrituracionService {
         }
       }
       if (lote != null) {
-        persistir(lote);
-        emitir(lote.id, "ERROR", lote.snapshot());
+        try {
+          persistir(lote);
+        } catch (RuntimeException persistEx) {
+          LOG.error("Error persistiendo lote: {}", persistEx.getMessage(), persistEx);
+        }
+        emitirItemError(lote.id, payload.itemId(), detalle);
       }
-      throw ex;
     }
   }
 
@@ -520,6 +528,16 @@ public class IngestaMasivaEscrituracionService {
       }
     }
     return null;
+  }
+
+  private void emitirItemError(UUID loteId, String itemId, String mensaje) {
+    for (SseEmitter emitter : streams.getOrDefault(loteId, new CopyOnWriteArrayList<>())) {
+      try {
+        emitter.send(SseEmitter.event().name("ITEM_ERROR").data(java.util.Map.of("itemId", itemId, "mensaje", mensaje)));
+      } catch (IOException ex) {
+        emitter.complete();
+      }
+    }
   }
 
   private void emitir(UUID loteId, String evento, LoteStatus status) {

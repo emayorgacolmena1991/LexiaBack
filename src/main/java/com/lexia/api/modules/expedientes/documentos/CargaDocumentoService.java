@@ -193,6 +193,9 @@ public class CargaDocumentoService {
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
+    if ("pdf".equals(ext) && (bytes.length < 4 || !new String(bytes, 0, 4, java.nio.charset.StandardCharsets.ISO_8859_1).startsWith("%PDF"))) {
+      throw ApiException.badRequest("El archivo no es un PDF válido.");
+    }
 
     String idDoc = "DOC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
     StoredDoc stored =
@@ -637,7 +640,11 @@ public class CargaDocumentoService {
       throw ApiException.badRequest("En modo físico escaneado solo se admite un PDF.");
     }
     try {
-      return file.getBytes();
+      byte[] bytes = file.getBytes();
+      if ("pdf".equals(ext) && (bytes.length < 4 || !new String(bytes, 0, 4, java.nio.charset.StandardCharsets.ISO_8859_1).startsWith("%PDF"))) {
+        throw ApiException.badRequest("El archivo no es un PDF válido.");
+      }
+      return bytes;
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
