@@ -46,6 +46,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TimelineItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.UpdateExpedienteRequest;
 import com.lexia.api.modules.identity.AuthorizationService;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -97,6 +98,8 @@ public class CoactivaExpedienteService {
 
   private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
   private static final String ANALISIS_INTERRUMPIDO = "El análisis IA se interrumpió. Vuelve a analizar el expediente.";
+  /** ponytail: una página de aviso; no recupera el binario que no está en este disco. */
+  private static final byte[] PDF_AUSENTE = pdfAviso("El archivo original no esta en el servidor.");
 
   public CoactivaExpedienteService(
       CoactivaExpedienteRepository expedientes,
@@ -940,7 +943,56 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaArchivo archivo = requireArchivo(tenantId, archivoId);
-    return new ArchivoContenido(archivo.getNombreOriginal(), archivo.getMimeType(), storage.read(archivo));
+    if (storage.disponible(archivo)) {
+      return new ArchivoContenido(archivo.getNombreOriginal(), archivo.getMimeType(), storage.read(archivo));
+    }
+    CoactivaArchivo unificado = unificadoEnDisco(tenantId, archivo);
+    if (unificado != null) {
+      String mime = unificado.getMimeType() == null ? "application/pdf" : unificado.getMimeType();
+      return new ArchivoContenido(unificado.getNombreOriginal(), mime, storage.read(unificado));
+    }
+    return new ArchivoContenido("expediente-no-disponible.pdf", "application/pdf", PDF_AUSENTE);
+  }
+
+  /** Mismo juicio, tipo unificado, y el binario sí está bajo {@code data/coactivas}. */
+  private CoactivaArchivo unificadoEnDisco(UUID tenantId, CoactivaArchivo pedido) {
+    if (pedido.getExpedienteId() == null) {
+      return null;
+    }
+    return archivos
+        .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId, pedido.getExpedienteId())
+        .stream()
+        .filter(a -> CoactivaArchivo.EXPEDIENTE_UNIFICADO.equals(a.getTipo()))
+        .filter(a -> !a.getId().equals(pedido.getId()))
+        .filter(storage::disponible)
+        .findFirst()
+        .orElse(null);
+  }
+
+  static byte[] pdfAviso(String mensaje) {
+    String stream = "BT /F1 14 Tf 72 720 Td (" + mensaje + ") Tj ET\n";
+    String[] objs = {
+      "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n",
+      "2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n",
+      "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n",
+      "4 0 obj<</Length " + stream.length() + ">>stream\n" + stream + "endstream\nendobj\n",
+      "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
+    };
+    StringBuilder pdf = new StringBuilder("%PDF-1.4\n");
+    int[] off = new int[objs.length];
+    for (int i = 0; i < objs.length; i++) {
+      off[i] = pdf.length();
+      pdf.append(objs[i]);
+    }
+    int xref = pdf.length();
+    pdf.append("xref\n0 ").append(objs.length + 1).append('\n');
+    pdf.append("0000000000 65535 f \n");
+    for (int o : off) {
+      pdf.append(String.format("%010d 00000 n \n", o));
+    }
+    pdf.append("trailer<</Size ").append(objs.length + 1).append("/Root 1 0 R>>\n");
+    pdf.append("startxref\n").append(xref).append("\n%%EOF\n");
+    return pdf.toString().getBytes(StandardCharsets.US_ASCII);
   }
 
   @Transactional(readOnly = true)
