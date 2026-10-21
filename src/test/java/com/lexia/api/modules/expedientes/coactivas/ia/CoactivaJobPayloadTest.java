@@ -10,11 +10,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lexia.api.modules.expedientes.escrituracion.IaAnalysisService;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
 import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobWorker;
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaMasivaEscrituracionService;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,12 +35,9 @@ class CoactivaJobPayloadTest {
   private IngestaJobWorker worker() {
     ObjectProvider<CoactivaExpedienteAnalisisWorker> d = mock(ObjectProvider.class);
     ObjectProvider<CoactivaValidacionIaWorker> a = mock(ObjectProvider.class);
-    ObjectProvider<IaAnalysisService> e = mock(ObjectProvider.class);
     when(d.getIfAvailable()).thenReturn(diagnostico);
     when(a.getIfAvailable()).thenReturn(anexo);
-    return new IngestaJobWorker(
-        cola, mock(IngestaMasivaEscrituracionService.class), d, a, e,
-        mock(ObjectProvider.class), mock(ObjectProvider.class), sse, new ObjectMapper());
+    return new IngestaJobWorker(cola, d, a, sse, new ObjectMapper());
   }
 
   private String comoJsonb(String payload) {

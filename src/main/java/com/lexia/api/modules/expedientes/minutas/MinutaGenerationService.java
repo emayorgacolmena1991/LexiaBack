@@ -9,24 +9,24 @@ import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.BorradorGeneradoResponse;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ContenidoMinutaResponse;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.CrearMinutaRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DatosBiessMinutaResponse;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarContenidoMinutaRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.GuardarMinutaRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaGuardadaResponse;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.MinutaItem;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ParrafoEditado;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.PreviewMinutaRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.VariablesMinutaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.BorradorGeneradoResponse;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ContenidoMinutaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.CrearMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.DatosBiessMinutaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.GuardarContenidoMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.GuardarMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.MinutaGuardadaResponse;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.MinutaItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ParrafoEditado;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.PreviewMinutaRequest;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.VariablesMinutaResponse;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta.CampoPlantilla;
 import com.lexia.api.modules.expedientes.minutas.ExpedienteVariablesService.Origenes;
 import com.lexia.api.modules.expedientes.minutas.ExpedienteVariablesService.VariablesConsolidadas;
-import com.lexia.api.modules.expedientes.escrituracion.MinutaDraft;
-import com.lexia.api.modules.expedientes.escrituracion.MinutaDraftRepository;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraft;
+import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraftRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 import com.lexia.api.modules.expedientes.proceso.ProductTemplateRepository;
 import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
@@ -524,6 +524,10 @@ public class MinutaGenerationService {
                     HttpStatus.CONFLICT,
                     "NO_WRITING_FILE",
                     "Configura el producto BIESS antes de previsualizar la minuta."));
+  }
+
+  public byte[] renderDocx(String productCode, String templateKind, MinutaViviendaData data) {
+    return renderer.renderVivienda(catalog.require(productCode, templateKind), data);
   }
 
   @Transactional

@@ -89,6 +89,12 @@ public class CapturaBiessService {
     }
   }
 
+  /** Escrituración síncrona: valida el multipart y extrae en el mismo request. */
+  public DatosBiessMinuta extraer(UUID caseId, MultipartFile file) {
+    CapturaValidada captura = validar(caseId, file);
+    return extraer(caseId, captura.bytes(), captura.mime());
+  }
+
   /**
    * Lado worker: Azure layout → LLM → grupo {@code biess}. Reposición y porcentaje ya guardados no
    * se pisan.

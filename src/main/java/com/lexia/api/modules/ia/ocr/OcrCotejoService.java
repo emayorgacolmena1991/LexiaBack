@@ -7,7 +7,7 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
-import com.lexia.api.modules.expedientes.escrituracion.ProcesarExpedienteCompletoResult;
+import com.lexia.api.modules.expedientes.escrituracion.core.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoComparacion;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoFuente;

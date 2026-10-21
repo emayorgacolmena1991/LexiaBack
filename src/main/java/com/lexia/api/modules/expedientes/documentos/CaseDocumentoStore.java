@@ -11,8 +11,8 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Prevalida
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.PrevalidacionDocumentoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 import com.lexia.api.modules.expedientes.caso.ExpedienteSeguimientoService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

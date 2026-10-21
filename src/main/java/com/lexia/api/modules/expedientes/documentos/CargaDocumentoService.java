@@ -9,7 +9,7 @@ import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.ActualizarTipoRequest;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.BorradorResponse;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.CrearBorradorRequest;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DocumentoRequisitoItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.DocumentoRequisitoItem;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.IniciarProcesamientoResponse;
@@ -192,6 +192,9 @@ public class CargaDocumentoService {
       bytes = file.getBytes();
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
+    }
+    if ("pdf".equals(ext) && (bytes.length < 4 || !new String(bytes, 0, 4, java.nio.charset.StandardCharsets.ISO_8859_1).startsWith("%PDF"))) {
+      throw ApiException.badRequest("El archivo no es un PDF válido.");
     }
 
     String idDoc = "DOC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
@@ -449,23 +452,17 @@ public class CargaDocumentoService {
     if (official != null) {
       return caseDocs.listarOcr(official);
     }
-    List<DocumentoOcrResultadoDTO> durable = listarOcrDurable(idExpediente);
-    if (!durable.isEmpty()) {
-      return durable;
-    }
-    DraftExpediente draft = drafts.get(idExpediente);
-    if (draft == null) {
-      return List.of();
-    }
+    DraftExpediente draft = requireDraft(idExpediente);
     return draft.documentos().keySet().stream()
         .map(idDoc -> draft.ocrResultados().get(idDoc))
         .filter(java.util.Objects::nonNull)
         .toList();
   }
 
-  /** OCR durable: expediente oficial o fila de {@code documento_texto_ocr} del borrador. */
+  /** OCR durable en {@code documento_texto_ocr}. La caché de borrador queda como espejo. */
+  @org.springframework.transaction.annotation.Transactional
   public void guardarResultadoOcr(String idExpediente, DocumentoOcrResultadoDTO resultado) {
-    if (resultado == null || !StringUtils.hasText(resultado.idDocumento())) {
+    if (resultado == null || !org.springframework.util.StringUtils.hasText(idExpediente)) {
       return;
     }
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
@@ -474,12 +471,32 @@ public class CargaDocumentoService {
       return;
     }
     guardarOcrEnMemoria(idExpediente, resultado);
-    AuthPrincipal principal = AuthContext.get();
-    try {
-      persistirFilaOcr(idExpediente, principal == null ? null : principal.tenantId(), resultado);
-    } catch (RuntimeException e) {
-      LOG.warn("OCR no persistido expediente={}: {}", idExpediente, e.getMessage());
+    var principal = com.lexia.api.modules.auth.AuthContext.get();
+    DocumentoTextoOcr row =
+        ocrRepository
+            .findByIdExpedienteAndIdDocumento(idExpediente, resultado.idDocumento())
+            .orElseGet(DocumentoTextoOcr::new);
+    if (principal != null) {
+      row.setTenantId(principal.tenantId());
     }
+    row.setIdExpediente(idExpediente);
+    row.setIdDocumento(resultado.idDocumento());
+    row.setTipoDocumento(resultado.tipoDocumento());
+    row.setTextoOcr(resultado.textoOcr());
+    row.setAnalisisJson(resultado.analisisJson());
+    row.setEstadoDoc(
+        org.springframework.util.StringUtils.hasText(resultado.estado())
+            ? resultado.estado()
+            : "EN_PROCESO");
+    row.setMotivo(resultado.motivo());
+    row.setConfianza(resultado.confianza());
+    ocrRepository.save(row);
+  }
+
+  /** Borra una fila de {@code app.documento_texto_ocr} (ej. el consolidado antes de reprocesar). */
+  @org.springframework.transaction.annotation.Transactional
+  public void borrarOcr(String idExpediente, String idDocumento) {
+    ocrRepository.deleteByIdExpedienteAndIdDocumento(idExpediente, idDocumento);
   }
 
   /** Guarda resultado OCR+Gemini solo en RAM del borrador. */
@@ -501,74 +518,24 @@ public class CargaDocumentoService {
     }
     for (DocumentoOcrResultadoDTO r : draft.ocrResultados().values()) {
       try {
-        persistirFilaOcr(idExpediente, tenantId, r);
+        DocumentoTextoOcr row =
+            ocrRepository
+                .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
+                .orElseGet(DocumentoTextoOcr::new);
+        row.setTenantId(tenantId);
+        row.setIdExpediente(idExpediente);
+        row.setIdDocumento(r.idDocumento());
+        row.setTipoDocumento(r.tipoDocumento());
+        row.setTextoOcr(r.textoOcr());
+        row.setAnalisisJson(r.analisisJson());
+        row.setEstadoDoc(r.estado());
+        row.setMotivo(r.motivo());
+        row.setConfianza(r.confianza());
+        ocrRepository.save(row);
       } catch (Exception e) {
         // no bloquear alta si falla el volcado OCR
       }
     }
-  }
-
-  private List<DocumentoOcrResultadoDTO> listarOcrDurable(String idExpediente) {
-    List<DocumentoOcrResultadoDTO> out = new ArrayList<>();
-    for (DocumentoTextoOcr row : ocrRepository.findByIdExpedienteOrderByCreatedAtAsc(idExpediente)) {
-      if (row == null || "dictamen".equals(row.getIdDocumento())) {
-        continue;
-      }
-      if (!StringUtils.hasText(row.getTextoOcr()) && !StringUtils.hasText(row.getAnalisisJson())) {
-        continue;
-      }
-      out.add(
-          new DocumentoOcrResultadoDTO(
-              row.getIdDocumento(),
-              row.getTipoDocumento(),
-              row.getTipoDocumento(),
-              row.getTextoOcr(),
-              row.getAnalisisJson(),
-              row.getEstadoDoc(),
-              row.getMotivo(),
-              row.getConfianza()));
-    }
-    return out;
-  }
-
-  /** Texto unido que manda el front al consolidar. Sobrevive al reinicio; no queda solo en memoria. */
-  public void persistirTextoConsolidado(String idExpediente, UUID tenantId, String texto) {
-    if (!StringUtils.hasText(idExpediente) || !StringUtils.hasText(texto)) {
-      return;
-    }
-    persistirFilaOcr(
-        idExpediente.trim(),
-        tenantId,
-        new DocumentoOcrResultadoDTO(
-            "consolidado", "consolidado", "CONSOLIDADO", texto, null, "LEGIBLE", null, null));
-  }
-
-  public String textoConsolidado(String idExpediente) {
-    if (!StringUtils.hasText(idExpediente)) {
-      return null;
-    }
-    return ocrRepository
-        .findByIdExpedienteAndIdDocumento(idExpediente.trim(), "consolidado")
-        .map(DocumentoTextoOcr::getTextoOcr)
-        .filter(StringUtils::hasText)
-        .orElse(null);
-  }
-
-  private void persistirFilaOcr(String idExpediente, UUID tenantId, DocumentoOcrResultadoDTO r) {
-    if (r == null || !StringUtils.hasText(r.idDocumento())) {
-      return;
-    }
-    ocrRepository.upsert(
-        UUID.randomUUID(),
-        tenantId,
-        idExpediente,
-        r.idDocumento(),
-        r.tipoDocumento(),
-        r.textoOcr(),
-        r.analisisJson(),
-        StringUtils.hasText(r.estado()) ? r.estado() : "LEGIBLE",
-        r.motivo(),
-        r.confianza());
   }
 
   void actualizarDocPrevalidacion(
@@ -673,7 +640,11 @@ public class CargaDocumentoService {
       throw ApiException.badRequest("En modo físico escaneado solo se admite un PDF.");
     }
     try {
-      return file.getBytes();
+      byte[] bytes = file.getBytes();
+      if ("pdf".equals(ext) && (bytes.length < 4 || !new String(bytes, 0, 4, java.nio.charset.StandardCharsets.ISO_8859_1).startsWith("%PDF"))) {
+        throw ApiException.badRequest("El archivo no es un PDF válido.");
+      }
+      return bytes;
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }

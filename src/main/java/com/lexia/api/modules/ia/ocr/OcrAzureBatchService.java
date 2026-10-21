@@ -1,8 +1,10 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchRequest;
@@ -40,23 +42,20 @@ public class OcrAzureBatchService {
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
   private final OcrSessionCacheService cache;
+  private final DocumentoTextoOcrRepository ocrRepository;
   private final Executor ocrExecutor;
-  private final PdfTextoNativo pdfNativo;
-  private final DocumentoCacheStore documentoCache;
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
       CargaDocumentoService cargaDocumentoService,
       OcrSessionCacheService cache,
-      @Qualifier("ocrExecutor") Executor ocrExecutor,
-      PdfTextoNativo pdfNativo,
-      DocumentoCacheStore documentoCache) {
+      DocumentoTextoOcrRepository ocrRepository,
+      @Qualifier("ocrExecutor") Executor ocrExecutor) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
+    this.ocrRepository = ocrRepository;
     this.ocrExecutor = ocrExecutor;
-    this.pdfNativo = pdfNativo;
-    this.documentoCache = documentoCache;
   }
 
   public AnalyzeBatchResponse analyzeBatch(AnalyzeBatchRequest request) {
@@ -168,6 +167,12 @@ public class OcrAzureBatchService {
     if (!StringUtils.hasText(request.fileId())) {
       throw ApiException.badRequest("fileId requerido.");
     }
+    if (!layoutService.isConfigured()) {
+      throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "AZURE_NOT_CONFIGURED",
+          "Azure Document Intelligence no configurado.");
+    }
 
     String sessionId = request.sessionId().trim();
     String fileId = request.fileId().trim();
@@ -184,34 +189,9 @@ public class OcrAzureBatchService {
             ? stored.codigoTipoDocumento()
             : (tipo == null ? "DOCUMENTO" : tipo);
 
-    long inicio = System.nanoTime();
-    String hash = stored.bytes() == null ? null : DocumentoCacheStore.sha256(stored.bytes());
-    var cacheado = hash == null ? java.util.Optional.<DocumentoCacheStore.Hit>empty() : documentoCache.buscar(hash, DocumentoCacheStore.VERSION_OCR);
-    if (cacheado.isPresent() && StringUtils.hasText(cacheado.get().textoOcr())) {
-      return respuestaDe(fileId, stored.nombreOriginal(), tipoFinal, true, "Recuperado de caché.", 0.99,
-          cacheado.get().textoOcr(), "LEGIBLE", "CACHE", ms(inicio));
-    }
-    var nativo = pdfNativo.extraerSiDenso(stored.bytes());
-    if (nativo.isPresent()) {
-      if (hash != null) {
-        documentoCache.guardar(hash, DocumentoCacheStore.VERSION_OCR, "PDF_NATIVO", nativo.get(), null);
-      }
-      return respuestaDe(fileId, stored.nombreOriginal(), tipoFinal, true, "PDF con texto nativo.", 0.95,
-          nativo.get(), "LEGIBLE", "PDF_NATIVO", ms(inicio));
-    }
-
-    if (!layoutService.isConfigured()) {
-      throw new ApiException(
-          HttpStatus.SERVICE_UNAVAILABLE,
-          "AZURE_NOT_CONFIGURED",
-          "Azure Document Intelligence no configurado.");
-    }
     AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal);
     String estado = item.legible() ? "LEGIBLE" : "REVISAR";
-    if (hash != null && StringUtils.hasText(item.textoExtraido())) {
-      documentoCache.guardar(hash, DocumentoCacheStore.VERSION_OCR, "AZURE", item.textoExtraido(), null);
-    }
-    return respuestaDe(
+    return new AnalyzeSingleResponse(
         item.fileId(),
         stored.nombreOriginal(),
         item.tipoDocumento(),
@@ -221,25 +201,25 @@ public class OcrAzureBatchService {
         item.textoExtraido(),
         estado,
         "AZURE",
-        ms(inicio));
+        null);
   }
 
-  private static int ms(long inicioNano) {
-    return (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - inicioNano) / 1_000_000L);
+  public LayoutExtractResult evaluarYExtraer(byte[] bytes, String mimeType) {
+    if (bytes == null || bytes.length == 0) {
+      throw ApiException.badRequest("file requerido.");
+    }
+    if (!layoutService.isConfigured()) {
+      throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "AZURE_NOT_CONFIGURED",
+          "Azure Document Intelligence no configurado.");
+    }
+    return layoutService.evaluarYExtraer(bytes, mimeType);
   }
 
-  private static AnalyzeSingleResponse respuestaDe(
-      String fileId,
-      String fileName,
-      String tipo,
-      boolean legible,
-      String mensaje,
-      double confianza,
-      String texto,
-      String estado,
-      String origen,
-      int duracionMs) {
-    return new AnalyzeSingleResponse(fileId, fileName, tipo, legible, mensaje, confianza, texto, estado, origen, duracionMs);
+  public String extraerTexto(byte[] bytes, String mimeType) {
+    LayoutExtractResult layout = evaluarYExtraer(bytes, mimeType);
+    return layout.texto() == null ? "" : layout.texto();
   }
 
   public ReuploadResponse reupload(
@@ -281,21 +261,25 @@ public class OcrAzureBatchService {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String sessionId = request.sessionId().trim();
-    String content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
-    String previo = cache.getConsolidated(sessionId);
-    if (!StringUtils.hasText(previo)) {
-      previo = cargaDocumentoService.textoConsolidado(sessionId);
+    StringBuilder unido = new StringBuilder();
+    for (DocumentoTextoOcr row : ocrRepository.findByIdExpedienteOrderByCreatedAtAsc(sessionId)) {
+      if (row == null || "consolidado".equals(row.getIdDocumento()) || !StringUtils.hasText(row.getTextoOcr())) {
+        continue;
+      }
+      String tipo = StringUtils.hasText(row.getTipoDocumento()) ? row.getTipoDocumento() : "DOCUMENTO";
+      unido.append("=== DOCUMENTO: ").append(tipo).append(" ===\n");
+      unido.append(row.getTextoOcr().trim()).append("\n\n");
     }
-    if (OcrExpedienteTexto.contarDocumentos(previo) > OcrExpedienteTexto.contarDocumentos(content)) {
-      content = previo;
+    String content = unido.toString().trim();
+    if (!StringUtils.hasText(content)) {
+      content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
     }
     cache.putConsolidated(sessionId, content);
-    var principal = AuthContext.get();
-    if (StringUtils.hasText(content)) {
-      cargaDocumentoService.persistirTextoConsolidado(
-          sessionId, principal == null ? null : principal.tenantId(), content);
-      LOG.info("[OCR OK] Texto consolidado y persistido en app.documento_texto_ocr");
-    }
+    int confianza = 100;
+    cargaDocumentoService.guardarResultadoOcr(
+        sessionId,
+        new DocumentoOcrResultadoDTO(
+            "consolidado", "consolidado", "CONSOLIDADO", content, null, "LEGIBLE", null, confianza));
     return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
   }
 
@@ -305,9 +289,6 @@ public class OcrAzureBatchService {
     }
     String id = sessionId.trim();
     String content = cache.getConsolidated(id);
-    if (content == null) {
-      content = cargaDocumentoService.textoConsolidado(id);
-    }
     if (content == null) {
       throw ApiException.notFound("Caché OCR no encontrada o expirada para sessionId=" + id);
     }

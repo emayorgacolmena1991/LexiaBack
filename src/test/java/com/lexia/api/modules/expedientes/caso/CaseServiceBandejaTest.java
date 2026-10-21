@@ -9,7 +9,7 @@ import static org.mockito.Mockito.when;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
-import com.lexia.api.modules.expedientes.escrituracion.ExpedienteEstadoService;
+import com.lexia.api.modules.expedientes.escrituracion.secuencial.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
 import com.lexia.api.modules.identity.AppUser;
