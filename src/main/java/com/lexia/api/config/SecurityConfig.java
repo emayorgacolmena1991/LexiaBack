@@ -117,6 +117,15 @@ public class SecurityConfig {
                         paths.matcher(
                             HttpMethod.POST,
                             "/api/v1/expedientes/{id}/escrituracion/minutas"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/minutas/{tipoMinuta}/generar-borrador"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/escrituracion/captura-biess"),
+                        paths.matcher(
+                            HttpMethod.POST,
+                            "/api/v1/expedientes/{id}/extract-biess-screenshot"),
                         paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/stages/advance"),
                         paths.matcher(
                             HttpMethod.POST,
@@ -144,11 +153,15 @@ public class SecurityConfig {
                         paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-single"),
                         paths.matcher(HttpMethod.POST, "/api/v1/documents/reupload"),
                         paths.matcher(
-                            HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text")))
+                            HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text"),
+                        paths.matcher("/api/v1/escrituracion/ingesta-masiva/**"),
+                        // Coactivas: la SPA en :4200 manda la cookie de sesión; el CSRF se desincroniza en PATCH.
+                        paths.matcher("/api/v1/coactivas/**")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(
+                        paths.matcher("/error"),
                         paths.matcher("/api/v1/health"),
                         paths.matcher("/actuator/health"),
                         paths.matcher("/actuator/info"),
@@ -160,7 +173,8 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/auth/csrf"),
                         paths.matcher("/api/v1/auth/invite/accept"),
                         paths.matcher("/api/v1/auth/password/forgot"),
-                        paths.matcher("/api/v1/auth/password/reset"))
+                        paths.matcher("/api/v1/auth/password/reset"),
+                        paths.matcher("/api/v1/escrituracion/ingesta-masiva/*/stream"))
                     .permitAll()
                     // TICKET-DEV-401B: /api/v1/cache/** (E03 consolidate + E04 cotejo) requiere sesión.
                     .requestMatchers(
@@ -170,6 +184,9 @@ public class SecurityConfig {
                         paths.matcher("/api/v1/productos-biess/**"),
                         paths.matcher("/api/v1/expedientes"),
                         paths.matcher("/api/v1/expedientes/**"),
+                        paths.matcher("/api/v1/minutas/**"),
+                        paths.matcher("/api/v1/escrituracion"),
+                        paths.matcher("/api/v1/escrituracion/**"),
                         paths.matcher("/api/v1/ia/**"),
                         paths.matcher("/api/v1/ocr/**"),
                         paths.matcher("/api/v1/documents/**"),

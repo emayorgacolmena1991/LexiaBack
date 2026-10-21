@@ -13,6 +13,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -61,6 +62,12 @@ public class CoactivaDelegadoService {
   }
 
   @Transactional(readOnly = true)
+  public List<DelegadoItem> delegadosActivos() {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    return listDelegados(AuthContext.require().tenantId()).stream().filter(DelegadoItem::activo).toList();
+  }
+
+  @Transactional(readOnly = true)
   public List<OficinaItem> oficinasAdmin() {
     authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
     return listOficinas(AuthContext.require().tenantId());
@@ -91,6 +98,25 @@ public class CoactivaDelegadoService {
   }
 
   @Transactional
+  public DelegadoItem actualizarResolucion(UUID id, String resolucionNumero, LocalDate resolucionFecha) {
+    authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
+    AuthPrincipal principal = AuthContext.require();
+    CoactivaDelegado delegado = require(principal.tenantId(), id);
+    delegado.update(
+        delegado.getNombre(),
+        delegado.getIdentificacion(),
+        delegado.getCargo(),
+        CoactivaTexto.blankToNull(resolucionNumero),
+        resolucionFecha,
+        delegado.getVigenteDesde(),
+        delegado.getVigenteHasta(),
+        delegado.getEmail(),
+        delegado.isActivo(),
+        principal.userId());
+    return toItem(delegado, codigosDe(principal.tenantId(), id));
+  }
+
+  @Transactional
   public void eliminarDelegado(UUID id) {
     authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
     AuthPrincipal principal = AuthContext.require();
@@ -104,6 +130,7 @@ public class CoactivaDelegadoService {
     authorization.requirePermission(CoactivaPermisos.CONFIGURAR);
     UUID tenantId = AuthContext.require().tenantId();
     String codigo = normalizarCodigoOficina(request.codigo());
+    rechazarNombreDeDelegado(tenantId, codigo, request.nombre());
     int sort = request.sortOrder() == null ? 99 : request.sortOrder();
     boolean activo = request.activo() == null || request.activo();
     CoactivaOficina oficina =
@@ -174,24 +201,61 @@ public class CoactivaDelegadoService {
     return codigo != null && oficinas.findByTenantIdAndCodigo(tenantId, codigo).isPresent();
   }
 
-  /** Mapea un texto libre ("PORTOVIEJO", "Of. Manta", "GYE") al código de oficina configurado. */
+  /** Mapea un texto libre ("PORTOVIEJO", "Of. Manta", "BAHIA", "GYE") al código del catálogo. */
   @Transactional(readOnly = true)
   public String resolverCodigoOficina(UUID tenantId, String texto) {
+    return resolverCodigo(texto, oficinas.findByTenantIdOrderBySortOrderAscNombreAsc(tenantId));
+  }
+
+  @Transactional(readOnly = true)
+  public List<OficinaItem> oficinasActivas() {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    return listOficinas(AuthContext.require().tenantId()).stream().filter(OficinaItem::activo).toList();
+  }
+
+  @Transactional(readOnly = true)
+  public Map<String, CoactivaOficina> oficinasPorCodigo(UUID tenantId) {
+    Map<String, CoactivaOficina> map = new HashMap<>();
+    for (CoactivaOficina oficina : oficinas.findByTenantIdOrderBySortOrderAscNombreAsc(tenantId)) {
+      map.put(oficina.getCodigo(), oficina);
+    }
+    return map;
+  }
+
+  /**
+   * Coincidencia normalizada contra el catálogo. Exacta primero ({@code MANTA} = {@code Manta});
+   * si no, la primera palabra ({@code BAHIA} = {@code Bahía de Caráquez}). Sin coincidencia, null:
+   * no se inventa un código que el combo no puede seleccionar.
+   */
+  public static String resolverCodigo(String texto, List<CoactivaOficina> catalogo) {
     String clave = CoactivaTexto.claveNombre(texto);
     if (clave.isEmpty()) {
       return null;
     }
-    if ("GYE".equals(clave) || clave.contains("GUAYAS")) {
+    if ("GYE".equals(clave) || "GUAYAS".equals(clave)) {
       clave = "GUAYAQUIL";
     }
-    for (CoactivaOficina oficina : oficinas.findByTenantIdOrderBySortOrderAscNombreAsc(tenantId)) {
-      String codigo = oficina.getCodigo();
+    String porPrefijo = null;
+    for (CoactivaOficina oficina : catalogo) {
+      if (!oficina.isActivo()) {
+        continue;
+      }
+      String codigo = CoactivaTexto.claveNombre(oficina.getCodigo().replace('_', ' '));
       String nombre = CoactivaTexto.claveNombre(oficina.getNombre());
-      if (clave.equals(codigo) || clave.contains(codigo) || clave.contains(nombre)) {
-        return codigo;
+      if (clave.equals(codigo) || clave.equals(nombre)) {
+        return oficina.getCodigo();
+      }
+      if (porPrefijo == null && clave.length() >= 4
+          && (nombre.startsWith(clave + " ") || codigo.startsWith(clave + " ")
+              || contienePalabra(clave, nombre) || contienePalabra(clave, codigo))) {
+        porPrefijo = oficina.getCodigo();
       }
     }
-    return CoactivaTexto.truncate(clave.replace(' ', '_'), 32);
+    return porPrefijo;
+  }
+
+  private static boolean contienePalabra(String frase, String palabra) {
+    return palabra.length() >= 4 && (" " + frase + " ").contains(" " + palabra + " ");
   }
 
   private List<OficinaItem> listOficinas(UUID tenantId) {
@@ -258,6 +322,21 @@ public class CoactivaDelegadoService {
         CoactivaTexto.blankToNull(request.email()),
         request.activo() == null || request.activo(),
         userId);
+  }
+
+  private void rechazarNombreDeDelegado(UUID tenantId, String codigo, String nombre) {
+    String clave = CoactivaTexto.claveNombre(nombre);
+    String[] tokens = clave.split(" ");
+    if (tokens.length < 2 || clave.contains(CoactivaTexto.claveNombre(codigo))) {
+      return;
+    }
+    boolean esDelegado =
+        delegados.findByTenantIdAndDeletedAtIsNullOrderByNombreAsc(tenantId).stream()
+            .map(d -> CoactivaTexto.claveNombre(d.getNombre()))
+            .anyMatch(dn -> Arrays.stream(tokens).allMatch(t -> t.length() >= 3 && dn.contains(t)));
+    if (esDelegado) {
+      throw ApiException.badRequest("El nombre de la oficina no puede ser el de un delegado.");
+    }
   }
 
   private static String normalizarCodigoOficina(String codigo) {

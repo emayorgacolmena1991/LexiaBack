@@ -1,7 +1,10 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchRequest;
@@ -39,16 +42,19 @@ public class OcrAzureBatchService {
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
   private final OcrSessionCacheService cache;
+  private final DocumentoTextoOcrRepository ocrRepository;
   private final Executor ocrExecutor;
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
       CargaDocumentoService cargaDocumentoService,
       OcrSessionCacheService cache,
+      DocumentoTextoOcrRepository ocrRepository,
       @Qualifier("ocrExecutor") Executor ocrExecutor) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
+    this.ocrRepository = ocrRepository;
     this.ocrExecutor = ocrExecutor;
   }
 
@@ -196,6 +202,24 @@ public class OcrAzureBatchService {
         estado);
   }
 
+  public LayoutExtractResult evaluarYExtraer(byte[] bytes, String mimeType) {
+    if (bytes == null || bytes.length == 0) {
+      throw ApiException.badRequest("file requerido.");
+    }
+    if (!layoutService.isConfigured()) {
+      throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "AZURE_NOT_CONFIGURED",
+          "Azure Document Intelligence no configurado.");
+    }
+    return layoutService.evaluarYExtraer(bytes, mimeType);
+  }
+
+  public String extraerTexto(byte[] bytes, String mimeType) {
+    LayoutExtractResult layout = evaluarYExtraer(bytes, mimeType);
+    return layout.texto() == null ? "" : layout.texto();
+  }
+
   public ReuploadResponse reupload(
       String sessionId, String fileId, String tipoDocumento, MultipartFile file) {
     if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(fileId)) {
@@ -235,8 +259,25 @@ public class OcrAzureBatchService {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String sessionId = request.sessionId().trim();
-    String content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
+    StringBuilder unido = new StringBuilder();
+    for (DocumentoTextoOcr row : ocrRepository.findByIdExpedienteOrderByCreatedAtAsc(sessionId)) {
+      if (row == null || "consolidado".equals(row.getIdDocumento()) || !StringUtils.hasText(row.getTextoOcr())) {
+        continue;
+      }
+      String tipo = StringUtils.hasText(row.getTipoDocumento()) ? row.getTipoDocumento() : "DOCUMENTO";
+      unido.append("=== DOCUMENTO: ").append(tipo).append(" ===\n");
+      unido.append(row.getTextoOcr().trim()).append("\n\n");
+    }
+    String content = unido.toString().trim();
+    if (!StringUtils.hasText(content)) {
+      content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
+    }
     cache.putConsolidated(sessionId, content);
+    int confianza = 100;
+    cargaDocumentoService.guardarResultadoOcr(
+        sessionId,
+        new DocumentoOcrResultadoDTO(
+            "consolidado", "consolidado", "CONSOLIDADO", content, null, "LEGIBLE", null, confianza));
     return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
   }
 
@@ -278,6 +319,21 @@ public class OcrAzureBatchService {
             item.motivo(),
             item.scoreConfianza(),
             item.textoExtraido()));
+    int confianza =
+        (int)
+            Math.round(
+                item.scoreConfianza() <= 1 ? item.scoreConfianza() * 100 : item.scoreConfianza());
+    cargaDocumentoService.guardarResultadoOcr(
+        sessionId,
+        new com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO(
+            item.fileId(),
+            stored.nombreOriginal(),
+            item.tipoDocumento(),
+            item.textoExtraido(),
+            null,
+            item.legible() ? "LEGIBLE" : "REVISAR",
+            item.motivo(),
+            confianza));
     return item;
   }
 

@@ -51,6 +51,27 @@ public class CoactivaArchivoStorage {
     }
   }
 
+  public StoredFile storeBytes(UUID tenantId, UUID archivoId, String fileName, byte[] bytes) {
+    if (bytes == null || bytes.length == 0) {
+      throw ApiException.badRequest("El archivo está vacío.");
+    }
+    LocalDate today = LocalDate.now();
+    Path dir =
+        root.resolve(tenantId.toString())
+            .resolve(String.valueOf(today.getYear()))
+            .resolve(String.format("%02d", today.getMonthValue()));
+    Path target = dir.resolve(archivoId + "_" + CoactivaTexto.safeFileName(fileName));
+    try {
+      Files.createDirectories(dir);
+      Files.write(target, bytes);
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      return new StoredFile(target.toString(), HexFormat.of().formatHex(digest.digest(bytes)), bytes.length);
+    } catch (IOException | NoSuchAlgorithmException ex) {
+      throw new ApiException(
+          HttpStatus.INTERNAL_SERVER_ERROR, "COA_STORAGE_ERROR", "No se pudo guardar el archivo.");
+    }
+  }
+
   public byte[] read(CoactivaArchivo archivo) {
     Path path = Path.of(archivo.getStoragePath()).toAbsolutePath().normalize();
     if (!path.startsWith(root) || !Files.exists(path)) {

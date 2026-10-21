@@ -23,14 +23,17 @@ public class BorradorPromocionService {
   private final ExpedienteBorradorStore borradores;
   private final LegalCaseRepository legalCases;
   private final ObjectProvider<CaseService> caseServices;
+  private final ObjectProvider<ExpedienteSeguimientoService> seguimiento;
 
   public BorradorPromocionService(
       ExpedienteBorradorStore borradores,
       LegalCaseRepository legalCases,
-      ObjectProvider<CaseService> caseServices) {
+      ObjectProvider<CaseService> caseServices,
+      ObjectProvider<ExpedienteSeguimientoService> seguimiento) {
     this.borradores = borradores;
     this.legalCases = legalCases;
     this.caseServices = caseServices;
+    this.seguimiento = seguimiento;
   }
 
   @Transactional
@@ -66,6 +69,7 @@ public class BorradorPromocionService {
     }
     CaseDetailItem created = requireCases().createCase(toCreateRequest(draft, extra));
     borradores.marcarPromovido(draft.getId(), tenantId, created.id());
+    seguimiento.ifAvailable(service -> service.vincularBorrador(draft.getId().toString(), created.id()));
     return created.id();
   }
 

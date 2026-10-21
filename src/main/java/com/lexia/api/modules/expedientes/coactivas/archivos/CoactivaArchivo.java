@@ -16,9 +16,18 @@ import org.springframework.data.domain.Persistable;
 public class CoactivaArchivo implements Persistable<UUID> {
 
   public static final String EXPEDIENTE_ESCANEADO = "EXPEDIENTE_ESCANEADO";
+  public static final String EXPEDIENTE_UNIFICADO = "EXPEDIENTE_UNIFICADO";
   public static final String ACTA = "ACTA";
   public static final String VINCULADO = "VINCULADO";
   public static final String SIN_ASIGNAR = "SIN_ASIGNAR";
+
+  /** Estados de la validación documental por IA. */
+  public static final String IA_NO_APLICA = "NO_APLICA";
+  public static final String IA_ANALIZANDO = "ANALIZANDO";
+  public static final String IA_APROBADO = "APROBADO";
+  public static final String IA_RECHAZADO = "RECHAZADO";
+  public static final String IA_ERROR = "ERROR";
+  public static final String IA_APROBADO_MANUAL = "APROBADO_MANUAL";
 
   @Id private UUID id;
 
@@ -57,6 +66,9 @@ public class CoactivaArchivo implements Persistable<UUID> {
   @Column(name = "estado_vinculo", nullable = false, length = 16)
   private String estadoVinculo;
 
+  @Column(name = "vincular_manual", nullable = false)
+  private boolean vincularManual;
+
   @Column(name = "subido_por")
   private UUID subidoPor;
 
@@ -65,6 +77,33 @@ public class CoactivaArchivo implements Persistable<UUID> {
 
   @Column(name = "deleted_at")
   private Instant deletedAt;
+
+  @Column(name = "estado_ia", nullable = false, length = 16)
+  private String estadoIa = IA_NO_APLICA;
+
+  @Column(name = "motivo_rechazo_ia")
+  private String motivoRechazoIa;
+
+  @Column(name = "confianza_ia")
+  private Integer confianzaIa;
+
+  @Column(name = "checklist_ia")
+  private String checklistIa;
+
+  @Column(name = "etapa_ia", length = 32)
+  private String etapaIa;
+
+  @Column(name = "ia_analizado_at")
+  private Instant iaAnalizadoAt;
+
+  @Column(name = "override_por")
+  private UUID overridePor;
+
+  @Column(name = "override_at")
+  private Instant overrideAt;
+
+  @Column(name = "override_motivo", length = 600)
+  private String overrideMotivo;
 
   public static CoactivaArchivo create(
       UUID id,
@@ -112,6 +151,10 @@ public class CoactivaArchivo implements Persistable<UUID> {
     this.estadoVinculo = VINCULADO;
   }
 
+  public void marcarVinculoManual() {
+    this.vincularManual = true;
+  }
+
   public void vincularActa(UUID actaId) {
     this.actaId = actaId;
     this.estadoVinculo = VINCULADO;
@@ -123,6 +166,54 @@ public class CoactivaArchivo implements Persistable<UUID> {
 
   public void softDelete() {
     this.deletedAt = Instant.now();
+  }
+
+  // --- Validación IA ---------------------------------------------------------
+
+  /** Encola el archivo para análisis: limpia el resultado anterior (no toca el override). */
+  public void iniciarAnalisisIa(String etapa) {
+    this.estadoIa = IA_ANALIZANDO;
+    this.etapaIa = etapa;
+    this.motivoRechazoIa = null;
+    this.confianzaIa = null;
+    this.checklistIa = null;
+    this.iaAnalizadoAt = null;
+  }
+
+  public void registrarResultadoIa(
+      String estado, String motivoRechazo, Integer confianza, String checklistJson) {
+    this.estadoIa = estado;
+    this.motivoRechazoIa = motivoRechazo;
+    this.confianzaIa = confianza;
+    this.checklistIa = checklistJson;
+    this.iaAnalizadoAt = Instant.now();
+  }
+
+  public void registrarErrorIa(String motivo) {
+    registrarResultadoIa(IA_ERROR, motivo, null, null);
+  }
+
+  /** Override humano: el abogado/supervisor fuerza la aprobación. Conserva el motivo de la IA. */
+  public void aprobarManualmente(UUID usuarioId, String motivo) {
+    this.estadoIa = IA_APROBADO_MANUAL;
+    this.overridePor = usuarioId;
+    this.overrideAt = Instant.now();
+    this.overrideMotivo = motivo;
+  }
+
+  public boolean analizando() {
+    return IA_ANALIZANDO.equals(estadoIa);
+  }
+
+  /** PDF del juicio completo: el diagnóstico es por etapa, no por tipo de pieza. */
+  public static boolean esExpedienteUnificado(String tipo) {
+    return EXPEDIENTE_ESCANEADO.equals(tipo) || EXPEDIENTE_UNIFICADO.equals(tipo);
+  }
+
+  public boolean validoParaChecklist() {
+    return IA_NO_APLICA.equals(estadoIa)
+        || IA_APROBADO.equals(estadoIa)
+        || IA_APROBADO_MANUAL.equals(estadoIa);
   }
 
   public UUID getTenantId() {
@@ -175,5 +266,41 @@ public class CoactivaArchivo implements Persistable<UUID> {
 
   public Instant getCreatedAt() {
     return createdAt;
+  }
+
+  public String getEstadoIa() {
+    return estadoIa;
+  }
+
+  public String getMotivoRechazoIa() {
+    return motivoRechazoIa;
+  }
+
+  public Integer getConfianzaIa() {
+    return confianzaIa;
+  }
+
+  public String getChecklistIa() {
+    return checklistIa;
+  }
+
+  public String getEtapaIa() {
+    return etapaIa;
+  }
+
+  public Instant getIaAnalizadoAt() {
+    return iaAnalizadoAt;
+  }
+
+  public UUID getOverridePor() {
+    return overridePor;
+  }
+
+  public Instant getOverrideAt() {
+    return overrideAt;
+  }
+
+  public String getOverrideMotivo() {
+    return overrideMotivo;
   }
 }

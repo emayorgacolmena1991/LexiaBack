@@ -1,14 +1,25 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoRequest;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.ResolucionDelegadoRequest;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ConfirmarEtapaRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TareaSugeridaItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BandejaResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CambioEtapaRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CatalogosResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteSelectorItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionRequest;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.OverrideIaRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ParticipanteItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ParticipanteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TimelineItem;
@@ -45,15 +56,39 @@ public class CoactivaExpedienteController {
 
   private final CoactivaExpedienteService service;
   private final CoactivaBandejaService bandeja;
+  private final CoactivaDelegadoService delegados;
 
-  public CoactivaExpedienteController(CoactivaExpedienteService service, CoactivaBandejaService bandeja) {
+  public CoactivaExpedienteController(
+      CoactivaExpedienteService service, CoactivaBandejaService bandeja, CoactivaDelegadoService delegados) {
     this.service = service;
     this.bandeja = bandeja;
+    this.delegados = delegados;
   }
 
   @GetMapping("/catalogos")
   public CatalogosResponse catalogos() {
     return bandeja.catalogos();
+  }
+
+  @GetMapping("/delegados")
+  public List<DelegadoItem> delegados() {
+    return delegados.delegadosActivos();
+  }
+
+  @PutMapping("/delegados/{id}")
+  public DelegadoItem actualizarDelegado(@PathVariable UUID id, @Valid @RequestBody DelegadoRequest request) {
+    return delegados.actualizarDelegado(id, request);
+  }
+
+  @PutMapping("/delegados/{id}/resolucion")
+  public DelegadoItem actualizarResolucion(
+      @PathVariable UUID id, @Valid @RequestBody ResolucionDelegadoRequest request) {
+    return delegados.actualizarResolucion(id, request.resolucionNumero(), request.resolucionFecha());
+  }
+
+  @GetMapping("/oficinas")
+  public List<OficinaItem> oficinas() {
+    return delegados.oficinasActivas();
   }
 
   @GetMapping("/expedientes")
@@ -64,9 +99,19 @@ public class CoactivaExpedienteController {
       @RequestParam(required = false) String semaforo,
       @RequestParam(required = false) String estadoOperativo,
       @RequestParam(required = false) String q,
+      @RequestParam(required = false) Boolean sugerenciaIa,
       @RequestParam(defaultValue = "0") int page,
       @RequestParam(defaultValue = "25") int size) {
-    return bandeja.listar(new Filtro(oficina, delegadoId, etapa, semaforo, estadoOperativo, q), page, size);
+    return bandeja.listar(
+        new Filtro(oficina, delegadoId, etapa, semaforo, estadoOperativo, q, sugerenciaIa), page, size);
+  }
+
+  @GetMapping("/expedientes/selector")
+  public List<ExpedienteSelectorItem> selector(
+      @RequestParam(required = false) String query,
+      @RequestParam(defaultValue = "20") int limit,
+      @RequestParam(defaultValue = "true") boolean soloSinDocumento) {
+    return bandeja.selector(query, limit, soloSinDocumento);
   }
 
   @PostMapping("/expedientes")
@@ -141,6 +186,60 @@ public class CoactivaExpedienteController {
       @RequestPart("file") MultipartFile file,
       @RequestParam(required = false) String tipo) {
     return service.subirArchivo(id, file, tipo);
+  }
+
+  @PostMapping(value = "/expedientes/{id}/documento-unificado", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  @ResponseStatus(HttpStatus.CREATED)
+  public ArchivoItem documentoUnificado(@PathVariable UUID id, @RequestPart("file") MultipartFile file) {
+    return service.subirDocumentoUnificado(id, file);
+  }
+
+  @GetMapping("/expedientes/{id}/tareas-sugeridas")
+  public List<TareaSugeridaItem> tareasSugeridas(@PathVariable UUID id) {
+    return service.tareasSugeridas(id);
+  }
+
+  @PostMapping("/expedientes/{id}/tareas-sugeridas/{tareaId}/incorporar")
+  public TareaSugeridaItem incorporarTarea(@PathVariable UUID id, @PathVariable UUID tareaId) {
+    return service.incorporarTarea(id, tareaId);
+  }
+
+  @PostMapping("/expedientes/{id}/tareas-sugeridas/{tareaId}/descartar")
+  public TareaSugeridaItem descartarTarea(@PathVariable UUID id, @PathVariable UUID tareaId) {
+    return service.descartarTarea(id, tareaId);
+  }
+
+  @PostMapping("/expedientes/{id}/confirmar-etapa")
+  public ExpedienteDetalle confirmarEtapa(
+      @PathVariable UUID id, @Valid @RequestBody ConfirmarEtapaRequest request) {
+    return service.confirmarEtapa(id, request);
+  }
+
+  @PostMapping("/expedientes/batch-confirmar")
+  public List<ExpedienteDetalle> batchConfirmar(@Valid @RequestBody BatchConfirmarRequest request) {
+    return service.batchConfirmar(request);
+  }
+
+  @GetMapping("/expedientes/{id}/analisis")
+  public AnalisisResponse analisis(@PathVariable UUID id) {
+    return service.obtenerAnalisis(id);
+  }
+
+  @PostMapping("/expedientes/{id}/analisis")
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public AnalisisResponse reanalizar(@PathVariable UUID id) {
+    return service.reanalizar(id);
+  }
+
+  @GetMapping("/archivos/{archivoId}")
+  public ArchivoItem archivo(@PathVariable UUID archivoId) {
+    return service.obtenerArchivo(archivoId);
+  }
+
+  @PatchMapping("/archivos/{archivoId}/override-ia")
+  public ArchivoItem overrideIa(
+      @PathVariable UUID archivoId, @RequestBody(required = false) @Valid OverrideIaRequest request) {
+    return service.overrideIa(archivoId, request);
   }
 
   @GetMapping("/archivos/{archivoId}/contenido")

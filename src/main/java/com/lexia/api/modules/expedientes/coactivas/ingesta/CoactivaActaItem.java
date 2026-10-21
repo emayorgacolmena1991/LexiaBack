@@ -37,6 +37,9 @@ public class CoactivaActaItem implements Persistable<UUID> {
   @Column(name = "oficina_codigo", length = 32)
   private String oficinaCodigo;
 
+  @Column(name = "delegado_id")
+  private UUID delegadoId;
+
   @Column(name = "nro_operacion", length = 40)
   private String nroOperacion;
 
@@ -114,6 +117,10 @@ public class CoactivaActaItem implements Persistable<UUID> {
     this.fojas = fojas;
   }
 
+  public void setDelegadoId(UUID delegadoId) {
+    this.delegadoId = delegadoId;
+  }
+
   public void setResultado(String estadoMatch, UUID expedienteId, String errores) {
     this.estadoMatch = estadoMatch;
     this.expedienteId = expedienteId;
@@ -130,6 +137,10 @@ public class CoactivaActaItem implements Persistable<UUID> {
 
   public String getOficinaCodigo() {
     return oficinaCodigo;
+  }
+
+  public UUID getDelegadoId() {
+    return delegadoId;
   }
 
   public String getNroOperacion() {

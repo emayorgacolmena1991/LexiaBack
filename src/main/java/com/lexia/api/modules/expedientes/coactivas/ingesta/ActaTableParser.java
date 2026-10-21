@@ -5,11 +5,17 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.EnumSet;
+import java.util.Set;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
@@ -28,6 +34,8 @@ public final class ActaTableParser {
   private static final int HEADER_SCAN_ROWS = 10;
 
   enum Campo {
+    ZONAL,
+    UEC,
     OFICINA,
     OPERACION,
     JUICIO,
@@ -48,7 +56,7 @@ public final class ActaTableParser {
       String etapa,
       Integer fojas) {}
 
-  public record Resultado(List<FilaActa> filas, List<String> advertencias) {}
+  public record Resultado(List<FilaActa> filas, String uec, List<String> advertencias) {}
 
   private ActaTableParser() {}
 
@@ -98,6 +106,75 @@ public final class ActaTableParser {
     return List.of(grid);
   }
 
+  private static final Pattern UEC_EN_TEXTO =
+      Pattern.compile("(?i)\\bU\\.?\\s*E\\.?\\s*C\\b\\.?[:\\s-]+([\\p{L}]{4,})");
+  private static final Pattern FECHA_DMY =
+      Pattern.compile(
+          "(?i)fecha(?:\\s+de\\s+(?:acta|entrega|recepci[oó]n))?[^\\d]{0,40}(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})");
+  private static final Pattern FECHA_ISO =
+      Pattern.compile(
+          "(?i)fecha(?:\\s+de\\s+(?:acta|entrega|recepci[oó]n))?[^\\d]{0,40}(\\d{4})-(\\d{2})-(\\d{2})");
+
+  /** Fecha junto a la etiqueta «Fecha» en la cabecera del acta. Null si el documento no la trae. */
+  public static LocalDate fechaEnDocumento(String texto, List<List<List<String>>> tablas) {
+    return fechaJuntoAEtiqueta(unirCabecera(texto, tablas));
+  }
+
+  /** Primera localidad junto a la etiqueta UEC cuando la columna no vino en la tabla. */
+  public static String uecEnTexto(String texto) {
+    if (texto == null || texto.isBlank()) {
+      return null;
+    }
+    Matcher matcher = UEC_EN_TEXTO.matcher(texto);
+    return matcher.find() ? matcher.group(1) : null;
+  }
+
+  private static String unirCabecera(String texto, List<List<List<String>>> tablas) {
+    StringBuilder sb = new StringBuilder();
+    if (texto != null) {
+      sb.append(texto, 0, Math.min(texto.length(), 2500)).append('\n');
+    }
+    if (tablas == null) {
+      return sb.toString();
+    }
+    int filas = 0;
+    for (List<List<String>> tabla : tablas) {
+      for (List<String> row : tabla) {
+        if (filas++ >= 15) {
+          return sb.toString();
+        }
+        sb.append(String.join(" ", row)).append('\n');
+      }
+    }
+    return sb.toString();
+  }
+
+  private static LocalDate fechaJuntoAEtiqueta(String texto) {
+    if (texto == null || texto.isBlank()) {
+      return null;
+    }
+    Matcher iso = FECHA_ISO.matcher(texto);
+    if (iso.find()) {
+      LocalDate fecha = fechaValida(iso.group(1), iso.group(2), iso.group(3));
+      if (fecha != null) {
+        return fecha;
+      }
+    }
+    Matcher dmy = FECHA_DMY.matcher(texto);
+    if (dmy.find()) {
+      return fechaValida(dmy.group(3), dmy.group(2), dmy.group(1));
+    }
+    return null;
+  }
+
+  private static LocalDate fechaValida(String year, String month, String day) {
+    try {
+      return LocalDate.of(Integer.parseInt(year), Integer.parseInt(month), Integer.parseInt(day));
+    } catch (RuntimeException ex) {
+      return null;
+    }
+  }
+
   /** Tablas del {@code analyzeResult} de Azure Document Intelligence (modelo prebuilt-layout). */
   public static List<List<List<String>>> leerAzureLayout(JsonNode analyzeResult) {
     List<List<List<String>>> tablas = new ArrayList<>();
@@ -142,6 +219,8 @@ public final class ActaTableParser {
     Map<Campo, Integer> ultimaCabecera = null;
     int ultimaColumnas = -1;
     int numero = 1;
+    String uec = null;
+    boolean uecMixta = false;
 
     for (int t = 0; t < tablas.size(); t++) {
       List<List<String>> grid = tablas.get(t);
@@ -174,17 +253,41 @@ public final class ActaTableParser {
       ultimaColumnas = columnas;
       for (int r = headerRow + 1; r < grid.size(); r++) {
         List<String> row = grid.get(r);
+        String uecFila = celda(row, cabecera.get(Campo.UEC));
+        if (uecFila != null) {
+          if (uec == null) {
+            uec = uecFila;
+          } else if (!CoactivaTexto.claveNombre(uec).equals(CoactivaTexto.claveNombre(uecFila))) {
+            uecMixta = true;
+          }
+        }
         FilaActa fila = mapear(row, cabecera, numero);
         if (fila != null) {
+          String oficina = distinguirOficina(row, cabecera, fila.oficina(), uecFila);
+          if (!Objects.equals(oficina, fila.oficina())) {
+            fila =
+                new FilaActa(
+                    fila.fila(),
+                    oficina,
+                    fila.operacion(),
+                    fila.juicio(),
+                    fila.deudor(),
+                    fila.cedula(),
+                    fila.etapa(),
+                    fila.fojas());
+          }
           filas.add(fila);
           numero++;
         }
       }
     }
+    if (uecMixta) {
+      advertencias.add("La columna UEC trae más de un valor; la cabecera usa el primero.");
+    }
     if (filas.isEmpty()) {
       advertencias.add("No se encontraron filas de expedientes en el archivo.");
     }
-    return new Resultado(filas, advertencias);
+    return new Resultado(filas, uec, advertencias);
   }
 
   static Map<Campo, Integer> detectarCabecera(List<String> row) {
@@ -220,7 +323,15 @@ public final class ActaTableParser {
     if (h.contains("FOJA")) {
       return Optional.of(Campo.FOJAS);
     }
-    if (h.contains("OFICINA") || h.contains("AGENCIA") || h.contains("SUCURSAL")) {
+    String compacto = h.replace(" ", "");
+    if (h.contains("ZONAL") || h.equals("ZONA")) {
+      return Optional.of(Campo.ZONAL);
+    }
+    if (compacto.equals("UEC") || h.contains("UNIDAD EJECUTORA")) {
+      return Optional.of(Campo.UEC);
+    }
+    if (!h.contains("ZONAL")
+        && (h.contains("OFICINA") || h.contains("AGENCIA") || h.contains("SUCURSAL"))) {
       return Optional.of(Campo.OFICINA);
     }
     if (h.contains("DEUDOR") || h.contains("NOMBRE") || h.contains("CLIENTE") || h.contains("TITULAR")
@@ -249,7 +360,14 @@ public final class ActaTableParser {
       return null;
     }
     return new FilaActa(
-        numero, oficina, operacion, CoactivaTexto.normalizarJuicio(juicioRaw), deudor, cedula, etapa, fojas);
+        numero,
+        oficina,
+        operacion,
+        CoactivaTexto.normalizarJuicio(juicioRaw),
+        CoactivaTexto.sanitizarDeudor(deudor),
+        cedula,
+        etapa,
+        fojas);
   }
 
   private static List<FilaActa> heuristica(List<List<String>> grid, int desde) {
@@ -271,9 +389,61 @@ public final class ActaTableParser {
           deudor = cell.trim();
         }
       }
-      filas.add(new FilaActa(numero++, null, null, juicio.get(), deudor, cedula, null, null));
+      filas.add(new FilaActa(numero++, null, null, juicio.get(), CoactivaTexto.sanitizarDeudor(deudor), cedula, null, null));
     }
     return filas;
+  }
+
+  /**
+   * La columna OFICINA es la agencia (Bahía, Calceta). ZONAL y UEC suelen repetir Portoviejo; si el
+   * OCR las deja bajo el encabezado de oficina, se busca en la fila otra localidad distinta.
+   */
+  static String distinguirOficina(
+      List<String> row, Map<Campo, Integer> cabecera, String oficina, String uec) {
+    String zonal = celda(row, cabecera.get(Campo.ZONAL));
+    if (oficina != null && !misma(oficina, uec) && !misma(oficina, zonal)) {
+      return oficina;
+    }
+    Set<Campo> usadas =
+        EnumSet.of(
+            Campo.ZONAL,
+            Campo.UEC,
+            Campo.OFICINA,
+            Campo.OPERACION,
+            Campo.JUICIO,
+            Campo.ANIO,
+            Campo.DEUDOR,
+            Campo.CEDULA,
+            Campo.ETAPA,
+            Campo.FOJAS);
+    for (int i = 0; i < row.size(); i++) {
+      if (usada(cabecera, usadas, i)) {
+        continue;
+      }
+      String cell = CoactivaTexto.blankToNull(row.get(i));
+      if (cell == null || !cell.matches("[A-Za-zÁÉÍÓÚÜáéíóúüÑñ]{4,16}")) {
+        continue;
+      }
+      if (misma(cell, uec) || misma(cell, zonal) || misma(cell, oficina)) {
+        continue;
+      }
+      return cell;
+    }
+    return oficina;
+  }
+
+  private static boolean usada(Map<Campo, Integer> cabecera, Set<Campo> campos, int index) {
+    for (Campo campo : campos) {
+      Integer col = cabecera.get(campo);
+      if (col != null && col == index) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean misma(String a, String b) {
+    return a != null && b != null && CoactivaTexto.claveNombre(a).equals(CoactivaTexto.claveNombre(b));
   }
 
   private static String celda(List<String> row, Integer index) {

@@ -6,6 +6,7 @@ import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.PrevalidacionDocumentoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
+import com.lexia.api.modules.expedientes.caso.ExpedienteSeguimientoService;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.DatosExtraidosDTO;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionDocumento;
 import com.lexia.api.modules.ia.ocr.AzureOcrService;
@@ -17,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
@@ -37,18 +39,21 @@ public class ProcesamientoDocumentalService {
   private final TenantGovernanceService governance;
   private final ObjectMapper objectMapper;
   private final Executor ocrExecutor;
+  private final ObjectProvider<ExpedienteSeguimientoService> seguimiento;
 
   public ProcesamientoDocumentalService(
       AzureOcrService azureOcrService,
       CargaDocumentoService cargaDocumentoService,
       @Autowired(required = false) TenantGovernanceService governance,
       ObjectMapper objectMapper,
-      @Qualifier("ocrExecutor") Executor ocrExecutor) {
+      @Qualifier("ocrExecutor") Executor ocrExecutor,
+      ObjectProvider<ExpedienteSeguimientoService> seguimiento) {
     this.azureOcrService = azureOcrService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.governance = governance;
     this.objectMapper = objectMapper;
     this.ocrExecutor = ocrExecutor;
+    this.seguimiento = seguimiento;
   }
 
   @Async
@@ -126,6 +131,7 @@ public class ProcesamientoDocumentalService {
         total == 0 ? "ERROR" : (huboErrorGrave && legibles == 0 ? "ERROR" : "COMPLETADA");
     cargaDocumentoService.completarPrevalidacion(
         idExpediente, estadoGlobal, confianza, legibles, total, resultados);
+    seguimiento.ifAvailable(service -> service.registrarAnalisisSiExpediente(idExpediente));
   }
 
   private DocOutcome procesarUnDocumento(

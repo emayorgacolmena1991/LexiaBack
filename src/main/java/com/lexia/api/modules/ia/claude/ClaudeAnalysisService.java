@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
-import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
+import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.io.IOException;
 import java.net.URI;
@@ -41,9 +43,14 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String EXPEDIENTE_TOOL_NAME = ProcesarExpedienteCompletoPayload.TOOL_NAME;
   private static final String MINUTA_VIVIENDA_TOOL_NAME = "registrar_datos_minuta_vivienda";
   private static final String CAPTURA_BIESS_TOOL_NAME = "registrar_datos_captura_biess";
+  private static final String VALIDACION_TOOL_NAME = "validar_documento_coactivo";
+  private static final String DIAGNOSTICO_TOOL_NAME = "diagnosticar_expediente_coactivo";
+  private static final int MAX_CHARS_VALIDACION = 80_000;
+  private static final int MAX_TOKENS_VALIDACION = 1024;
+  private static final int MAX_CHARS_DIAGNOSTICO = 120_000;
+  private static final int MAX_TOKENS_DIAGNOSTICO = 4096;
   private static final int MAX_INTENTOS_CAPTURA_BIESS = 2;
   private static final int MAX_CHARS_CAPTURA = 20_000;
-  private static final int MAX_TOKENS = 4096;
   private static final int MAX_TOKENS_EXPEDIENTE = 8192;
   private static final int MAX_CHARS_OCR = 120_000;
   private static final int MAX_INTENTOS_POR_MODELO = 4;
@@ -68,17 +75,20 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private final String apiKey;
   private final List<String> modelos;
   private final ObjectMapper objectMapper;
+  private final ActoVariableCatalog actos;
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
   public ClaudeAnalysisService(
       @Value("${anthropic.api.key:}") String apiKey,
       @Value("${anthropic.models:claude-sonnet-5,claude-haiku-4-5-20251001}") String modelos,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      ActoVariableCatalog actos) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.modelos =
         Arrays.stream(modelos.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     this.objectMapper = objectMapper;
+    this.actos = actos;
   }
 
   @Override
@@ -158,7 +168,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
-  public ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
+  public ExtraccionMinutaVivienda extraerMinutaVivienda(
+      String ocrConsolidado, String productCode, String templateKind) {
     String texto = ocrConsolidado == null ? "" : ocrConsolidado;
     if (!StringUtils.hasText(texto.trim())) {
       return ExtraccionMinutaVivienda.error("Sin texto OCR consolidado para minuta.");
@@ -176,7 +187,8 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
               modelo,
               intento,
               MAX_INTENTOS_POR_MODELO);
-          HttpResponse<String> res = enviar(construirBodyMinutaVivienda(modelo, texto));
+          HttpResponse<String> res =
+              enviar(construirBodyMinutaVivienda(modelo, texto, productCode, templateKind));
           int status = res.statusCode();
           if (status == 200) {
             JsonNode root = objectMapper.readTree(res.body());
@@ -184,9 +196,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
               return ExtraccionMinutaVivienda.error(
                   "Respuesta truncada (max_tokens) al extraer minuta.");
             }
-            MinutaViviendaData data = leerToolUse(root, MinutaViviendaData.class);
-            if (data != null) {
-              return ExtraccionMinutaVivienda.ok(data);
+            JsonNode input = leerToolInput(root);
+            if (input != null) {
+              return ExtraccionMinutaVivienda.ok(MinutaVariableBinder.bind(input, objectMapper));
             }
             ultimoDiagnostico = "modelo=" + modelo + " sin tool_use minuta válido";
           } else if (status == 429 || status >= 500) {
@@ -213,6 +225,112 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
+  public ValidacionDocumentoJson validarDocumento(String systemPrompt, String textoDocumento) {
+    String texto = textoDocumento == null ? "" : textoDocumento;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto OCR para validar el documento.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("ANTHROPIC_API_KEY no configurada.");
+    }
+    String prompt =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Valida el documento invocando " + VALIDACION_TOOL_NAME + ".";
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+        try {
+          HttpResponse<String> res = enviar(construirBodyValidacion(modelo, prompt, texto));
+          int status = res.statusCode();
+          if (status == 200) {
+            JsonNode root = objectMapper.readTree(res.body());
+            if ("max_tokens".equals(root.path("stop_reason").asText())) {
+              return ValidacionDocumentoJson.error("Respuesta truncada (max_tokens) al validar.");
+            }
+            JsonNode input = leerToolInput(root);
+            if (input != null && input.isObject()) {
+              LOG.info("Claude validación documental OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(objectMapper.writeValueAsString(input));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use " + VALIDACION_TOOL_NAME;
+          } else if (status == 429 || status == 529 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+            continue;
+          } else {
+            return ValidacionDocumentoJson.error(
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ValidacionDocumentoJson.error("Validación documental interrumpida.");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude validación documental: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo validar el documento con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ValidacionDocumentoJson diagnosticarCoactiva(String systemPrompt, String textoExpediente) {
+    String texto = textoExpediente == null ? "" : textoExpediente;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto OCR para diagnosticar el expediente.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("ANTHROPIC_API_KEY no configurada.");
+    }
+    String prompt =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Diagnostica el expediente invocando " + DIAGNOSTICO_TOOL_NAME + ".";
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+        try {
+          HttpResponse<String> res = enviar(construirBodyDiagnostico(modelo, prompt, texto));
+          int status = res.statusCode();
+          if (status == 200) {
+            JsonNode root = objectMapper.readTree(res.body());
+            if ("max_tokens".equals(root.path("stop_reason").asText())) {
+              return ValidacionDocumentoJson.error("Respuesta truncada (max_tokens) al diagnosticar.");
+            }
+            JsonNode input = leerToolInput(root);
+            if (input != null && input.isObject()) {
+              LOG.info("Claude diagnóstico coactivo OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(objectMapper.writeValueAsString(input));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use " + DIAGNOSTICO_TOOL_NAME;
+          } else if (status == 429 || status == 529 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+            continue;
+          } else {
+            return ValidacionDocumentoJson.error(
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ValidacionDocumentoJson.error("Diagnóstico coactivo interrumpido.");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude diagnóstico coactivo: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo diagnosticar el expediente con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
   public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     String texto = textoCaptura == null ? "" : textoCaptura;
     if (!StringUtils.hasText(texto.trim())) {
@@ -228,6 +346,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
           HttpResponse<String> res = enviar(construirBodyCapturaBiess(modelo, texto));
           int status = res.statusCode();
           if (status == 200) {
+            LOG.info("Claude captura BIESS modelo={} respuesta cruda: {}", modelo, res.body());
             DatosBiessMinuta data =
                 leerToolUse(objectMapper.readTree(res.body()), DatosBiessMinuta.class);
             if (data != null) {
@@ -256,26 +375,177 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
         "No se pudo leer la captura BIESS. Último: " + ultimoDiagnostico);
   }
 
+  private String construirBodyValidacion(String modelo, String systemPrompt, String texto)
+      throws IOException {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    ObjectNode estado = props.putObject("estado");
+    estado.put("type", "string");
+    estado.putArray("enum").add("APROBADO").add("RECHAZADO");
+    props
+        .putObject("confianza")
+        .put("type", "integer")
+        .put("description", "Confianza 0 a 100.");
+    props
+        .putObject("razon_rechazo")
+        .put("type", "string")
+        .put("description", "Motivo concreto si RECHAZADO; cadena vacía si APROBADO.");
+    ObjectNode checklist = props.putObject("checklist_cumplido");
+    checklist.put("type", "array");
+    checklist.putObject("items").put("type", "string");
+    schema.putArray("required").add("estado").add("confianza").add("razon_rechazo").add("checklist_cumplido");
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", MAX_TOKENS_VALIDACION);
+    body.put("system", systemPrompt);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", VALIDACION_TOOL_NAME);
+    tool.put("description", "Registra el dictamen de validación documental en JSON estricto.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", VALIDACION_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "Valida este documento. No inventes datos.\n\n<documento_ocr>\n"
+            + truncate(texto, MAX_CHARS_VALIDACION)
+            + "\n</documento_ocr>");
+    return objectMapper.writeValueAsString(body);
+  }
+
+  private String construirBodyDiagnostico(String modelo, String systemPrompt, String texto)
+      throws IOException {
+    ObjectNode doc = objectMapper.createObjectNode();
+    doc.put("type", "object");
+    ObjectNode docProps = doc.putObject("properties");
+    docProps.putObject("tipo").put("type", "string");
+    docProps.putObject("foja_inicio").put("type", "integer").put("description", "0 si no consta.");
+    docProps.putObject("foja_fin").put("type", "integer").put("description", "0 si no consta.");
+    docProps.putObject("presente").put("type", "boolean");
+    doc.putArray("required").add("tipo").add("presente");
+
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    props.putObject("porcentaje_completitud").put("type", "integer").put("description", "0 a 100.");
+    props.putObject("etapa_procesal_detectada").put("type", "string");
+    ObjectNode docs = props.putObject("documentos_identificados");
+    docs.put("type", "array");
+    docs.set("items", doc);
+    ObjectNode alertas = props.putObject("alertas_inconsistencias");
+    alertas.put("type", "array");
+    alertas.putObject("items").put("type", "string");
+    ObjectNode datos = props.putObject("datos_extraidos");
+    datos.put("type", "object");
+    ObjectNode datosProps = datos.putObject("properties");
+    datosProps.putObject("juicio").put("type", "string");
+    datosProps.putObject("operacion").put("type", "string");
+    datosProps.putObject("deudor").put("type", "string");
+    datosProps.putObject("monto_mora").put("type", "number");
+    props.putObject("siguiente_accion_sugerida").put("type", "string");
+    ObjectNode evidencia = objectMapper.createObjectNode();
+    evidencia.put("type", "object");
+    ObjectNode evProps = evidencia.putObject("properties");
+    evProps.putObject("documento_origen").put("type", "string");
+    evProps.putObject("foja_pagina").put("type", "integer");
+    evProps.putObject("fecha_documento").put("type", "string");
+    evProps.putObject("extracto_texto").put("type", "string");
+    ObjectNode etapa = props.putObject("etapa_sugerida");
+    etapa.put("type", "object");
+    ObjectNode etapaProps = etapa.putObject("properties");
+    etapaProps.putObject("codigo").put("type", "string");
+    etapaProps.putObject("nombre").put("type", "string");
+    etapaProps.putObject("justificacion_juridica").put("type", "string");
+    etapaProps.set("evidencia", evidencia);
+    etapa.putArray("required").add("codigo").add("justificacion_juridica").add("evidencia");
+    ObjectNode suf = props.putObject("suficiencia_documental");
+    suf.put("type", "object");
+    ObjectNode sufProps = suf.putObject("properties");
+    sufProps.putObject("porcentaje_completitud").put("type", "integer");
+    sufProps.putObject("estado_diagnostico").put("type", "string");
+    sufProps.putObject("requisitos_faltantes").put("type", "array").putObject("items").put("type", "string");
+    ObjectNode accionItem = objectMapper.createObjectNode();
+    accionItem.put("type", "object");
+    ObjectNode accionProps = accionItem.putObject("properties");
+    accionProps.putObject("codigo_accion").put("type", "string");
+    accionProps.putObject("titulo").put("type", "string");
+    accionProps.putObject("descripcion").put("type", "string");
+    accionProps.putObject("prioridad").put("type", "string");
+    ObjectNode acciones = props.putObject("acciones_sugeridas");
+    acciones.put("type", "array");
+    acciones.set("items", accionItem);
+    schema
+        .putArray("required")
+        .add("porcentaje_completitud")
+        .add("etapa_procesal_detectada")
+        .add("etapa_sugerida")
+        .add("documentos_identificados")
+        .add("alertas_inconsistencias")
+        .add("datos_extraidos")
+        .add("siguiente_accion_sugerida");
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", MAX_TOKENS_DIAGNOSTICO);
+    body.put("system", systemPrompt);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", DIAGNOSTICO_TOOL_NAME);
+    tool.put("description", "Registra el diagnóstico del expediente coactivo unificado.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", DIAGNOSTICO_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "Diagnostica la etapa procesal tentativa con este OCR consolidado. No inventes documentos, fojas ni extractos.\n\n<expediente_ocr>\n"
+            + truncate(texto, MAX_CHARS_DIAGNOSTICO)
+            + "\n</expediente_ocr>");
+    return objectMapper.writeValueAsString(body);
+  }
+
   private String construirBodyCapturaBiess(String modelo, String texto) throws IOException {
     ObjectNode schema = objectMapper.createObjectNode();
     schema.put("type", "object");
     ObjectNode props = schema.putObject("properties");
     ArrayNode required = schema.putArray("required");
-    for (String field : new String[] {"monto", "tasa", "plazo", "apoderado"}) {
+    for (String field :
+        new String[] {
+          "monto_aprobado",
+          "plazo_aprobado",
+          "cuota_aprobada",
+          "tasa_efectiva",
+          "valor_reposicion",
+          "porcentaje_valor_financiado"
+        }) {
       props
           .putObject(field)
           .put("type", "string")
-          .put("description", "Valor de " + field + " tal como aparece; cadena vacía si no está.");
+          .put(
+              "description",
+              "Valor de "
+                  + field
+                  + " tal como aparece en el texto, con unidades y separadores (ej. \"25 años\","
+                  + " \"8,69 %\", \"85.000,50\"). Cadena vacía si no consta.");
       required.add(field);
     }
+    props
+        .putObject("apoderado")
+        .put("type", "string")
+        .put("description", "Nombre del apoderado especial del BIESS, o cadena vacía.");
+    required.add("apoderado");
 
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
     body.put("max_tokens", 512);
-    body.put("system", CAPTURA_BIESS_PROMPT);
+    body.put("system", actos.capturaBiessPrompt());
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", CAPTURA_BIESS_TOOL_NAME);
-    tool.put("description", "Registra monto, tasa, plazo y apoderado de la captura BIESS.");
+    tool.put(
+        "description",
+        "Registra las cifras de DATOS APROBADOS PARA DESEMBOLSO (monto, plazo, cuota, tasa,"
+            + " valor de reposición, porcentaje financiado) y el apoderado BIESS.");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", CAPTURA_BIESS_TOOL_NAME);
     ObjectNode msg = body.putArray("messages").addObject();
@@ -286,76 +556,34 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     return objectMapper.writeValueAsString(body);
   }
 
-  private String construirBodyMinutaVivienda(String modelo, String texto) throws IOException {
+  private String construirBodyMinutaVivienda(
+      String modelo, String texto, String productCode, String templateKind) throws IOException {
+    ActoVariableCatalog.ActoVariableSchema schemaActo = actos.resolve(productCode, templateKind);
     ObjectNode schema = objectMapper.createObjectNode();
     schema.put("type", "object");
     ObjectNode props = schema.putObject("properties");
-    String[] fields = {
-      "nombre_conyuge_1",
-      "cedula_conyuge_1",
-      "nombre_conyuge_2",
-      "cedula_conyuge_2",
-      "profesion_conyuge_1",
-      "profesion_conyuge_2",
-      "canton_domicilio",
-      "nombre_afiliado",
-      "descripcion_inmuebles_antecedentes",
-      "descripcion_inmueble_hipoteca",
-      "parroquia_inmueble",
-      "canton_inmueble",
-      "provincia_inmueble",
-      "lindero_norte",
-      "lindero_sur",
-      "lindero_este",
-      "lindero_oeste",
-      "superficie_m2",
-      "estado_civil",
-      "monto_prestamo",
-      "monto_prestamo_letras",
-      "plazo_credito",
-      "tasa_interes_inicial",
-      "institucion_financiera_original",
-      "direccion_deudor",
-      "telefono_deudor",
-      "correo_deudor",
-      "ciudad_firma",
-      "fecha_firma"
-    };
-    ArrayNode required = schema.putArray("required");
-    for (String field : fields) {
-      ObjectNode prop = props.putObject(field);
-      prop.put("type", "string");
-      prop.put(
-          "description",
-          "Valor del campo "
-              + field
-              + ". Si no aparece en el OCR, usa exactamente nodata.");
-      required.add(field);
+    props.putObject("acto").put("type", "string").put("description", "Código del acto, sin cambiarlo.");
+    ObjectNode variables = props.putObject("variables");
+    variables.put("type", "object");
+    ObjectNode varProps = variables.putObject("properties");
+    ArrayNode requiredVars = variables.putArray("required");
+    for (String field : schemaActo.camposIa()) {
+      varProps
+          .putObject(field)
+          .put("type", "string")
+          .put("description", "Valor en el OCR. Cadena vacía si no consta. No redactes cláusulas.");
+      requiredVars.add(field);
     }
-
-    String system =
-        """
-        Eres un asistente legal experto en minutas y contratos de mutuo hipotecario BIESS (Ecuador).
-        Analiza el texto OCR del expediente y extrae exactamente los campos de la herramienta.
-        Campos de identidad/inmueble (minuta) y de crédito/contacto (contrato de mutuo).
-        REGLAS:
-        1. Si un dato no está presente o es ilegible, usa exactamente la cadena nodata.
-        2. No inventes montos, tasas, plazos, cédulas ni nombres.
-        3. monto_prestamo: cifra en números (ej. 45000.00). monto_prestamo_letras: en palabras.
-        4. institucion_financiera_original: banco acreedor anterior a cancelar (sustitución).
-        5. No agregues texto fuera de la herramienta.
-        """;
+    schema.putArray("required").add("acto").add("variables");
 
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", modelo);
-    body.put("max_tokens", MAX_TOKENS);
-    body.put("system", system);
+    body.put("max_tokens", MAX_TOKENS_EXPEDIENTE);
+    body.put("system", actos.systemPrompt(productCode, templateKind));
 
     ObjectNode tool = body.putArray("tools").addObject();
     tool.put("name", MINUTA_VIVIENDA_TOOL_NAME);
-    tool.put(
-        "description",
-        "Registra datos para minuta de hipoteca y contrato de mutuo (vivienda hipotecada BIESS).");
+    tool.put("description", "Registra solo las variables del acto " + schemaActo.codigo() + ".");
     tool.set("input_schema", schema);
     body.putObject("tool_choice").put("type", "tool").put("name", MINUTA_VIVIENDA_TOOL_NAME);
 
@@ -363,11 +591,25 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     msg.put("role", "user");
     msg.put(
         "content",
-        "Extrae los datos de minuta/contrato de mutuo del siguiente expediente OCR.\n\n<expediente_ocr>\n"
+        "Extrae variables del acto "
+            + schemaActo.codigo()
+            + ". No redactes el documento.\n\n<expediente_ocr>\n"
             + truncate(texto, MAX_CHARS_OCR)
             + "\n</expediente_ocr>");
 
     return objectMapper.writeValueAsString(body);
+  }
+
+  private JsonNode leerToolInput(JsonNode root) {
+    for (JsonNode block : root.path("content")) {
+      if ("tool_use".equals(block.path("type").asText())) {
+        JsonNode input = block.path("input");
+        if (input.isObject()) {
+          return input;
+        }
+      }
+    }
+    return null;
   }
 
   private HttpResponse<String> enviar(String body) throws IOException, InterruptedException {

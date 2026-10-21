@@ -35,4 +35,9 @@ public interface CoactivaExpedienteRepository
       "select e.estadoOperativo, count(e) from CoactivaExpediente e "
           + "where e.tenantId = :tenantId and e.deletedAt is null group by e.estadoOperativo")
   List<Object[]> contarPorEstado(@Param("tenantId") UUID tenantId);
+
+  @Query(
+      "select count(e) from CoactivaExpediente e "
+          + "where e.tenantId = :tenantId and e.deletedAt is null and e.etapaSugeridaIa is not null")
+  long contarConEtapaSugerida(@Param("tenantId") UUID tenantId);
 }

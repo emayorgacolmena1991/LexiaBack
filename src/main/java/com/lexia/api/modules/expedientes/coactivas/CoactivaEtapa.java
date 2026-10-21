@@ -11,7 +11,9 @@ public enum CoactivaEtapa {
   OPI_EMITIDA("opi_emitida", "OPI emitida sin notificar"),
   NOTIFICACION_COA("notif_coa", "Notificación COA (OPI notificada)"),
   MEDIDAS_CAUTELARES("medidas", "Medidas cautelares"),
+  ESCRITO("escrito", "Atención a escrito / levantamiento"),
   EMBARGO("embargo", "Embargo de bienes"),
+  HONORARIOS("honorarios", "Aplicación y honorarios"),
   AVALUO("avaluo", "Avalúo"),
   REMATE("remate", "Remate"),
   CONVENIO("convenio", "Convenio de pago vigente"),
@@ -85,6 +87,12 @@ public enum CoactivaEtapa {
     }
     if (t.contains("avalu")) {
       return Optional.of(AVALUO);
+    }
+    if (t.contains("honorario")) {
+      return Optional.of(HONORARIOS);
+    }
+    if (t.contains("escrito") || t.contains("levantamiento")) {
+      return Optional.of(ESCRITO);
     }
     if (t.contains("embargo")) {
       return Optional.of(EMBARGO);

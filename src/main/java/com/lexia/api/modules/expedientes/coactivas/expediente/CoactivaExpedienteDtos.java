@@ -1,8 +1,12 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -37,6 +41,7 @@ public final class CoactivaExpedienteDtos {
       String etapaReportadaTexto,
       String etapaVerificada,
       String etapaLabel,
+      String etapaSugeridaIa,
       String semaforo,
       String semaforoMotivo,
       String siguienteAccion,
@@ -52,7 +57,8 @@ public final class CoactivaExpedienteDtos {
       long total,
       Map<String, Long> porSemaforo,
       Map<String, Long> porEtapa,
-      Map<String, Long> porEstado) {}
+      Map<String, Long> porEstado,
+      long sugerenciasIa) {}
 
   public record ParticipanteItem(
       UUID id,
@@ -119,7 +125,27 @@ public final class CoactivaExpedienteDtos {
       long tamanoBytes,
       String nroJuicioDetectado,
       String estadoVinculo,
-      Instant createdAt) {}
+      Instant createdAt,
+      String estadoIa,
+      String motivoRechazoIa,
+      Integer confianzaIa,
+      String checklistIa,
+      Instant iaAnalizadoAt,
+      UUID overridePor,
+      Instant overrideAt,
+      String overrideMotivo) {}
+
+  public record OverrideIaRequest(@Size(max = 600) String motivo) {}
+
+  public record ExpedienteSelectorItem(
+      UUID id,
+      String numeroJuicio,
+      String numeroOperacion,
+      String deudorNombre,
+      String deudorCedula,
+      String oficina,
+      String etapa,
+      boolean tieneDocumento) {}
 
   public record ExpedienteDetalle(
       UUID id,
@@ -134,6 +160,7 @@ public final class CoactivaExpedienteDtos {
       UUID asistenteUserId,
       Integer fojas,
       String estadoOperativo,
+      String estadoAnalisis,
       String etapaReportada,
       String etapaReportadaTexto,
       String etapaVerificada,
@@ -153,10 +180,16 @@ public final class CoactivaExpedienteDtos {
       String observaciones,
       List<ParticipanteItem> participantes,
       List<NotificacionItem> notificaciones,
+      List<ArchivoItem> archivos,
       List<String> etapasPermitidas,
       Instant createdAt,
       Instant updatedAt,
-      Long rowVersion) {}
+      Long rowVersion,
+      Integer completitudIa,
+      String estadoVerificacion,
+      String verificadoPorUsuario,
+      Instant fechaVerificacion,
+      String justificacionJuridica) {}
 
   public record CreateExpedienteRequest(
       @NotBlank @Size(max = 40) String nroJuicio,
@@ -189,6 +222,119 @@ public final class CoactivaExpedienteDtos {
   public record CambioEtapaRequest(
       @NotBlank String etapa, @Size(max = 600) String motivo, Boolean forzar) {}
 
+  public record DocumentoDetectado(String tipo, Integer fojaInicio, Integer fojaFin, boolean presente) {}
+
+  public record DocumentoProcesado(
+      String archivoId, String nombreArchivo, String fechaProcesamiento, String tipoPiezaDetectada) {}
+
+  public record HitoAcumulado(String hito, Integer foja, String fechaHito, String origenArchivoId) {}
+
+  public record EvidenciaEtapa(
+      String documentoOrigen, Integer fojaPagina, String fechaDocumento, String extractoTexto) {}
+
+  public record EtapaSugeridaIa(
+      String codigo, String nombre, String justificacionJuridica, EvidenciaEtapa evidencia) {}
+
+  public record SuficienciaDocumental(String estadoDiagnostico, List<String> requisitosFaltantes) {}
+
+  public record AccionSugeridaIa(String codigoAccion, String titulo, String descripcion, String prioridad) {}
+
+  public record TareaSugeridaItem(
+      UUID id,
+      UUID expedienteId,
+      UUID analisisId,
+      String titulo,
+      String descripcion,
+      String prioridad,
+      String estado,
+      boolean origenIa,
+      Instant creadoEn) {}
+
+  public record ConfirmarEtapaRequest(
+      @JsonAlias("etapa_confirmada_id") @NotBlank @Size(max = 32) String etapaConfirmadaId,
+      @Size(max = 600) String observaciones) {}
+
+  public record EvidenciaLote(
+      @JsonAlias("documento_origen") @NotBlank @Size(max = 240) String documentoOrigen,
+      @JsonAlias("foja_pagina") Integer fojaPagina,
+      @JsonAlias("fecha_documento") @Size(max = 40) String fechaDocumento,
+      @JsonAlias("extracto_texto") @Size(max = 500) String extractoTexto,
+      @JsonAlias("justificacion_juridica") @NotBlank @Size(max = 600) String justificacionJuridica) {}
+
+  public record BatchConfirmarItem(
+      @JsonAlias("expediente_id") @NotNull UUID expedienteId,
+      @JsonAlias("etapa_confirmada_id") @NotBlank @Size(max = 32) String etapaConfirmadaId,
+      @Size(max = 600) String observaciones,
+      @NotNull @Valid EvidenciaLote evidencia) {}
+
+  public record BatchConfirmarRequest(@NotEmpty @Size(max = 50) @Valid List<BatchConfirmarItem> items) {}
+
+  public record AnalisisResponse(
+      String estadoAnalisis,
+      UUID analisisId,
+      UUID archivoId,
+      String etapaPrompt,
+      Integer porcentajeCompletitud,
+      String etapaProcesalDetectada,
+      List<DocumentoDetectado> documentosIdentificados,
+      List<String> alertasInconsistencias,
+      Map<String, Object> datosExtraidos,
+      String siguienteAccionSugerida,
+      String error,
+      Instant createdAt,
+      List<DocumentoProcesado> documentosProcesados,
+      List<HitoAcumulado> hitosAcumulados,
+      UUID analisisPadreId,
+      EtapaSugeridaIa etapaSugerida,
+      SuficienciaDocumental suficienciaDocumental,
+      List<AccionSugeridaIa> accionesSugeridas) {
+
+    public static AnalisisResponse enCurso(UUID archivoId) {
+      return new AnalisisResponse(
+          "ANALIZANDO",
+          null,
+          archivoId,
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          Map.of(),
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          null,
+          null,
+          null,
+          List.of());
+    }
+
+    /** Expediente anterior al análisis: 200 con listas vacías, sin 404. */
+    public static AnalisisResponse sinDiagnostico(String estado) {
+      return new AnalisisResponse(
+          estado == null || estado.isBlank() ? "NO_APLICA" : estado,
+          null,
+          null,
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          Map.of(),
+          null,
+          null,
+          null,
+          List.of(),
+          List.of(),
+          null,
+          null,
+          null,
+          List.of());
+    }
+  }
+
   public record TimelineItem(
-      String tipo, String titulo, String detalle, Instant fecha, UUID usuarioId) {}
+      String tipo, String titulo, String detalle, Instant fecha, UUID usuarioId, UUID archivoId) {}
 }

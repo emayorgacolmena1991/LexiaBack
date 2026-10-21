@@ -8,6 +8,7 @@ import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivo;
 import com.lexia.api.modules.expedientes.coactivas.archivos.CoactivaArchivoRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.CargaMasivaResponse;
@@ -66,6 +67,7 @@ public class CargaMasivaService {
                 .orElse(null);
         if (expediente != null) {
           expedienteService.vincular(principal, archivo, expediente);
+          expedienteService.encolarAnalisis(archivo, expediente.getEtapaVerificada());
           vinculados++;
         }
       }
@@ -87,12 +89,28 @@ public class CargaMasivaService {
 
   @Transactional
   public ArchivoItem vincular(UUID archivoId, UUID expedienteId) {
+    CoactivaArchivo archivo = vincularInterno(archivoId, expedienteId);
+    return CoactivaExpedienteService.toItem(archivo);
+  }
+
+  @Transactional
+  public ExpedienteDetalle vincularManual(UUID archivoId, UUID expedienteId) {
+    vincularInterno(archivoId, expedienteId);
+    return expedienteService.detalle(expedienteId);
+  }
+
+  private CoactivaArchivo vincularInterno(UUID archivoId, UUID expedienteId) {
     authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
     AuthPrincipal principal = AuthContext.require();
     CoactivaArchivo archivo = expedienteService.requireArchivo(principal.tenantId(), archivoId);
+    if (!CoactivaArchivo.SIN_ASIGNAR.equals(archivo.getEstadoVinculo())) {
+      throw ApiException.conflict("El archivo ya está vinculado.");
+    }
     CoactivaExpediente expediente = expedienteService.require(principal.tenantId(), expedienteId);
+    archivo.marcarVinculoManual();
     expedienteService.vincular(principal, archivo, expediente);
-    return CoactivaExpedienteService.toItem(archivo);
+    expedienteService.encolarAnalisis(archivo, expediente.getEtapaVerificada());
+    return archivo;
   }
 
   @Transactional

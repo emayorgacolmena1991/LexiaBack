@@ -22,36 +22,66 @@ public interface AnalisisDocumentoService {
   }
 
   /**
-   * Extracción estructurada para minuta vivienda hipotecada (tool use JSON estricto).
-   * Default: no soportado.
+   * Extracción JSON estricta de las variables del acto. Sin producto/plantilla usa el esquema
+   * amplio. Default: no soportado.
    */
   default ExtraccionMinutaVivienda extraerMinutaVivienda(String ocrConsolidado) {
+    return extraerMinutaVivienda(ocrConsolidado, null, null);
+  }
+
+  default ExtraccionMinutaVivienda extraerMinutaVivienda(
+      String ocrConsolidado, String productCode, String templateKind) {
     return ExtraccionMinutaVivienda.error(
         "Extracción de minuta vivienda no disponible para este proveedor LLM.");
   }
 
   /**
-   * Captura de pantalla de la plataforma BIESS (fuente externa al expediente): solo monto, tasa,
-   * plazo y apoderado. Default: no soportado.
+   * Captura de pantalla BIESS ("DATOS APROBADOS PARA DESEMBOLSO"): monto, plazo, cuota, tasa,
+   * valor de reposición, porcentaje financiado y apoderado. Prompt: {@code PROMPT_BIESS_CAPTURA}.
+   * Default: no soportado.
    */
   default ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     return ExtraccionCapturaBiess.error(
         "Extracción de captura BIESS no disponible para este proveedor LLM.");
   }
 
-  /** Prompt compartido por los proveedores para la captura BIESS. */
-  String CAPTURA_BIESS_PROMPT =
-      """
-      Eres un asistente que lee capturas de pantalla de la plataforma del BIESS (Ecuador).
-      Del texto OCR de la captura extrae ÚNICAMENTE estos cuatro datos del crédito hipotecario:
-      - monto: monto del préstamo aprobado, tal como aparece (ej. $85,000.00).
-      - tasa: tasa de interés nominal anual (ej. 7.25%).
-      - plazo: plazo del crédito con su unidad (ej. 20 años o 240 meses).
-      - apoderado: nombre completo del apoderado especial del BIESS.
-      REGLAS:
-      1. Si un dato no aparece o es ilegible, devuelve cadena vacía para ese campo.
-      2. No inventes ni calcules valores. No extraigas otros campos.
-      """;
+  /**
+   * Validación documental (coactivas): system prompt del catálogo + texto OCR de UN documento.
+   * El proveedor fuerza salida JSON ({@code response_format: json} / tool use) con el esquema
+   * {@code {"estado": "APROBADO|RECHAZADO", "confianza": 0-100, "razon_rechazo": "...",
+   * "checklist_cumplido": [...]}} y devuelve el JSON crudo; el parseo lo hace el llamador.
+   * Default: no soportado.
+   */
+  default ValidacionDocumentoJson validarDocumento(String systemPrompt, String textoDocumento) {
+    return ValidacionDocumentoJson.error(
+        "Validación documental no disponible para este proveedor LLM.");
+  }
+
+  /**
+   * Diagnóstico del PDF único de coactivas. El prompt ya trae la etapa y el contrato JSON
+   * ({@code porcentaje_completitud}, documentos por foja, alertas, siguiente acción). Devuelve el
+   * JSON crudo; el parseo lo hace el llamador.
+   */
+  default ValidacionDocumentoJson diagnosticarCoactiva(String systemPrompt, String textoExpediente) {
+    return ValidacionDocumentoJson.error(
+        "Diagnóstico de expediente coactivo no disponible para este proveedor LLM.");
+  }
+
+  /** JSON crudo del LLM o error de transporte/configuración. */
+  record ValidacionDocumentoJson(String json, String error) {
+
+    public static ValidacionDocumentoJson ok(String json) {
+      return new ValidacionDocumentoJson(json, null);
+    }
+
+    public static ValidacionDocumentoJson error(String motivo) {
+      return new ValidacionDocumentoJson(null, motivo);
+    }
+
+    public boolean esError() {
+      return error != null;
+    }
+  }
 
   record ExtraccionCapturaBiess(DatosBiessMinuta data, String estado, String motivo) {
 

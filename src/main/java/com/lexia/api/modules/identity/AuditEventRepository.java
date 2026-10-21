@@ -11,6 +11,9 @@ import org.springframework.data.repository.query.Param;
 
 public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID> {
 
+  List<AuditEvent> findByTenantIdAndObjectTypeAndObjectIdOrderByCreatedAtDesc(
+      UUID tenantId, String objectType, UUID objectId);
+
   @Query(
       """
       SELECT e FROM AuditEvent e

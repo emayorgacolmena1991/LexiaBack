@@ -49,6 +49,19 @@ public final class CoactivaTexto {
     return clean.replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
   }
 
+  /**
+   * Nombre de deudor persistible: solo letras (con tildes y eñe) y un espacio entre palabras.
+   * Quita viñetas y ruido de OCR ({@code +}, {@code @}, {@code .}, números, etc.).
+   */
+  public static String sanitizarDeudor(String value) {
+    String clean = blankToNull(value);
+    if (clean == null) {
+      return null;
+    }
+    String letters = clean.replaceAll("[^A-Za-zÁÉÍÓÚÜáéíóúüÑñ ]", " ").replaceAll("\\s+", " ").trim();
+    return letters.isEmpty() ? null : letters.toUpperCase(Locale.ROOT);
+  }
+
   public static String soloDigitos(String value) {
     return value == null ? "" : value.replaceAll("\\D", "");
   }

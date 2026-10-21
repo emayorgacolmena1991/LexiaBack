@@ -36,6 +36,12 @@ public class CoactivaActa implements Persistable<UUID> {
   @Column(name = "oficina_codigo", length = 32)
   private String oficinaCodigo;
 
+  @Column(name = "uec_nombre", length = 120)
+  private String uecNombre;
+
+  @Column(name = "delegado_id")
+  private UUID delegadoId;
+
   @Column(name = "fecha_acta")
   private LocalDate fechaActa;
 
@@ -137,6 +143,16 @@ public class CoactivaActa implements Persistable<UUID> {
     this.archivoId = archivoId;
   }
 
+  public void setUecNombre(String uecNombre) {
+    this.uecNombre = uecNombre;
+    this.updatedAt = Instant.now();
+  }
+
+  public void setDelegadoId(UUID delegadoId) {
+    this.delegadoId = delegadoId;
+    this.updatedAt = Instant.now();
+  }
+
   public void setTotalItems(int totalItems) {
     this.totalItems = totalItems;
     this.updatedAt = Instant.now();
@@ -171,6 +187,14 @@ public class CoactivaActa implements Persistable<UUID> {
 
   public String getOficinaCodigo() {
     return oficinaCodigo;
+  }
+
+  public String getUecNombre() {
+    return uecNombre;
+  }
+
+  public UUID getDelegadoId() {
+    return delegadoId;
   }
 
   public LocalDate getFechaActa() {

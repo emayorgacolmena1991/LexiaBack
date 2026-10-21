@@ -35,13 +35,14 @@ class CargaDocumentoServiceTest {
   @Mock private DocumentoTextoOcrRepository ocr;
   @Mock private ProductoBiessService productos;
   @Mock private ExpedienteBorradorStore borradores;
+  @Mock private CaseDocumentoStore caseDocs;
 
   private CargaDocumentoService service;
 
   @BeforeEach
   void setUp() {
     AuthContext.set(new AuthPrincipal(USER, UUID.randomUUID(), TENANT, UUID.randomUUID()));
-    service = new CargaDocumentoService(actos, null, ocr, productos, borradores);
+    service = new CargaDocumentoService(actos, null, ocr, productos, borradores, caseDocs);
   }
 
   @AfterEach

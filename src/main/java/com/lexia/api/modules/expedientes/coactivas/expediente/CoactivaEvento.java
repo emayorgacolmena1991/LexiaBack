@@ -37,11 +37,25 @@ public class CoactivaEvento implements Persistable<UUID> {
   @Column(name = "usuario_id")
   private UUID usuarioId;
 
+  @Column(name = "archivo_id")
+  private UUID archivoId;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
   public static CoactivaEvento create(
       UUID tenantId, UUID expedienteId, String tipo, String titulo, String detalle, UUID usuarioId) {
+    return create(tenantId, expedienteId, tipo, titulo, detalle, usuarioId, null);
+  }
+
+  public static CoactivaEvento create(
+      UUID tenantId,
+      UUID expedienteId,
+      String tipo,
+      String titulo,
+      String detalle,
+      UUID usuarioId,
+      UUID archivoId) {
     CoactivaEvento e = new CoactivaEvento();
     e.id = UUID.randomUUID();
     e.tenantId = tenantId;
@@ -50,6 +64,7 @@ public class CoactivaEvento implements Persistable<UUID> {
     e.titulo = titulo.length() > 240 ? titulo.substring(0, 240) : titulo;
     e.detalle = detalle;
     e.usuarioId = usuarioId;
+    e.archivoId = archivoId;
     e.createdAt = Instant.now();
     return e;
   }
@@ -88,6 +103,10 @@ public class CoactivaEvento implements Persistable<UUID> {
 
   public UUID getUsuarioId() {
     return usuarioId;
+  }
+
+  public UUID getArchivoId() {
+    return archivoId;
   }
 
   public Instant getCreatedAt() {

@@ -1,6 +1,8 @@
 package com.lexia.api.modules.expedientes.caso;
 
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
+import com.lexia.api.modules.identity.AuditEvent;
+import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.tenancy.TenantParameterService;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -9,8 +11,8 @@ import java.util.Locale;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import com.lexia.api.modules.expedientes.escrituracion.CollectionFile;
-import com.lexia.api.modules.expedientes.escrituracion.CollectionFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.CollectionFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.CollectionFileRepository;
 import com.lexia.api.modules.expedientes.documentos.IngestionMode;
 import com.lexia.api.modules.expedientes.proceso.GateDef;
 import com.lexia.api.modules.expedientes.proceso.GateDefRepository;
@@ -21,8 +23,8 @@ import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
 import com.lexia.api.modules.expedientes.proceso.ValidationDef;
 import com.lexia.api.modules.expedientes.proceso.ValidationDefRepository;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -42,6 +44,7 @@ public class CaseBootstrapService {
   private final SlaCalendarService slaCalendar;
   private final CollectionFileRepository collectionFiles;
   private final WritingFileRepository writingFiles;
+  private final AuditEventRepository auditEvents;
 
   public CaseBootstrapService(
       ProcessDefinitionRepository processDefinitions,
@@ -57,7 +60,8 @@ public class CaseBootstrapService {
       TenantParameterService tenantParameters,
       SlaCalendarService slaCalendar,
       CollectionFileRepository collectionFiles,
-      WritingFileRepository writingFiles) {
+      WritingFileRepository writingFiles,
+      AuditEventRepository auditEvents) {
     this.processDefinitions = processDefinitions;
     this.stageDefs = stageDefs;
     this.caseStages = caseStages;
@@ -72,6 +76,7 @@ public class CaseBootstrapService {
     this.slaCalendar = slaCalendar;
     this.collectionFiles = collectionFiles;
     this.writingFiles = writingFiles;
+    this.auditEvents = auditEvents;
   }
 
   public void bootstrap(LegalCase legalCase, CreateCaseRequest request, UUID tenantId, UUID userId) {
@@ -232,11 +237,14 @@ public class CaseBootstrapService {
         CaseAction.create(
             tenantId,
             caseId,
-            "Expediente creado",
-            "CASE_CREATED",
+            "Creación de expediente",
+            "EXPEDIENTE_CREADO",
             "COMPLETED",
             userId,
             Instant.now()));
+    auditEvents.save(
+        AuditEvent.of(
+            tenantId, userId, "EXPEDIENTE_CREADO", "legal_case", caseId, "OK", null, null));
   }
 
   private static String blankToNull(String value) {

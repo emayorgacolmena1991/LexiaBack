@@ -1,11 +1,14 @@
 package com.lexia.api.modules.expedientes.coactivas.ingesta;
 
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
+import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaDetalle;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaHeaderRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaResumen;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.CargaMasivaResponse;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ConfirmacionResponse;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.GenerarExpedientesRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.VincularRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -51,10 +54,9 @@ public class CoactivaIngestaController {
   public ActaDetalle importarActa(
       @RequestPart("file") MultipartFile file,
       @RequestParam(required = false) String tipo,
-      @RequestParam(required = false) String oficinaCodigo,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaActa,
       @RequestParam(required = false) String titulo) {
-    return actas.importar(file, tipo, oficinaCodigo, fechaActa, titulo);
+    return actas.importar(file, tipo, fechaActa, titulo);
   }
 
   @PostMapping(value = "/actas/manual", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -63,7 +65,7 @@ public class CoactivaIngestaController {
     return actas.crearManual(request);
   }
 
-  @GetMapping("/actas/{id}")
+  @GetMapping({"/actas/{id}", "/actas/{id}/borrador"})
   public ActaDetalle detalleActa(@PathVariable UUID id) {
     return actas.detalle(id);
   }
@@ -71,6 +73,17 @@ public class CoactivaIngestaController {
   @PatchMapping("/actas/{id}")
   public ActaDetalle actualizarActa(@PathVariable UUID id, @Valid @RequestBody ActaRequest request) {
     return actas.actualizar(id, request);
+  }
+
+  @PatchMapping("/actas/{id}/header")
+  public ActaDetalle actualizarHeader(@PathVariable UUID id, @Valid @RequestBody ActaHeaderRequest request) {
+    return actas.actualizarHeader(id, request.delegadoId());
+  }
+
+  @PostMapping("/actas/{id}/generar-expedientes")
+  public ConfirmacionResponse generarExpedientes(
+      @PathVariable UUID id, @Valid @RequestBody GenerarExpedientesRequest request) {
+    return actas.generar(id, request.itemIds());
   }
 
   @PostMapping("/actas/{id}/confirmar")
@@ -91,6 +104,12 @@ public class CoactivaIngestaController {
   @PostMapping("/carga-masiva/{archivoId}/vincular")
   public ArchivoItem vincular(@PathVariable UUID archivoId, @Valid @RequestBody VincularRequest request) {
     return cargaMasiva.vincular(archivoId, request.expedienteId());
+  }
+
+  @PostMapping("/archivos/{archivoId}/vincular")
+  public ExpedienteDetalle vincularArchivo(
+      @PathVariable UUID archivoId, @Valid @RequestBody VincularRequest request) {
+    return cargaMasiva.vincularManual(archivoId, request.expedienteId());
   }
 
   @DeleteMapping("/carga-masiva/{archivoId}")

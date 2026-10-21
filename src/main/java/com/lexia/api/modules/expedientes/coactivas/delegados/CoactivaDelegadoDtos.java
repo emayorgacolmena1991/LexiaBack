@@ -46,5 +46,8 @@ public final class CoactivaDelegadoDtos {
       Boolean activo,
       List<String> oficinas) {}
 
+  public record ResolucionDelegadoRequest(
+      @Size(max = 120) String resolucionNumero, LocalDate resolucionFecha) {}
+
   public record CatalogosResponse(List<OficinaItem> oficinas, List<DelegadoItem> delegados) {}
 }

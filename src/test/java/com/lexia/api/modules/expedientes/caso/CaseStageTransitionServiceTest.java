@@ -54,6 +54,7 @@ class CaseStageTransitionServiceTest {
   @Mock private SlaCalendarService slaCalendar;
   @Mock private EjdGateEvaluationService gateEvaluation;
   @Mock private EjdConnectorDispatchService connectorDispatch;
+  @Mock private BorradorPromocionService promocion;
 
   @InjectMocks private CaseStageTransitionService transitionService;
 
@@ -98,6 +99,7 @@ class CaseStageTransitionServiceTest {
   @Test
   void advanceCompletesCurrentAndActivatesNext() {
     stubCaseAtE1();
+    when(promocion.asegurarExpediente(CASE_ID)).thenReturn(CASE_ID);
     when(caseValidations.findByCaseIdAndTenantIdOrderByCreatedAtAsc(CASE_ID, TENANT_ID))
         .thenReturn(List.of());
     when(stageTransitions.findByTenantIdAndProcessDefinitionIdAndFromStageCodeAndToStageCode(

@@ -1,0 +1,130 @@
+package com.lexia.api.modules.expedientes.coactivas.ia;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser.Parse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+class CoactivaDiagnosticoParserTest {
+
+  private CoactivaDiagnosticoParser parser;
+
+  @BeforeEach
+  void setUp() {
+    parser = new CoactivaDiagnosticoParser(new ObjectMapper());
+  }
+
+  @Test
+  void normalizaEtapaYFojas() {
+    Parse r =
+        parser.parse(
+            """
+            {"porcentaje_completitud": 85,
+             "etapa_procesal_detectada": "RATIFICACION DE MEDIDAS CAUTELARES",
+             "documentos_identificados": [
+               {"tipo": "PAGARE", "foja_inicio": 1, "foja_fin": 4, "presente": true},
+               {"tipo": "LIQUIDACION_ACTUALIZADA", "presente": false}
+             ],
+             "alertas_inconsistencias": ["Liquidación vencida."],
+             "datos_extraidos": {"juicio": "069-2019-00168", "monto_mora": 12500.00},
+             "siguiente_accion_sugerida": "Pedir liquidación en COVIS."}
+            """);
+    assertTrue(r.ok());
+    assertEquals(85, r.diagnostico().porcentajeCompletitud());
+    assertEquals("MEDIDAS_CAUTELARES", r.diagnostico().etapaNormalizada());
+    assertEquals(2, r.diagnostico().documentos().size());
+    assertEquals(1, r.diagnostico().documentos().get(0).fojaInicio());
+    assertNull(r.diagnostico().documentos().get(1).fojaInicio());
+    assertFalse(r.diagnostico().documentos().get(1).presente());
+    assertEquals("Pedir liquidación en COVIS.", r.diagnostico().siguienteAccion());
+    assertTrue(r.diagnostico().json().contains("MEDIDAS_CAUTELARES"));
+  }
+
+  @Test
+  void porcentajeDesdeDocumentosSiFalta() {
+    Parse r =
+        parser.parse(
+            """
+            {"documentos_identificados": [
+              {"tipo": "OPI", "presente": true},
+              {"tipo": "RAZON_NOTIFICACION", "presente": false}
+            ]}
+            """);
+    assertTrue(r.ok());
+    assertEquals(50, r.diagnostico().porcentajeCompletitud());
+  }
+
+  @Test
+  void conservaCuentasEmbargadasAnidadas() {
+    Parse r =
+        parser.parse(
+            """
+            {"datos_extraidos": {
+               "juicio": "025-2024-00026",
+               "nombre_garante_solidario": null,
+               "cuentas_embargadas": [
+                 {"numero_cuenta": "2200111111", "titular": "DEUDOR", "monto_retenido": 1250.50}
+               ]}}
+            """);
+    assertTrue(r.ok());
+    var datos = r.diagnostico().datosExtraidos();
+    assertTrue(datos.containsKey("nombre_garante_solidario"));
+    assertNull(datos.get("nombre_garante_solidario"));
+    var cuentas = (java.util.List<?>) datos.get("cuentas_embargadas");
+    assertEquals(1, cuentas.size());
+    assertEquals("2200111111", ((java.util.Map<?, ?>) cuentas.get(0)).get("numero_cuenta"));
+    Parse reparsed = parser.parse(r.diagnostico().json());
+    assertEquals(cuentas, reparsed.diagnostico().datosExtraidos().get("cuentas_embargadas"));
+  }
+
+  @Test
+  void tentativaUsaEtapaSugeridaYSuficiencia() {
+    Parse r =
+        parser.parse(
+            """
+            {"suficiencia_documental": {
+               "porcentaje_completitud": 88,
+               "requisitos_faltantes": ["Respuesta de la Superintendencia de Bancos"]
+             },
+             "etapa_sugerida": {
+               "codigo": "ETAPA_2_MEDIDAS_CAUTELARES",
+               "nombre": "Medidas Cautelares",
+               "justificacion_juridica": "Providencia de ratificación y oficios a la Superintendencia de Bancos.",
+               "evidencia": {
+                 "documento_origen": "Providencia_0901-2024-00452.pdf",
+                 "foja_pagina": 3,
+                 "fecha_documento": "2026-09-28",
+                 "extracto_texto": "Se decreta la retención de cuentas"
+               }
+             },
+             "acciones_sugeridas": [
+               {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "Solicitar liquidación actualizada", "prioridad": "ALTA"}
+             ]}
+            """);
+    assertTrue(r.ok());
+    assertEquals("MEDIDAS_CAUTELARES", r.diagnostico().etapaNormalizada());
+    assertEquals(88, r.diagnostico().porcentajeCompletitud());
+    assertEquals("Solicitar liquidación actualizada", r.diagnostico().siguienteAccion());
+    assertTrue(r.diagnostico().alertas().contains("Respuesta de la Superintendencia de Bancos"));
+    assertTrue(r.diagnostico().json().contains("Se decreta la retención de cuentas"));
+    assertTrue(r.diagnostico().json().contains("AMARILLO"));
+    assertTrue(r.diagnostico().json().contains("\"codigo\":\"MEDIDAS_CAUTELARES\""));
+    var tentativa = parser.tentativaDe(r.diagnostico().json());
+    assertEquals("MEDIDAS_CAUTELARES", tentativa.codigo());
+    assertEquals(3, tentativa.fojaPagina());
+    assertEquals("Se decreta la retención de cuentas", tentativa.extractoTexto());
+    assertEquals("AMARILLO", tentativa.estadoDiagnostico());
+    assertEquals("REQUERIR_LIQUIDACION", tentativa.acciones().get(0).codigo());
+  }
+
+  @Test
+  void vacioEsError() {
+    assertFalse(parser.parse("").ok());
+    assertFalse(parser.parse("no es json").ok());
+  }
+}

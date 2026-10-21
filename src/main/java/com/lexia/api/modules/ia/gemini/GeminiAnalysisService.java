@@ -7,9 +7,14 @@ import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
+import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
+import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
+import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload;
 import java.util.List;
 import java.util.Locale;
@@ -56,11 +61,15 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
 
   private final String apiKey;
   private final ObjectMapper objectMapper;
+  private final ActoVariableCatalog actos;
 
   public GeminiAnalysisService(
-      @Value("${gemini.api.key:}") String apiKey, ObjectMapper objectMapper) {
+      @Value("${gemini.api.key:}") String apiKey,
+      ObjectMapper objectMapper,
+      ActoVariableCatalog actos) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.objectMapper = objectMapper;
+    this.actos = actos;
   }
 
   @Override
@@ -92,7 +101,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     GenerateContentConfig config =
         GenerateContentConfig.builder()
             .responseMimeType("application/json")
-            .temperature(0.1f)
+            .temperature(0f)
             .maxOutputTokens(MAX_OUTPUT_TOKENS)
             .build();
 
@@ -144,6 +153,183 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
   }
 
   @Override
+  public ExtraccionMinutaVivienda extraerMinutaVivienda(
+      String ocrConsolidado, String productCode, String templateKind) {
+    String texto = ocrConsolidado == null ? "" : ocrConsolidado;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ExtraccionMinutaVivienda.error("Sin texto OCR consolidado para minuta.");
+    }
+    if (!isConfigured()) {
+      return ExtraccionMinutaVivienda.error("GEMINI_API_KEY no configurada.");
+    }
+    String system = actos.systemPrompt(productCode, templateKind);
+    Content content =
+        Content.fromParts(
+            Part.fromText(system),
+            Part.fromText(
+                "<expediente_ocr>\n" + truncate(texto, 120_000) + "\n</expediente_ocr>"));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0f)
+            .maxOutputTokens(MAX_OUTPUT_TOKENS)
+            .build();
+
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+          try {
+            String raw = client.models.generateContent(modelo, content, config).text();
+            if (!StringUtils.hasText(raw)) {
+              ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+              sleepBackoff(intento, false);
+              continue;
+            }
+            MinutaViviendaData data =
+                MinutaVariableBinder.bind(
+                    objectMapper.readTree(GeminiJsonSanitizer.limpiar(raw)), objectMapper);
+            return ExtraccionMinutaVivienda.ok(data);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini minuta {}", ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
+          }
+        }
+      }
+    }
+    return ExtraccionMinutaVivienda.error(
+        "No se pudieron extraer variables del acto. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ValidacionDocumentoJson validarDocumento(String systemPrompt, String textoDocumento) {
+    String texto = textoDocumento == null ? "" : textoDocumento;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto OCR para validar el documento.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("GEMINI_API_KEY no configurada.");
+    }
+    String system =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Valida el documento y responde en JSON.";
+    Content content =
+        Content.fromParts(
+            Part.fromText(system),
+            Part.fromText(
+                "<documento_ocr>\n" + truncate(texto, 80_000) + "\n</documento_ocr>"));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0f)
+            .maxOutputTokens(1024)
+            .build();
+
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+          try {
+            String raw = client.models.generateContent(modelo, content, config).text();
+            if (StringUtils.hasText(raw)) {
+              LOG.info("Gemini validación documental OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(GeminiJsonSanitizer.limpiar(raw));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+            sleepBackoff(intento, false);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini validación documental {}", ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
+          }
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo validar el documento con Gemini. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ValidacionDocumentoJson diagnosticarCoactiva(String systemPrompt, String textoExpediente) {
+    return completarJson(
+        systemPrompt,
+        textoExpediente,
+        120_000,
+        4096,
+        "Sin texto OCR para diagnosticar el expediente.",
+        "diagnóstico coactivo");
+  }
+
+  private ValidacionDocumentoJson completarJson(
+      String systemPrompt,
+      String textoDocumento,
+      int maxChars,
+      int maxTokens,
+      String vacio,
+      String etiqueta) {
+    String texto = textoDocumento == null ? "" : textoDocumento;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error(vacio);
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("GEMINI_API_KEY no configurada.");
+    }
+    String system =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Eres un auditor legal. Responde en JSON.";
+    Content content =
+        Content.fromParts(
+            Part.fromText(system),
+            Part.fromText("<documento_ocr>\n" + truncate(texto, maxChars) + "\n</documento_ocr>"));
+    GenerateContentConfig config =
+        GenerateContentConfig.builder()
+            .responseMimeType("application/json")
+            .temperature(0f)
+            .maxOutputTokens(maxTokens)
+            .build();
+    String ultimoDiagnostico = "sin respuesta";
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
+        for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+          try {
+            String raw = client.models.generateContent(modelo, content, config).text();
+            if (StringUtils.hasText(raw)) {
+              LOG.info("Gemini {} OK modelo={}", etiqueta, modelo);
+              return ValidacionDocumentoJson.ok(GeminiJsonSanitizer.limpiar(raw));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
+            sleepBackoff(intento, false);
+          } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String kind = classifyError(msg);
+            ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
+            LOG.warn("Fallo Gemini {} {}", etiqueta, ultimoDiagnostico);
+            if ("NOT_FOUND".equals(kind)) {
+              break;
+            }
+            sleepBackoff(intento, "RATE_LIMIT".equals(kind) || "UNAVAILABLE".equals(kind));
+          }
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo completar " + etiqueta + " con Gemini. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
   public ExtraccionCapturaBiess extraerCapturaBiess(String textoCaptura) {
     String texto = textoCaptura == null ? "" : textoCaptura;
     if (!StringUtils.hasText(texto.trim())) {
@@ -154,10 +340,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     }
     Content content =
         Content.fromParts(
-            Part.fromText(
-                CAPTURA_BIESS_PROMPT
-                    + "\nResponde ÚNICAMENTE con JSON: "
-                    + "{\"monto\": \"\", \"tasa\": \"\", \"plazo\": \"\", \"apoderado\": \"\"}"),
+            Part.fromText(actos.capturaBiessPrompt()),
             Part.fromText(
                 "<captura_biess_ocr>\n" + truncate(texto, 20_000) + "\n</captura_biess_ocr>"));
     GenerateContentConfig config =
@@ -173,6 +356,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         for (int intento = 1; intento <= 2; intento++) {
           try {
             String raw = client.models.generateContent(modelo, content, config).text();
+            LOG.info("Gemini captura BIESS modelo={} respuesta cruda: {}", modelo, raw);
             if (StringUtils.hasText(raw)) {
               DatosBiessMinuta data =
                   objectMapper.readValue(GeminiJsonSanitizer.limpiar(raw), DatosBiessMinuta.class);
