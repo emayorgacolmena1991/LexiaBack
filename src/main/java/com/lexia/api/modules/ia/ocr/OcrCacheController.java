@@ -1,10 +1,23 @@
 package com.lexia.api.modules.ia.ocr;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
+import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidatedGetResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.CotejoResponse;
 import jakarta.validation.Valid;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,17 +31,30 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/cache")
 public class OcrCacheController {
 
+  private static final Logger LOG = LoggerFactory.getLogger(OcrCacheController.class);
+
   private final OcrAzureBatchService batchService;
   private final OcrCotejoService cotejoService;
+  private final IngestaJobQueue jobs;
+  private final ObjectMapper json;
 
-  public OcrCacheController(OcrAzureBatchService batchService, OcrCotejoService cotejoService) {
+  public OcrCacheController(
+      OcrAzureBatchService batchService,
+      OcrCotejoService cotejoService,
+      IngestaJobQueue jobs,
+      ObjectMapper json) {
     this.batchService = batchService;
     this.cotejoService = cotejoService;
+    this.jobs = jobs;
+    this.json = json;
   }
 
   @PostMapping("/consolidate-extracted-text")
-  public ConsolidateResponse consolidate(@Valid @RequestBody ConsolidateRequest request) {
-    return batchService.consolidate(request);
+  @Transactional
+  public ResponseEntity<ConsolidateResponse> consolidate(@Valid @RequestBody ConsolidateRequest request) {
+    ConsolidateResponse respuesta = batchService.consolidate(request);
+    encolarAnalisis(request);
+    return ResponseEntity.accepted().body(respuesta);
   }
 
   @GetMapping("/consolidate-extracted-text/{sessionId}")
@@ -41,8 +67,46 @@ public class OcrCacheController {
    * expediente cuando difiere del borrador {@code sessionId}.
    */
   @GetMapping("/cotejo/{sessionId}")
-  public CotejoResponse cotejo(
+  public ResponseEntity<CotejoResponse> cotejo(
       @PathVariable String sessionId, @RequestParam(required = false) String caseId) {
-    return cotejoService.cotejar(sessionId, caseId);
+    CotejoResponse body = cotejoService.cotejar(sessionId, caseId);
+    return ResponseEntity.ok(body);
+  }
+
+  /** El texto ya quedó en caché. El job corre el LLM; el stream no tiene que esperar un POST aparte. */
+  private void encolarAnalisis(ConsolidateRequest request) {
+    if (request == null || !Boolean.TRUE.equals(request.encolar())
+        || request.sessionId() == null || request.consolidatedContent() == null
+        || request.consolidatedContent().isBlank()) {
+      return;
+    }
+    UUID expediente;
+    try {
+      expediente = UUID.fromString(request.sessionId().trim());
+    } catch (IllegalArgumentException ex) {
+      return;
+    }
+    AuthPrincipal principal = AuthContext.get();
+    if (principal == null || principal.tenantId() == null) {
+      LOG.warn("OCR consolidado de {} sin sesión; no se encoló la IA", expediente);
+      return;
+    }
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("expedienteId", expediente.toString());
+    payload.put("force", true);
+    payload.put("forceReanalysis", true);
+    payload.put("sessionIdOcr", expediente.toString());
+    payload.put("userId", principal.userId() == null ? "" : principal.userId().toString());
+    payload.put("sessionId", principal.sessionId() == null ? "" : principal.sessionId().toString());
+    payload.put("membershipId", principal.membershipId() == null ? "" : principal.membershipId().toString());
+    try {
+      jobs.encolarSiActivo(
+          principal.tenantId(), "IA_ANALISIS", expediente.toString(), json.writeValueAsString(payload));
+      LOG.info(
+          "[JOB ENCOLADO] Tarea insertada en app.jobs tipo=IA_ANALISIS expediente={}",
+          expediente);
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo encolar el análisis.");
+    }
   }
 }

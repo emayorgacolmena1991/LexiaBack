@@ -35,7 +35,8 @@ import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoMerge;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaExpedienteAnalisisWorker;
-import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaValidacionIaWorker;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto;
+import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.CreateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.NotificacionItem;
@@ -45,6 +46,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TimelineItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.UpdateExpedienteRequest;
 import com.lexia.api.modules.identity.AuthorizationService;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -60,8 +62,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -89,14 +89,17 @@ public class CoactivaExpedienteService {
   private final CoactivaSemaforoService semaforo;
   private final CoactivaCaseSync caseSync;
   private final AuthorizationService authorization;
-  private final CoactivaValidacionIaWorker validacionIa;
   private final CoactivaExpedienteAnalisisWorker diagnostico;
   private final CoactivaAnalisisRepository analisisRepo;
   private final CoactivaDiagnosticoParser diagnosticoParser;
   private final CoactivaTareaSugeridaRepository tareas;
   private final AppUserRepository usuarios;
+  private final DocumentoCacheStore cache;
 
   private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
+  private static final String ANALISIS_INTERRUMPIDO = "El análisis IA se interrumpió. Vuelve a analizar el expediente.";
+  /** ponytail: una página de aviso; no recupera el binario que no está en este disco. */
+  private static final byte[] PDF_AUSENTE = pdfAviso("El archivo original no esta en el servidor.");
 
   public CoactivaExpedienteService(
       CoactivaExpedienteRepository expedientes,
@@ -110,12 +113,12 @@ public class CoactivaExpedienteService {
       CoactivaSemaforoService semaforo,
       CoactivaCaseSync caseSync,
       AuthorizationService authorization,
-      CoactivaValidacionIaWorker validacionIa,
       CoactivaExpedienteAnalisisWorker diagnostico,
       CoactivaAnalisisRepository analisisRepo,
       CoactivaDiagnosticoParser diagnosticoParser,
       CoactivaTareaSugeridaRepository tareas,
-      AppUserRepository usuarios) {
+      AppUserRepository usuarios,
+      DocumentoCacheStore cache) {
     this.expedientes = expedientes;
     this.participantes = participantes;
     this.notificaciones = notificaciones;
@@ -127,12 +130,12 @@ public class CoactivaExpedienteService {
     this.semaforo = semaforo;
     this.caseSync = caseSync;
     this.authorization = authorization;
-    this.validacionIa = validacionIa;
     this.diagnostico = diagnostico;
     this.analisisRepo = analisisRepo;
     this.diagnosticoParser = diagnosticoParser;
     this.tareas = tareas;
     this.usuarios = usuarios;
+    this.cache = cache;
   }
 
   // ---------------------------------------------------------------------------
@@ -627,67 +630,54 @@ public class CoactivaExpedienteService {
     CoactivaExpediente expediente = require(tenantId, expedienteId);
     CoactivaAnalisis ultimo =
         analisisRepo.findFirstByTenantIdAndExpedienteIdOrderByCreatedAtDesc(tenantId, expedienteId).orElse(null);
+    boolean huerfano = analisisHuerfano(expediente);
+    String estado = huerfano ? CoactivaExpediente.ANALISIS_ERROR : expediente.getEstadoAnalisis();
     boolean enCurso =
-        CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())
+        CoactivaExpediente.ANALISIS_ANALIZANDO.equals(estado)
             && (ultimo == null || !ultimo.getArchivoId().equals(expediente.getAnalisisArchivoId()));
     if (enCurso) {
       return AnalisisResponse.enCurso(expediente.getAnalisisArchivoId());
     }
     if (ultimo == null) {
-      return AnalisisResponse.sinDiagnostico(expediente.getEstadoAnalisis());
+      return AnalisisResponse.sinDiagnostico(estado);
     }
-    if (CoactivaAnalisis.ERROR.equals(ultimo.getEstado())) {
-      Acumulado acumulado = acumulado(ultimo);
-      return new AnalisisResponse(
-          expediente.getEstadoAnalisis(),
-          ultimo.getId(),
-          ultimo.getArchivoId(),
-          ultimo.getEtapa(),
-          null,
-          null,
-          List.of(),
-          List.of(),
-          Map.of(),
-          null,
-          ultimo.getError(),
-          ultimo.getCreatedAt(),
-          acumulado.piezas(),
-          acumulado.hitos(),
-          ultimo.getAnalisisPadreId(),
-          null,
-          null,
-          List.of());
+    // Un intento fallido (p. ej. PDF ausente en este servidor) no borra el último diagnóstico válido:
+    // se devuelve ese diagnóstico y el motivo del intento en el campo error.
+    boolean fallo = CoactivaAnalisis.ERROR.equals(ultimo.getEstado());
+    CoactivaAnalisis vigente =
+        fallo
+            ? analisisRepo
+                .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+                    tenantId, expedienteId, CoactivaAnalisis.ANALIZADO)
+                .orElse(null)
+            : ultimo;
+    if (vigente == null) {
+      return sinTentativa(estado, ultimo, ultimo.getError());
     }
-    CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(ultimo.getResultado());
+    CoactivaDiagnosticoParser.Parse parsed = diagnosticoParser.parse(vigente.getResultado());
     CoactivaDiagnostico diag = parsed.diagnostico();
-    Acumulado acumulado = acumulado(ultimo);
     if (diag == null) {
-      return new AnalisisResponse(
-          expediente.getEstadoAnalisis(),
-          ultimo.getId(),
-          ultimo.getArchivoId(),
-          ultimo.getEtapa(),
-          null,
-          ultimo.getEtapaDetectada(),
-          List.of(),
-          List.of(),
-          Map.of(),
-          null,
-          parsed.error(),
-          ultimo.getCreatedAt(),
-          acumulado.piezas(),
-          acumulado.hitos(),
-          ultimo.getAnalisisPadreId(),
-          null,
-          null,
-          List.of());
+      return sinTentativa(estado, vigente, parsed.error());
     }
+    Acumulado acumulado = acumulado(vigente);
     CoactivaDiagnosticoParser.Tentativa tentativa = diagnosticoParser.tentativaDe(diag.json());
+    boolean indeterminada =
+        diag.etapaNormalizada() == null && (tentativa.codigo() != null || diag.etapaDetectada() != null);
+    String estadoEtapa =
+        indeterminada
+            ? AnalisisResponse.ETAPA_INDETERMINADA
+            : diag.etapaNormalizada() == null
+                ? AnalisisResponse.ETAPA_SIN_DIAGNOSTICO
+                : tentativa.justificacion() != null
+                    ? AnalisisResponse.ETAPA_SUGERIDA
+                    : AnalisisResponse.ETAPA_ANTIGUO;
+    boolean sugerida = AnalisisResponse.ETAPA_SUGERIDA.equals(estadoEtapa);
+    CoactivaArchivo fuente = fuenteDeLaTentativa(tenantId, vigente, tentativa);
     return new AnalisisResponse(
-        expediente.getEstadoAnalisis(),
-        ultimo.getId(),
-        ultimo.getArchivoId(),
-        ultimo.getEtapa(),
+        estado,
+        vigente.getId(),
+        vigente.getArchivoId(),
+        vigente.getEtapa(),
         diag.porcentajeCompletitud(),
         diag.etapaNormalizada() != null ? diag.etapaNormalizada() : diag.etapaDetectada(),
         diag.documentos().stream()
@@ -696,24 +686,93 @@ public class CoactivaExpedienteService {
         diag.alertas(),
         diag.datosExtraidos(),
         diag.siguienteAccion(),
-        null,
-        ultimo.getCreatedAt(),
+        fallo ? ultimo.getError() : huerfano ? ANALISIS_INTERRUMPIDO : null,
+        vigente.getCreatedAt(),
         acumulado.piezas(),
         acumulado.hitos(),
-        ultimo.getAnalisisPadreId(),
+        vigente.getAnalisisPadreId(),
         new EtapaSugeridaIa(
-            tentativa.codigo(),
-            tentativa.nombre(),
-            tentativa.justificacion(),
+            sugerida ? tentativa.codigo() : null,
+            sugerida ? tentativa.nombre() : null,
+            sugerida || indeterminada ? tentativa.justificacion() : null,
             new EvidenciaEtapa(
                 tentativa.documentoOrigen(),
                 tentativa.fojaPagina(),
                 tentativa.fechaDocumento(),
-                tentativa.extractoTexto())),
+                tentativa.extractoTexto()),
+            tentativa.evidencias().stream()
+                .map(e -> new EvidenciaEtapa(e.documentoOrigen(), e.fojaPagina(), e.fechaDocumento(), e.extractoTexto()))
+                .toList(),
+            indeterminada,
+            fuente == null ? null : fuente.getId(),
+            fuente == null ? tentativa.archivoNombre() : fuente.getNombreOriginal(),
+            fuente != null && storage != null && storage.disponible(fuente)),
         new SuficienciaDocumental(tentativa.estadoDiagnostico(), tentativa.requisitosFaltantes()),
         tentativa.acciones().stream()
             .map(a -> new AccionSugeridaIa(a.codigo(), a.titulo(), a.descripcion(), a.prioridad()))
-            .toList());
+            .toList(),
+        estadoEtapa);
+  }
+
+  /**
+   * ANALIZANDO sin job vivo en {@code app.jobs}: el worker lo soltó sin cerrar el análisis. Se
+   * muestra como error para que la abogada pueda reanalizar.
+   */
+  private boolean analisisHuerfano(CoactivaExpediente expediente) {
+    return CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())
+        && !analisisRepo.hayDiagnosticoActivo(expediente.getTenantId(), expediente.getId().toString());
+  }
+
+  private AnalisisResponse sinTentativa(String estado, CoactivaAnalisis fila, String error) {
+    Acumulado acumulado = acumulado(fila);
+    return new AnalisisResponse(
+        estado,
+        fila.getId(),
+        fila.getArchivoId(),
+        fila.getEtapa(),
+        null,
+        null,
+        List.of(),
+        List.of(),
+        Map.of(),
+        null,
+        error,
+        fila.getCreatedAt(),
+        acumulado.piezas(),
+        acumulado.hitos(),
+        fila.getAnalisisPadreId(),
+        null,
+        null,
+        List.of(),
+        AnalisisResponse.ETAPA_FALLIDO);
+  }
+
+  /**
+   * PDF del que salió la evidencia de la etapa. Los diagnósticos nuevos lo traen en la tentativa;
+   * en los anteriores, una validación de pieza suelta crea una fila nueva con otro archivo, así que
+   * se sube por {@code analisis_padre_id} hasta la fila de un expediente escaneado/unificado.
+   */
+  private CoactivaArchivo fuenteDeLaTentativa(
+      UUID tenantId, CoactivaAnalisis vigente, CoactivaDiagnosticoParser.Tentativa tentativa) {
+    if (tentativa.archivoId() != null) {
+      try {
+        return archivos
+            .findByIdAndTenantIdAndDeletedAtIsNull(UUID.fromString(tentativa.archivoId()), tenantId)
+            .orElse(null);
+      } catch (IllegalArgumentException ignored) {
+        // archivo_id ilegible: se busca por la cadena de análisis.
+      }
+    }
+    CoactivaAnalisis fila = vigente;
+    for (int i = 0; fila != null && i < 50; i++) {
+      CoactivaArchivo archivo =
+          archivos.findByIdAndTenantIdAndDeletedAtIsNull(fila.getArchivoId(), tenantId).orElse(null);
+      if (archivo != null && CoactivaArchivo.esExpedienteUnificado(archivo.getTipo())) {
+        return archivo;
+      }
+      fila = fila.getAnalisisPadreId() == null ? null : analisisRepo.findById(fila.getAnalisisPadreId()).orElse(null);
+    }
+    return null;
   }
 
   private static Acumulado acumulado(CoactivaAnalisis analisis) {
@@ -763,8 +822,11 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
     AuthPrincipal principal = AuthContext.require();
     UUID tenantId = principal.tenantId();
-    CoactivaExpediente expediente = require(tenantId, expedienteId);
-    if (CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())) {
+    CoactivaExpediente expediente =
+        expedientes
+            .bloquear(expedienteId, tenantId)
+            .orElseThrow(() -> ApiException.notFound("Expediente coactivo no encontrado."));
+    if (CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis()) && !analisisHuerfano(expediente)) {
       throw new ApiException(
           HttpStatus.CONFLICT, "COA_ANALISIS_EN_CURSO", "El expediente ya se está analizando.");
     }
@@ -842,6 +904,29 @@ public class CoactivaExpedienteService {
   }
 
   @Transactional(readOnly = true)
+  public List<CoactivaPdfTexto.Coincidencia> buscarOcr(UUID id, String q) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    CoactivaExpediente expediente = require(tenantId, id);
+    return CoactivaPdfTexto.buscar(textoOcrGuardado(tenantId, expediente.getAnalisisArchivoId()), q);
+  }
+
+  private String textoOcrGuardado(UUID tenantId, UUID archivoId) {
+    if (archivoId == null || cache == null) {
+      return "";
+    }
+    CoactivaArchivo archivo = archivos.findByIdAndTenantIdAndDeletedAtIsNull(archivoId, tenantId).orElse(null);
+    String sha = archivo == null ? null : archivo.getSha256();
+    if (sha == null || sha.isBlank()) {
+      return "";
+    }
+    return cache
+        .buscar(tenantId, sha, CoactivaPdfTexto.VERSION_CACHE)
+        .map(DocumentoCacheStore.Hit::textoOcr)
+        .orElse("");
+  }
+
+  @Transactional(readOnly = true)
   public List<ArchivoItem> listarArchivos(UUID expedienteId) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
@@ -858,7 +943,56 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaArchivo archivo = requireArchivo(tenantId, archivoId);
-    return new ArchivoContenido(archivo.getNombreOriginal(), archivo.getMimeType(), storage.read(archivo));
+    if (storage.disponible(archivo)) {
+      return new ArchivoContenido(archivo.getNombreOriginal(), archivo.getMimeType(), storage.read(archivo));
+    }
+    CoactivaArchivo unificado = unificadoEnDisco(tenantId, archivo);
+    if (unificado != null) {
+      String mime = unificado.getMimeType() == null ? "application/pdf" : unificado.getMimeType();
+      return new ArchivoContenido(unificado.getNombreOriginal(), mime, storage.read(unificado));
+    }
+    return new ArchivoContenido("expediente-no-disponible.pdf", "application/pdf", PDF_AUSENTE);
+  }
+
+  /** Mismo juicio, tipo unificado, y el binario sí está bajo {@code data/coactivas}. */
+  private CoactivaArchivo unificadoEnDisco(UUID tenantId, CoactivaArchivo pedido) {
+    if (pedido.getExpedienteId() == null) {
+      return null;
+    }
+    return archivos
+        .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId, pedido.getExpedienteId())
+        .stream()
+        .filter(a -> CoactivaArchivo.EXPEDIENTE_UNIFICADO.equals(a.getTipo()))
+        .filter(a -> !a.getId().equals(pedido.getId()))
+        .filter(storage::disponible)
+        .findFirst()
+        .orElse(null);
+  }
+
+  static byte[] pdfAviso(String mensaje) {
+    String stream = "BT /F1 14 Tf 72 720 Td (" + mensaje + ") Tj ET\n";
+    String[] objs = {
+      "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n",
+      "2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n",
+      "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n",
+      "4 0 obj<</Length " + stream.length() + ">>stream\n" + stream + "endstream\nendobj\n",
+      "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
+    };
+    StringBuilder pdf = new StringBuilder("%PDF-1.4\n");
+    int[] off = new int[objs.length];
+    for (int i = 0; i < objs.length; i++) {
+      off[i] = pdf.length();
+      pdf.append(objs[i]);
+    }
+    int xref = pdf.length();
+    pdf.append("xref\n0 ").append(objs.length + 1).append('\n');
+    pdf.append("0000000000 65535 f \n");
+    for (int o : off) {
+      pdf.append(String.format("%010d 00000 n \n", o));
+    }
+    pdf.append("trailer<</Size ").append(objs.length + 1).append("/Root 1 0 R>>\n");
+    pdf.append("startxref\n").append(xref).append("\n%%EOF\n");
+    return pdf.toString().getBytes(StandardCharsets.US_ASCII);
   }
 
   @Transactional(readOnly = true)
@@ -895,7 +1029,7 @@ public class CoactivaExpedienteService {
   }
 
   /**
-   * Marca {@code ANALIZANDO} y lanza el worker tras el commit. No analiza actas ni PDFs de
+   * Marca {@code ANALIZANDO} e inserta el job en la misma transacción. No analiza actas ni PDFs de
    * actuación generados por el sistema.
    */
   public void encolarAnalisis(CoactivaArchivo archivo, String etapa) {
@@ -908,7 +1042,7 @@ public class CoactivaExpedienteService {
       return;
     }
     archivo.iniciarAnalisisIa(etapa);
-    lanzarTrasCommit(() -> validacionIa.analizarAsync(archivo.getTenantId(), archivo.getId()));
+    diagnostico.encolarAnexo(archivo.getTenantId(), archivo.getExpedienteId(), archivo.getId());
   }
 
   private void encolarDiagnostico(CoactivaArchivo archivo, String etapa) {
@@ -918,21 +1052,7 @@ public class CoactivaExpedienteService {
           .findByIdAndTenantIdAndDeletedAtIsNull(archivo.getExpedienteId(), archivo.getTenantId())
           .ifPresent(e -> e.marcarAnalizando(archivo.getId()));
     }
-    lanzarTrasCommit(() -> diagnostico.analizarAsync(archivo.getTenantId(), archivo.getId()));
-  }
-
-  private static void lanzarTrasCommit(Runnable launch) {
-    if (TransactionSynchronizationManager.isSynchronizationActive()) {
-      TransactionSynchronizationManager.registerSynchronization(
-          new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-              launch.run();
-            }
-          });
-    } else {
-      launch.run();
-    }
+    diagnostico.encolar(archivo.getTenantId(), archivo.getExpedienteId(), archivo.getId());
   }
 
   private static boolean esPdf(MultipartFile file) {

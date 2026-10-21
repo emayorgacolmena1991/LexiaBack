@@ -298,6 +298,14 @@ public class MinutaViviendaData {
   @JsonProperty("detalle_forma_pago")
   private String detalleFormaPago = "";
 
+  public String getDetalleFormaPago() {
+    return detalleFormaPago;
+  }
+
+  public void setDetalleFormaPago(String detalleFormaPago) {
+    this.detalleFormaPago = nullToEmpty(detalleFormaPago);
+  }
+
   @JsonProperty("art_y_deudor_2")
   private String artYDeudor2 = "";
 

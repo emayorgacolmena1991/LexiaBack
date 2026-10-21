@@ -31,6 +31,8 @@ import com.lexia.api.modules.expedientes.proceso.ProductTemplateRepository;
 import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaVivienda;
+import com.lexia.api.modules.ia.llm.IaConsumoContexto;
+import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
 import com.lexia.api.modules.identity.AuthorizationService;
@@ -42,6 +44,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -83,6 +86,9 @@ public class MinutaGenerationService {
   private final MinutaDocxContenido contenido;
   private final ExpedienteVariablesService variablesService;
   private final DocxPdfConverter pdf;
+  private final DocumentoCacheStore documentoCache;
+
+  private static final String VERSION_MINUTA = "minuta-v1";
 
   /**
    * Campos canónicos que cambia la captura BIESS / ingreso manual; lo único que se toca en un DOCX
@@ -111,7 +117,8 @@ public class MinutaGenerationService {
       BorradorPromocionService promocion,
       MinutaDocxContenido contenido,
       ExpedienteVariablesService variablesService,
-      DocxPdfConverter pdf) {
+      DocxPdfConverter pdf,
+      DocumentoCacheStore documentoCache) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -129,6 +136,7 @@ public class MinutaGenerationService {
     this.contenido = contenido;
     this.variablesService = variablesService;
     this.pdf = pdf;
+    this.documentoCache = documentoCache;
   }
 
   // --- TICKET-INT-102: flujo data-driven (variables JSON → poi-tl → PDF de previsualización) ---
@@ -157,7 +165,8 @@ public class MinutaGenerationService {
       completarDesdeConsolidado(tenantId, caseId, base);
     }
     DatosBiessMinuta biess = datosBiess.cargar(caseId, tenantId);
-    MinutaViviendaData data = variablesService.fusionar(base, biess, overrides);
+    MinutaViviendaData data =
+        variablesService.fusionar(base, biess, overrides, variablesService.camposDelActo(descriptor));
     return respuestaVariables(
         draft,
         descriptor,
@@ -173,6 +182,19 @@ public class MinutaGenerationService {
    */
   @Transactional
   public PreviewMinuta previsualizar(UUID caseId, String tipoMinuta, PreviewMinutaRequest request) {
+    Aplicado aplicado = aplicar(caseId, tipoMinuta, request);
+    byte[] pdfBytes = pdf.toPdf(aplicado.docx());
+    LOG.info("Preview minuta case={} draft={} pdfBytes={}", caseId, aplicado.respuesta().minutaId(), pdfBytes.length);
+    return new PreviewMinuta(aplicado.respuesta().minutaId(), pdfBytes, aplicado.respuesta(), aplicado.nuevo());
+  }
+
+  public record PreviewMinuta(
+      UUID minutaId, byte[] pdf, VariablesMinutaResponse variables, boolean nuevo) {}
+
+  private record Aplicado(byte[] docx, VariablesMinutaResponse respuesta, boolean nuevo) {}
+
+  /** Overrides del panel → JSON final del borrador → DOCX poi-tl (el mismo que sirve la descarga). */
+  private Aplicado aplicar(UUID caseId, String tipoMinuta, PreviewMinutaRequest request) {
     authorization.requirePermission("expedientes:caso:escribir");
     caseId = promocion.asegurarExpediente(caseId);
     UUID tenantId = AuthContext.require().tenantId();
@@ -189,6 +211,7 @@ public class MinutaGenerationService {
     MinutaDraft draft = ultimoDraft(file, tenantId, kind);
     MinutaViviendaData renderizado = draft == null ? null : loadData(draft);
     MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, renderizado);
+    boolean nuevo = draft == null;
     if (draft == null) {
       base = datosBase(tenantId, caseId, legalCase, null, product, kind);
       draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
@@ -203,7 +226,9 @@ public class MinutaGenerationService {
         variablesService.normalizarOverrides(descriptor, request == null ? null : request.variables()));
     // La tienda BIESS solo guarda la captura: los cambios manuales viven en los overrides.
     DatosBiessMinuta biessGuardado = datosBiess.cargar(caseId, tenantId);
-    MinutaViviendaData data = variablesService.fusionar(base, biessGuardado, overrides);
+    MinutaViviendaData data =
+        variablesService.fusionar(
+            base, biessGuardado, overrides, variablesService.camposDelActo(descriptor));
 
     byte[] docx =
         renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
@@ -215,27 +240,196 @@ public class MinutaGenerationService {
     minutaDrafts.save(draft);
 
     VariablesConsolidadas consolidadas = variablesService.consolidar(descriptor, data);
-    byte[] pdfBytes = pdf.toPdf(docx);
     LOG.info(
-        "Preview minuta case={} draft={} kind={} overrides={} pendientes={} pdfBytes={}",
+        "Variables minuta aplicadas case={} draft={} kind={} overrides={} pendientes={}",
         caseId,
         draft.getId(),
         kind,
         overrides.size(),
-        consolidadas.variablesPendientes().size(),
-        pdfBytes.length);
-    return new PreviewMinuta(
-        draft.getId(),
-        pdfBytes,
+        consolidadas.variablesPendientes().size());
+    return new Aplicado(
+        docx,
         respuestaVariables(
             draft,
             descriptor,
             consolidadas,
             variablesService.origenes(descriptor, base, biessGuardado, overrides),
-            biessGuardado));
+            biessGuardado),
+        nuevo);
   }
 
-  public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
+  // --- Editor por id de minuta ---
+
+  @Transactional(readOnly = true)
+  public VariablesMinutaResponse variablesPorMinuta(UUID minutaId) {
+    MinutaDraft draft = draftDe(minutaId);
+    return variables(caseIdDe(draft), draft.getTemplateKind());
+  }
+
+  /** PATCH parcial del editor: guarda overrides y re-renderiza el DOCX (sin PDF). */
+  @Transactional
+  public VariablesMinutaResponse guardarVariables(UUID minutaId, PreviewMinutaRequest request) {
+    MinutaDraft draft = draftDe(minutaId);
+    return aplicar(caseIdDe(draft), draft.getTemplateKind(), request).respuesta();
+  }
+
+  @Transactional
+  public PreviewMinuta previsualizarPorMinuta(UUID minutaId, PreviewMinutaRequest request) {
+    MinutaDraft draft = draftDe(minutaId);
+    return previsualizar(caseIdDe(draft), draft.getTemplateKind(), request);
+  }
+
+  /**
+   * Job {@code MINUTA_RENDER}: extracción IA de la minuta (o caché por hash), completa solo lo
+   * vacío y re-renderiza con poi-tl. Lo que siga sin valor queda como placeholder para el editor.
+   */
+  public record MinutaRenderizada(UUID caseId, UUID minutaId, List<String> pendientes) {}
+
+  @Transactional
+  public MinutaRenderizada enriquecerConIa(UUID minutaId, String sessionIdHint) {
+    MinutaDraft draft = draftDe(minutaId);
+    UUID caseId = caseIdDe(draft);
+    UUID tenantId = draft.getTenantId();
+    LegalCase legalCase = requireCase(caseId, tenantId);
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(draft.getProductCode(), draft.getTemplateKind());
+    MinutaViviendaData renderizado = loadData(draft);
+    MinutaViviendaData base = datosExtraidos(draft, renderizado);
+    if (base == null) {
+      base = datosBase(tenantId, caseId, legalCase, sessionIdHint, draft.getProductCode(), draft.getTemplateKind());
+    }
+    MinutaViviendaData ia = iaEnriquecida(tenantId, caseId, legalCase, sessionIdHint, draft, base);
+    if (!completarVacios(base, ia)) {
+      return new MinutaRenderizada(
+          caseId, minutaId, pendientes(descriptor, renderizado == null ? base : renderizado));
+    }
+    ExpedienteVariablesService.letrasDesdeMonto(base);
+    Map<String, String> overrides = variablesService.leerOverrides(draft.getOverrides());
+    MinutaViviendaData data =
+        variablesService.fusionar(
+            base,
+            datosBiess.cargar(caseId, tenantId),
+            overrides,
+            variablesService.camposDelActo(descriptor));
+    byte[] docx =
+        renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.setDatosExtraidos(json(base));
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+    List<String> pendientes = pendientes(descriptor, data);
+    LOG.info("Minuta enriquecida con IA case={} draft={} pendientes={}", caseId, minutaId, pendientes.size());
+    return new MinutaRenderizada(caseId, minutaId, pendientes);
+  }
+
+  /**
+   * Job {@code MINUTA_RENDER}: poi-tl con las variables ya resueltas. Sin LLM.
+   * Lo que falte queda como placeholder.
+   */
+  @Transactional
+  public MinutaRenderizada renderSinLlm(UUID minutaId) {
+    MinutaDraft draft = draftDe(minutaId);
+    UUID caseId = caseIdDe(draft);
+    UUID tenantId = draft.getTenantId();
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(draft.getProductCode(), draft.getTemplateKind());
+    MinutaViviendaData data = loadData(draft);
+    if (data == null) {
+      data = new MinutaViviendaData();
+      completarDesdeConsolidado(tenantId, caseId, data);
+      aplicarDatosBiessGuardados(tenantId, caseId, data, draft.getProductCode(), draft.getTemplateKind());
+      ExpedienteVariablesService.letrasDesdeMonto(data);
+    }
+    byte[] docx = renderer.renderVivienda(descriptor, data);
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+    List<String> pendientes = pendientes(descriptor, data);
+    LOG.info(
+        "MINUTA_RENDER poi-tl case={} draft={} pendientes={} sin LLM",
+        caseId,
+        minutaId,
+        pendientes.size());
+    return new MinutaRenderizada(caseId, minutaId, pendientes);
+  }
+
+  @Transactional(readOnly = true)
+  public UUID expedienteDe(UUID minutaId) {
+    authorization.requirePermission("expedientes:caso:leer");
+    return caseIdDe(minutaId);
+  }
+
+  @Transactional(readOnly = true)
+  public UUID exigirEscritura(UUID minutaId) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    return caseIdDe(minutaId);
+  }
+
+  /** Caché por hash del borrador. Haiku solo si el borrador cambió. */
+  private MinutaViviendaData iaEnriquecida(
+      UUID tenantId,
+      UUID caseId,
+      LegalCase legalCase,
+      String sessionIdHint,
+      MinutaDraft draft,
+      MinutaViviendaData base) {
+    String version =
+        VERSION_MINUTA + ":enriquecer:" + draft.getProductCode() + ":" + draft.getTemplateKind();
+    String hash = DocumentoCacheStore.sha256(json(base));
+    var hit = documentoCache.buscar(tenantId, hash, version);
+    if (hit.isPresent() && StringUtils.hasText(hit.get().resultadoJson())) {
+      try {
+        LOG.info("MINUTA_ENRIQUECER cache hit case={} draft={}", caseId, draft.getId());
+        return objectMapper.readValue(hit.get().resultadoJson(), MinutaViviendaData.class);
+      } catch (IOException e) {
+        LOG.warn("MINUTA_ENRIQUECER cache ilegible case={}", caseId);
+      }
+    }
+    IaConsumoContexto.setExpediente(caseId);
+    IaConsumoContexto.setEtapa("enriquecimiento");
+    MinutaViviendaData ia;
+    try {
+      ia =
+          extraerConIa(
+              tenantId, legalCase, sessionIdHint, draft.getProductCode(), draft.getTemplateKind(), true);
+    } finally {
+      IaConsumoContexto.clear();
+    }
+    if (ia != null && ia.toTemplateMap().values().stream().anyMatch(v -> !MinutaViviendaData.isMissing(v))) {
+      String modelo = IaConsumoContexto.ultimo() == null ? "haiku" : IaConsumoContexto.ultimo().modelo();
+      documentoCache.guardar(tenantId, hash, version, modelo, null, json(ia));
+    }
+    return ia;
+  }
+
+  /** Copia de {@code ia} solo los campos que {@code base} tiene vacíos. */
+  private boolean completarVacios(MinutaViviendaData base, MinutaViviendaData ia) {
+    var actual = objectMapper.valueToTree(base);
+    var nuevo = objectMapper.valueToTree(ia);
+    var parche = objectMapper.createObjectNode();
+    nuevo.fields().forEachRemaining(campo -> {
+      var valor = campo.getValue();
+      if (valor == null || valor.isNull() || MinutaViviendaData.isMissing(valor.asText(null))) {
+        return;
+      }
+      var previo = actual.get(campo.getKey());
+      if (previo == null || previo.isNull() || MinutaViviendaData.isMissing(previo.asText(null))) {
+        parche.set(campo.getKey(), valor);
+      }
+    });
+    if (parche.isEmpty()) {
+      return false;
+    }
+    try {
+      objectMapper.readerForUpdating(base).readValue(parche);
+    } catch (IOException e) {
+      LOG.warn("No se pudo completar la minuta con la extracción IA: {}", e.getMessage());
+      return false;
+    }
+    return true;
+  }
 
   /**
    * Render desde la plantilla con el JSON final; si el DOCX trae ediciones manuales (flujo
@@ -391,7 +585,7 @@ public class MinutaGenerationService {
             request == null ? null : request.sessionId(),
             product,
             kind);
-    validarCriticos(descriptor, data, caseId);
+    avisarCriticos(descriptor, data, caseId);
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
@@ -399,9 +593,16 @@ public class MinutaGenerationService {
     persistData(draft, data);
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
-    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(data));
+    DatosBiessMinuta biess =
+        DatosBiessMinuta.from(data).conRespaldo(datosBiess.cargar(caseId, tenantId));
+    datosBiess.guardar(tenantId, caseId, biess);
 
     List<String> pendientes = pendientes(descriptor, data);
+    long hidratadas =
+        data.toTemplateMap().values().stream().filter(v -> !MinutaViviendaData.isMissing(v)).count();
+    LOG.info(
+        "Borrador de minuta generado exitosamente (HTTP 200) con {} variables hidratadas.",
+        hidratadas);
     LOG.info(
         "Minuta generada case={} product={} kind={} draft={} bytes={} pendientes={}",
         caseId,
@@ -456,7 +657,10 @@ public class MinutaGenerationService {
     persistData(draft, data);
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
-    datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
+    datosBiess.guardar(
+        draft.getTenantId(),
+        caseId,
+        DatosBiessMinuta.from(data).conRespaldo(datosBiess.cargar(caseId, draft.getTenantId())));
 
     LOG.info(
         "Datos BIESS aplicados case={} draft={} kind={} editado={} bytes={}",
@@ -552,7 +756,10 @@ public class MinutaGenerationService {
     draft.markGenerated(stored.toString());
     minutaDrafts.save(draft);
     if (biessCambia) {
-      datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
+      datosBiess.guardar(
+        draft.getTenantId(),
+        caseId,
+        DatosBiessMinuta.from(data).conRespaldo(datosBiess.cargar(caseId, draft.getTenantId())));
     }
     LOG.info(
         "Minuta guardada case={} draft={} parrafos={} biess={} bytes={}",
@@ -581,12 +788,18 @@ public class MinutaGenerationService {
   }
 
   private UUID caseIdDe(UUID minutaId) {
+    return caseIdDe(draftDe(minutaId));
+  }
+
+  private MinutaDraft draftDe(UUID minutaId) {
     UUID tenantId = AuthContext.require().tenantId();
-    MinutaDraft draft =
-        minutaDrafts
-            .findById(minutaId)
-            .filter(m -> tenantId.equals(m.getTenantId()))
-            .orElseThrow(() -> ApiException.notFound("Minuta no encontrada."));
+    return minutaDrafts
+        .findById(minutaId)
+        .filter(m -> tenantId.equals(m.getTenantId()))
+        .orElseThrow(() -> ApiException.notFound("Minuta no encontrada."));
+  }
+
+  private UUID caseIdDe(MinutaDraft draft) {
     return writingFiles
         .findById(draft.getWritingFileId())
         .map(WritingFile::getCaseId)
@@ -714,10 +927,10 @@ public class MinutaGenerationService {
   }
 
   /**
-   * Solo los críticos del descriptor bloquean (422); el resto de tags vacíos se genera como nodata y
-   * se devuelve en camposPendientes.
+   * Los críticos vacíos no cortan la respuesta: poi-tl los deja como {@code nodata} y vuelven en
+   * {@code camposPendientes} para el editor.
    */
-  private static void validarCriticos(
+  private static void avisarCriticos(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data, UUID caseId) {
     var map = data.toTemplateMap();
     List<String> faltantes =
@@ -726,16 +939,10 @@ public class MinutaGenerationService {
             .toList();
     if (!faltantes.isEmpty()) {
       LOG.warn(
-          "Minuta case={} kind={} no generada, faltan críticos: {}",
+          "Minuta case={} kind={} generada con críticos pendientes: {}",
           caseId,
           descriptor.templateKind(),
           faltantes);
-      throw new ApiException(
-          HttpStatus.UNPROCESSABLE_ENTITY,
-          "MINUTA_DATOS_FALTANTES",
-          "No se generó el documento: faltan datos obligatorios en el expediente: "
-              + String.join("; ", faltantes.stream().map(MinutaViviendaData::etiqueta).toList())
-              + ".");
     }
   }
 
@@ -750,22 +957,41 @@ public class MinutaGenerationService {
       String sessionIdHint,
       String productCode,
       String templateKind) {
-    MinutaViviendaData data = extraerConIa(legalCase, sessionIdHint, productCode, templateKind);
+    MinutaViviendaData data =
+        extraerConIa(tenantId, legalCase, sessionIdHint, productCode, templateKind, false);
     completarDesdeConsolidado(tenantId, caseId, data);
-    aplicarDatosBiessGuardados(tenantId, caseId, data);
+    aplicarDatosBiessGuardados(tenantId, caseId, data, productCode, templateKind);
     ExpedienteVariablesService.letrasDesdeMonto(data);
     return data;
   }
 
+  /**
+   * Extracción IA de la minuta por hash del consolidado. En HTTP ({@code llamarLlm=false}) solo lee
+   * {@code documento_cache}; el LLM corre en el job {@code MINUTA_RENDER}.
+   */
   private MinutaViviendaData extraerConIa(
-      LegalCase legalCase, String sessionIdHint, String productCode, String templateKind) {
-    if (!analisis.isConfigured()) {
-      LOG.info("Minuta case={}: LLM no configurado, se usa solo el expediente", legalCase.getId());
-      return new MinutaViviendaData();
-    }
+      UUID tenantId,
+      LegalCase legalCase,
+      String sessionIdHint,
+      String productCode,
+      String templateKind,
+      boolean llamarLlm) {
     String ocr = findOcrConsolidated(legalCase, sessionIdHint);
     if (ocr == null) {
       LOG.info("Minuta case={}: sin OCR consolidado, se omite la extracción IA", legalCase.getId());
+      return new MinutaViviendaData();
+    }
+    String hash = DocumentoCacheStore.sha256(ocr);
+    String version = VERSION_MINUTA + ":" + productCode + ":" + templateKind;
+    var hit = documentoCache.buscar(tenantId, hash, version);
+    if (hit.isPresent() && StringUtils.hasText(hit.get().resultadoJson())) {
+      try {
+        return objectMapper.readValue(hit.get().resultadoJson(), MinutaViviendaData.class);
+      } catch (IOException e) {
+        LOG.warn("Minuta case={}: caché IA ilegible, se recalcula", legalCase.getId());
+      }
+    }
+    if (!llamarLlm || !analisis.isConfigured()) {
       return new MinutaViviendaData();
     }
     try {
@@ -778,6 +1004,8 @@ public class MinutaGenerationService {
             extraccion == null ? "sin respuesta" : extraccion.motivo());
         return new MinutaViviendaData();
       }
+      String modelo = IaConsumoContexto.ultimo() == null ? "llm" : IaConsumoContexto.ultimo().modelo();
+      documentoCache.guardar(tenantId, hash, version, modelo, null, json(extraccion.data()));
       return extraccion.data();
     } catch (RuntimeException e) {
       LOG.warn(
@@ -821,17 +1049,37 @@ public class MinutaGenerationService {
   }
 
   /** Captura BIESS ya guardada en el expediente (p. ej. al generar la minuta antes que el mutuo). */
-  private void aplicarDatosBiessGuardados(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+  private void aplicarDatosBiessGuardados(
+      UUID tenantId, UUID caseId, MinutaViviendaData data, String producto, String kind) {
     DatosBiessMinuta guardados = datosBiess.cargar(caseId, tenantId);
     if (guardados == null) {
       return;
     }
+    List<String> camposActo =
+        StringUtils.hasText(producto) && StringUtils.hasText(kind)
+            ? variablesService.camposDelActo(catalog.require(producto, kind))
+            : null;
+    Map<String, String> aplicadas = new LinkedHashMap<>();
     for (CampoPlantilla campo : CampoPlantilla.values()) {
-      String valor = campo.valor(guardados);
-      if (StringUtils.hasText(valor)) {
-        campo.asignar(data, valor);
+      if (camposActo != null && !camposActo.contains(campo.tag())) {
+        continue;
       }
+      String valor = campo.valor(guardados);
+      if (!StringUtils.hasText(valor)) {
+        continue;
+      }
+      campo.asignar(data, valor);
+      aplicadas.put(campo.tag(), valor.trim());
     }
+    LOG.info(
+        "Variables de Captura BIESS fusionadas en el mapa de Minuta: captura={{monto_aprobado={}, tasa_efectiva={}, cuota_aprobada={}, plazo_aprobado={}, valor_reposicion={}, porcentaje_valor_financiado={}}} aplicadas={}",
+        guardados.monto(),
+        guardados.tasa(),
+        guardados.cuota(),
+        guardados.plazo(),
+        guardados.valorReposicion(),
+        guardados.porcentajeValorFinanciado(),
+        aplicadas);
   }
 
   private static void completar(String actual, String candidato, Consumer<String> setter) {

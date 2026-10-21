@@ -232,8 +232,21 @@ public final class CoactivaExpedienteDtos {
   public record EvidenciaEtapa(
       String documentoOrigen, Integer fojaPagina, String fechaDocumento, String extractoTexto) {}
 
+  /**
+   * {@code clasificacionIndeterminada}: la IA no halló evidencia para ninguna etapa del catálogo.
+   * {@code archivoId}/{@code archivoNombre}: PDF del que salió la evidencia; {@code archivoDisponible}
+   * indica si ese PDF está en el almacenamiento de este servidor.
+   */
   public record EtapaSugeridaIa(
-      String codigo, String nombre, String justificacionJuridica, EvidenciaEtapa evidencia) {}
+      String codigo,
+      String nombre,
+      String justificacionJuridica,
+      EvidenciaEtapa evidencia,
+      List<EvidenciaEtapa> documentosEvidencia,
+      boolean clasificacionIndeterminada,
+      UUID archivoId,
+      String archivoNombre,
+      boolean archivoDisponible) {}
 
   public record SuficienciaDocumental(String estadoDiagnostico, List<String> requisitosFaltantes) {}
 
@@ -287,7 +300,21 @@ public final class CoactivaExpedienteDtos {
       UUID analisisPadreId,
       EtapaSugeridaIa etapaSugerida,
       SuficienciaDocumental suficienciaDocumental,
-      List<AccionSugeridaIa> accionesSugeridas) {
+      List<AccionSugeridaIa> accionesSugeridas,
+      String estadoEtapa) {
+
+    /** El análisis está corriendo. */
+    public static final String ETAPA_EN_CURSO = "EN_CURSO";
+    /** No hay ningún diagnóstico de etapa del expediente. */
+    public static final String ETAPA_SIN_DIAGNOSTICO = "SIN_DIAGNOSTICO";
+    /** Solo hay intentos fallidos; {@code error} trae el motivo. */
+    public static final String ETAPA_FALLIDO = "FALLIDO";
+    /** La IA leyó el OCR y no halló evidencia suficiente para una etapa. */
+    public static final String ETAPA_INDETERMINADA = "INDETERMINADA";
+    /** Diagnóstico de formato anterior: etapa sin justificación ni evidencia; no es una sugerencia válida. */
+    public static final String ETAPA_ANTIGUO = "ANTIGUO";
+    /** Etapa sugerida con justificación basada en el OCR. */
+    public static final String ETAPA_SUGERIDA = "SUGERIDA";
 
     public static AnalisisResponse enCurso(UUID archivoId) {
       return new AnalisisResponse(
@@ -308,7 +335,8 @@ public final class CoactivaExpedienteDtos {
           null,
           null,
           null,
-          List.of());
+          List.of(),
+          ETAPA_EN_CURSO);
     }
 
     /** Expediente anterior al análisis: 200 con listas vacías, sin 404. */
@@ -331,7 +359,8 @@ public final class CoactivaExpedienteDtos {
           null,
           null,
           null,
-          List.of());
+          List.of(),
+          ETAPA_SIN_DIAGNOSTICO);
     }
   }
 

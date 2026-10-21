@@ -24,6 +24,30 @@ class ExpedienteVariablesServiceTest {
       plantillas.require(MinutaTemplateCatalog.PRODUCT_SUSTITUCION_HIPOTECA, "CONTRATO_MUTUO");
 
   @Test
+  void capturaBiessSoloPisaLosTagsDelActo() {
+    MinutaViviendaData llm = new MinutaViviendaData();
+    llm.setPrecioCompraventaNumero("90000");
+    llm.setDetalleFormaPago("contado");
+    DatosBiessMinuta biess = new DatosBiessMinuta("58500", "7.21", "300", "453.48", "86256.7", "80", "ANDRE");
+
+    MinutaViviendaData contrato =
+        service.fusionar(llm, biess, Map.of(), java.util.List.of("monto_prestamo", "tasa_interes_inicial", "plazo_credito"));
+    assertEquals("58500", contrato.getMontoPrestamo());
+    assertEquals("7.21", contrato.getTasaInteresInicial());
+    assertEquals("300", contrato.getPlazoCredito());
+    assertEquals("", contrato.getCuotaCredito());
+    assertEquals("", contrato.getApoderadoBiess());
+    assertEquals("90000", contrato.getPrecioCompraventaNumero());
+    assertEquals("contado", contrato.getDetalleFormaPago());
+
+    MinutaViviendaData minuta =
+        service.fusionar(llm, biess, Map.of(), java.util.List.of("apoderado_biess", "precio_compraventa_numero"));
+    assertEquals("ANDRE", minuta.getApoderadoBiess());
+    assertEquals("", minuta.getMontoPrestamo());
+    assertEquals("90000", minuta.getPrecioCompraventaNumero());
+  }
+
+  @Test
   void fusionRespetaPrecedenciaLlmBiessOverrides() {
     MinutaViviendaData llm = new MinutaViviendaData();
     llm.setNombreConyuge1("JUAN PEREZ");

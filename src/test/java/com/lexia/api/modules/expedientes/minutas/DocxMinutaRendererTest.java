@@ -49,6 +49,22 @@ class DocxMinutaRendererTest {
   }
 
   @Test
+  void mapaPoiOmiteNullYNodataYRespetaSnakeCase() {
+    Map<String, Object> data = new LinkedHashMap<>();
+    data.put("NUMERO_OPERACION", "OP-1");
+    data.put("ciudad", "nodata");
+    data.put("vacio", null);
+    Map<String, Object> poi =
+        DocxMinutaRenderer.mapaPoi(List.of("numero_operacion", "ciudad", "vacio", "ausente"), data);
+    assertEquals("OP-1", poi.get("numero_operacion"));
+    assertEquals("", poi.get("ciudad"));
+    assertEquals("", poi.get("vacio"));
+    assertFalse(poi.containsKey("ausente"));
+    assertFalse(poi.containsValue("nodata"));
+    assertFalse(poi.containsValue(null));
+  }
+
+  @Test
   void templateMapUsaNodataCuandoFalta() {
     MinutaViviendaData data = new MinutaViviendaData();
     data.setNombreConyuge1("ANA");

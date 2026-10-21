@@ -65,6 +65,7 @@ public class JobRepository {
         UPDATE app.jobs
            SET estado = 'PENDIENTE', intentos = intentos + 1
          WHERE estado = 'EN_PROCESO'
+           AND tipo = 'PROCESAR_DOCUMENTO'
            AND created_at < NOW() - INTERVAL '5 minutes'
         """);
   }

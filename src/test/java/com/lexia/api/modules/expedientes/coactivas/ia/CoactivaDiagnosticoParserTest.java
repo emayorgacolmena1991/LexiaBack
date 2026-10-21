@@ -120,6 +120,60 @@ class CoactivaDiagnosticoParserTest {
     assertEquals("Se decreta la retención de cuentas", tentativa.extractoTexto());
     assertEquals("AMARILLO", tentativa.estadoDiagnostico());
     assertEquals("REQUERIR_LIQUIDACION", tentativa.acciones().get(0).codigo());
+    assertEquals(1, tentativa.evidencias().size());
+    assertEquals("Providencia_0901-2024-00452.pdf", tentativa.evidencias().get(0).documentoOrigen());
+  }
+
+  @Test
+  void indeterminadaNoNormalizaYConservaEvidencias() {
+    Parse r =
+        parser.parse(
+            """
+            {"etapa_sugerida": {
+               "codigo": "INDETERMINADA",
+               "justificacion_juridica": "No consta providencia ni razón de notificación.",
+               "evidencias": [
+                 {"documento_origen": "Pagaré", "foja_pagina": 1, "extracto_texto": "Pagaré a la orden"},
+                 {"documento_origen": null, "extracto_texto": null}
+               ]}}
+            """);
+    assertTrue(r.ok());
+    assertNull(r.diagnostico().etapaNormalizada());
+    var tentativa = parser.tentativaDe(r.diagnostico().json());
+    assertEquals(1, tentativa.evidencias().size());
+    assertEquals(1, tentativa.evidencias().get(0).fojaPagina());
+  }
+
+  @Test
+  void respuestaBreveConservaEtapaJustificacionYEvidencia() {
+    Parse r =
+        parser.parse(
+            """
+            {"etapa_sugerida": {
+               "codigo": "EMBARGO",
+               "justificacion_juridica": "El expediente se encuentra en Embargo porque se identificó un oficio de retención del 2 de marzo de 2022.",
+               "evidencia": {
+                 "documento_origen": "Oficio de embargo",
+                 "foja_pagina": 12,
+                 "fecha_documento": "2022-03-02",
+                 "extracto_texto": "Se ordena la retención de fondos"
+               }
+            }}
+            """);
+    assertTrue(r.ok());
+    assertEquals("EMBARGO", r.diagnostico().etapaNormalizada());
+    assertTrue(r.diagnostico().json().contains("\"codigo\":\"EMBARGO\""));
+    var tentativa = parser.tentativaDe(r.diagnostico().json());
+    assertEquals("EMBARGO", tentativa.codigo());
+    assertEquals(
+        "El expediente se encuentra en Embargo porque se identificó un oficio de retención del 2 de marzo de 2022.",
+        tentativa.justificacion());
+    assertEquals("Oficio de embargo", tentativa.documentoOrigen());
+    assertEquals(12, tentativa.fojaPagina());
+    assertEquals("2022-03-02", tentativa.fechaDocumento());
+    assertEquals("Se ordena la retención de fondos", tentativa.extractoTexto());
+    assertEquals(1, tentativa.evidencias().size());
+    assertEquals("Oficio de embargo", tentativa.evidencias().get(0).documentoOrigen());
   }
 
   @Test
