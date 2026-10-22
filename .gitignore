@@ -36,6 +36,7 @@ build/
 .vscode/
 .tokensave/
 .cursorignore
+.cursorrules
 instrucciones/
 
 ### Archivos subidos en runtime ###

@@ -1,0 +1,8 @@
+.git/
+.idea/
+target/
+data/
+.env
+tmp-cookies*
+*.log
+*.jar
