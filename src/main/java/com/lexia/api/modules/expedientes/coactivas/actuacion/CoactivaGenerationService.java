@@ -111,7 +111,7 @@ public class CoactivaGenerationService {
     this.zona = ZoneId.of(zonaHoraria);
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public VariablesDocumentoResponse variables(UUID expedienteId, String tipo) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     AuthPrincipal principal = AuthContext.require();
@@ -120,9 +120,43 @@ public class CoactivaGenerationService {
         drafts
             .findByTenantIdAndExpedienteIdAndActuacionTipo(
                 principal.tenantId(), expedienteId, ctx.tipo())
-            .orElse(null);
-    Resultado resuelto = resolver(ctx, draft == null ? Map.of() : leerOverrides(draft.getOverrides()));
+            .orElseGet(
+                () ->
+                    drafts.save(
+                        CoactivaDocumentoDraft.crear(
+                            principal.tenantId(),
+                            expedienteId,
+                            ctx.plantilla().getId(),
+                            ctx.tipo(),
+                            principal.userId())));
+    Map<String, String> overrides = leerOverrides(draft.getOverrides());
+    Resultado resuelto = resolver(ctx, overrides);
+    if (!CoactivaDocumentoDraft.LISTO.equals(draft.getStatus())) {
+      draft.guardar(
+          escribir(sinMarcador(resuelto.variables())),
+          escribir(resuelto.datosExtraidos()),
+          escribir(overrides),
+          draft.getStoragePath(),
+          resuelto.pendientes().size());
+      drafts.save(draft);
+    }
     return respuesta(draft, ctx.plantilla(), resuelto);
+  }
+
+  /** Payload persistido: sin null ni {@link CoactivaVariableBinder#NODATA}. Esos tags siguen en {@code pendientes}. */
+  private static Map<String, String> sinMarcador(Map<String, String> variables) {
+    Map<String, String> out = new LinkedHashMap<>();
+    if (variables == null) {
+      return out;
+    }
+    variables.forEach(
+        (k, v) -> {
+          String texto = CoactivaVariableBinder.limpio(v);
+          if (k != null && texto != null) {
+            out.put(k, texto);
+          }
+        });
+    return out;
   }
 
   @Transactional
@@ -232,7 +266,10 @@ public class CoactivaGenerationService {
         "Documento listo para firma: " + ctx.plantilla().getNombre(),
         criticas.isEmpty()
             ? "Estado GENERADO."
-            : "Estado GENERADO. Campos críticos confirmados en nodata: " + String.join(", ", criticas),
+            : "Estado GENERADO. Campos críticos confirmados en "
+                + CoactivaVariableBinder.NODATA
+                + ": "
+                + String.join(", ", criticas),
         principal.userId(),
         archivoId);
     ctx.expediente().setFechaUltimaActuacion(LocalDate.now(zona));
@@ -254,7 +291,9 @@ public class CoactivaGenerationService {
         .map(a -> parser.parse(a.getResultado()))
         .filter(parse -> parse.diagnostico() != null)
         .map(parse -> parse.diagnostico().datosExtraidos())
+        .map(CoactivaPlantillaDataMapper::normalizarExtraidos)
         .ifPresent(extraidos -> aplanar(extraidos, ia));
+    // Mapper (ya normalizado + aliases de plantilla) prevalece sobre el OCR crudo aplanado.
     datos.valores()
         .forEach(
             (tag, valor) -> {
@@ -293,17 +332,18 @@ public class CoactivaGenerationService {
       String key = String.valueOf(entry.getKey());
       Object value = entry.getValue();
       if (value instanceof Map<?, ?>) {
-        aplanar(value, out);
+        // Grupos anidados ya los expandió normalizarExtraidos; no aplastar hojas ambiguas (p. ej. total).
+        continue;
       } else if (value instanceof Collection<?> lista) {
         List<String> partes = new ArrayList<>();
         for (Object item : lista) {
           if (item instanceof Map<?, ?>) {
-            aplanar(item, out);
-          } else {
-            String texto = CoactivaVariableBinder.limpio(item == null ? null : item.toString());
-            if (texto != null) {
-              partes.add(texto);
-            }
+            // Listas estructuradas (cuentas_embargadas) las resuelve el mapper; no pisar tags planos.
+            continue;
+          }
+          String texto = CoactivaVariableBinder.limpio(item == null ? null : item.toString());
+          if (texto != null) {
+            partes.add(texto);
           }
         }
         if (!partes.isEmpty()) {

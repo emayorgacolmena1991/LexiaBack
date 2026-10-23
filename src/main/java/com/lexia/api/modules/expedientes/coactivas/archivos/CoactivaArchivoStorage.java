@@ -5,12 +5,14 @@ import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
@@ -72,9 +74,13 @@ public class CoactivaArchivoStorage {
     }
   }
 
+  public boolean disponible(CoactivaArchivo archivo) {
+    return ubicar(archivo) != null;
+  }
+
   public byte[] read(CoactivaArchivo archivo) {
-    Path path = Path.of(archivo.getStoragePath()).toAbsolutePath().normalize();
-    if (!path.startsWith(root) || !Files.exists(path)) {
+    Path path = ubicar(archivo);
+    if (path == null) {
       throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
     }
     try {
@@ -83,6 +89,37 @@ public class CoactivaArchivoStorage {
       throw new ApiException(
           HttpStatus.INTERNAL_SERVER_ERROR, "COA_STORAGE_ERROR", "No se pudo leer el archivo.");
     }
+  }
+
+  /**
+   * {@code storage_path} es la ruta absoluta del equipo que subió el archivo. Si la raíz de este
+   * proceso es otra (otro equipo, otro directorio de arranque o {@code LEXIA_COACTIVAS_DIR}), se
+   * busca el mismo tramo {@code <tenant>/<yyyy>/<MM>/<uuid>_<nombre>} bajo {@link #root}.
+   */
+  Path ubicar(CoactivaArchivo archivo) {
+    String guardada = archivo.getStoragePath();
+    if (guardada == null || guardada.isBlank()) {
+      return null;
+    }
+    try {
+      Path directa = Path.of(guardada).toAbsolutePath().normalize();
+      if (directa.startsWith(root) && Files.isRegularFile(directa)) {
+        return directa;
+      }
+    } catch (InvalidPathException ignored) {
+      // Ruta de otro sistema operativo: se reubica abajo.
+    }
+    if (archivo.getTenantId() == null) {
+      return null;
+    }
+    String[] partes = guardada.replace('\\', '/').split("/");
+    int desde = Arrays.asList(partes).lastIndexOf(archivo.getTenantId().toString());
+    if (desde < 0) {
+      return null;
+    }
+    Path reubicada =
+        root.resolve(String.join("/", Arrays.copyOfRange(partes, desde, partes.length))).normalize();
+    return reubicada.startsWith(root) && Files.isRegularFile(reubicada) ? reubicada : null;
   }
 
   public record StoredFile(String path, String sha256, long size) {}

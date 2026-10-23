@@ -5,6 +5,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.ResolucionDelegadoRequest;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
+import com.lexia.api.modules.expedientes.coactivas.jobs.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
@@ -25,6 +26,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TimelineItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.UpdateExpedienteRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService.ArchivoContenido;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -48,6 +50,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1/coactivas")
@@ -57,12 +60,17 @@ public class CoactivaExpedienteController {
   private final CoactivaExpedienteService service;
   private final CoactivaBandejaService bandeja;
   private final CoactivaDelegadoService delegados;
+  private final BatchEventPublisherService sse;
 
   public CoactivaExpedienteController(
-      CoactivaExpedienteService service, CoactivaBandejaService bandeja, CoactivaDelegadoService delegados) {
+      CoactivaExpedienteService service,
+      CoactivaBandejaService bandeja,
+      CoactivaDelegadoService delegados,
+      BatchEventPublisherService sse) {
     this.service = service;
     this.bandeja = bandeja;
     this.delegados = delegados;
+    this.sse = sse;
   }
 
   @GetMapping("/catalogos")
@@ -125,6 +133,12 @@ public class CoactivaExpedienteController {
     return service.detalle(id);
   }
 
+  @GetMapping(value = "/expedientes/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter stream(@PathVariable UUID id) {
+    service.detalle(id);
+    return sse.abrir(id);
+  }
+
   @PatchMapping("/expedientes/{id}")
   public ExpedienteDetalle actualizar(@PathVariable UUID id, @Valid @RequestBody UpdateExpedienteRequest request) {
     return service.actualizar(id, request);
@@ -133,6 +147,12 @@ public class CoactivaExpedienteController {
   @PostMapping("/expedientes/{id}/etapa")
   public ExpedienteDetalle cambiarEtapa(@PathVariable UUID id, @Valid @RequestBody CambioEtapaRequest request) {
     return service.cambiarEtapa(id, request);
+  }
+
+  @GetMapping("/expedientes/{id}/buscar")
+  public List<CoactivaPdfTexto.Coincidencia> buscar(
+      @PathVariable UUID id, @RequestParam(name = "q", defaultValue = "") String q) {
+    return service.buscarOcr(id, q);
   }
 
   @GetMapping("/expedientes/{id}/timeline")
@@ -245,15 +265,31 @@ public class CoactivaExpedienteController {
   @GetMapping("/archivos/{archivoId}/contenido")
   public ResponseEntity<byte[]> contenido(@PathVariable UUID archivoId) {
     ArchivoContenido contenido = service.contenido(archivoId);
-    MediaType mediaType =
-        contenido.mimeType() == null
-            ? MediaType.APPLICATION_OCTET_STREAM
-            : MediaType.parseMediaType(contenido.mimeType());
+    MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+    try {
+      if (contenido.mimeType() != null) {
+        mediaType = MediaType.parseMediaType(contenido.mimeType());
+      }
+    } catch (org.springframework.http.InvalidMediaTypeException ignored) {
+      // MIME declarado por el cliente al subir: si es ilegible se descarga como binario.
+    }
+    // El MIME lo declara quien sube: HTML o SVG inline ejecutarÃ­an script en el origen de Lexia.
+    boolean inline =
+        MediaType.APPLICATION_PDF.equalsTypeAndSubtype(mediaType)
+            || ("image".equals(mediaType.getType())
+                && !mediaType.isWildcardSubtype()
+                && !mediaType.getSubtype().contains("svg"));
+    if (!inline) {
+      mediaType = MediaType.APPLICATION_OCTET_STREAM;
+    }
+    ContentDisposition disposition =
+        (inline ? ContentDisposition.inline() : ContentDisposition.attachment())
+            .filename(contenido.nombre(), StandardCharsets.UTF_8)
+            .build();
     return ResponseEntity.ok()
         .contentType(mediaType)
-        .header(
-            HttpHeaders.CONTENT_DISPOSITION,
-            ContentDisposition.inline().filename(contenido.nombre(), StandardCharsets.UTF_8).build().toString())
+        .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+        .header("X-Content-Type-Options", "nosniff")
         .body(contenido.bytes());
   }
 }

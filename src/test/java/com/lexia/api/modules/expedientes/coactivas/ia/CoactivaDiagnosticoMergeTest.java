@@ -91,4 +91,30 @@ class CoactivaDiagnosticoMergeTest {
     assertTrue(fusion.json().contains("AMARILLO"));
     assertTrue(fusion.json().contains("Solicitar liquidación"));
   }
+
+  @Test
+  void laValidacionDeUnaPiezaNoCambiaElPdfFuenteDeLaEtapa() {
+    UUID pdf = UUID.randomUUID();
+    String json =
+        """
+        {"etapa_sugerida":{"codigo":"MEDIDAS_CAUTELARES","justificacion_juridica":"Providencia de retención",
+          "evidencia":{"documento_origen":"Providencia","foja_pagina":3}}}
+        """;
+    CoactivaDiagnosticoMerge.Fusion diagnostico =
+        CoactivaDiagnosticoMerge.fusionar(
+            null, null, null, pdf, "juicio.pdf", "PROVIDENCIA",
+            new CoactivaDiagnostico(
+                50, "MEDIDAS_CAUTELARES", "MEDIDAS_CAUTELARES", List.of(), List.of(), Map.of(), null, json));
+
+    CoactivaDiagnosticoMerge.Fusion pieza =
+        CoactivaDiagnosticoMerge.pieza(
+            diagnostico.json(), pdf, Instant.now(), UUID.randomUUID(), "oficio.pdf", "OFICIO", "APROBADO", "[\"OFICIO\"]");
+
+    var tentativa =
+        new CoactivaDiagnosticoParser(new com.fasterxml.jackson.databind.ObjectMapper()).tentativaDe(pieza.json());
+    assertEquals(pdf.toString(), tentativa.archivoId());
+    assertEquals("juicio.pdf", tentativa.archivoNombre());
+    assertEquals("Providencia de retención", tentativa.justificacion());
+    assertEquals("Providencia", tentativa.evidencias().get(0).documentoOrigen());
+  }
 }

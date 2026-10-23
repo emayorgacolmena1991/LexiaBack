@@ -10,8 +10,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto.Coincidencia;
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaPdfTexto.TextoOcr;
 import com.lexia.api.modules.ia.ocr.AzureOcrService;
+import java.util.List;
+import java.util.Locale;
 import org.junit.jupiter.api.Test;
 
 class CoactivaPdfTextoTest {
@@ -35,6 +38,7 @@ class CoactivaPdfTextoTest {
     assertTrue(texto.texto().contains("PAGARE BanEcuador"));
     assertTrue(texto.texto().contains("Liquidacion previa"));
     assertEquals(2, texto.paginas());
+    assertEquals(2, CoactivaPdfTexto.contarFojas(texto.texto()));
     assertEquals("PAGARE BanEcuador".length(), texto.caracteres());
   }
 
@@ -63,10 +67,37 @@ class CoactivaPdfTextoTest {
                  "pages":[{"pageNumber":1,"lines":[{"content":"PAGARE a la orden BanEcuador titulo de credito"}]}]}
                 """));
     byte[] pdf = new byte[] {'%', 'P', 'D', 'F', '-', '1'};
-    TextoOcr texto = new CoactivaPdfTexto(ocr).extraer(pdf, "application/pdf", "juicio.pdf");
+    TextoOcr texto = new CoactivaPdfTexto(ocr, null).extraer(pdf, "application/pdf", "juicio.pdf");
     verify(ocr).analizarLectura(pdf, "application/pdf");
     assertTrue(texto.texto().contains("--- FOJA 1 ---"));
     assertTrue(texto.texto().contains("PAGARE"));
+  }
+
+  @Test
+  void reparaMojibakeLatin1YConservaUnicode() {
+    assertEquals("Prohibición", CoactivaPdfTexto.asegurarUtf8("Prohibici\u00C3\u00B3n"));
+    assertEquals("Señor", CoactivaPdfTexto.asegurarUtf8("Se\u00C3\u00B1or"));
+    assertEquals("Prohibición", CoactivaPdfTexto.asegurarUtf8("Prohibición"));
+    assertEquals("HORA: 12:00 Oficio", CoactivaPdfTexto.asegurarUtf8("HORA: 12:00 Oficio"));
+    assertEquals("Prohibici\u00EF\u00BF\u00BD", CoactivaPdfTexto.asegurarUtf8("Prohibici\u00EF\u00BF\u00BD"));
+  }
+
+  @Test
+  void buscaFojaYExtracto() {
+    String texto =
+        """
+        --- FOJA 44 ---
+        otros datos
+        --- FOJA 45 ---
+        Se notifica al garante solidario de la obligación
+        """;
+    List<Coincidencia> hits = CoactivaPdfTexto.buscar(texto, "Garante");
+    assertEquals(1, hits.size());
+    assertEquals(45, hits.get(0).foja());
+    assertTrue(hits.get(0).extracto().toLowerCase(Locale.ROOT).contains("garante solidario"));
+    assertTrue(hits.get(0).extracto().startsWith("..."));
+    assertTrue(CoactivaPdfTexto.buscar(texto, "a").isEmpty());
+    assertTrue(CoactivaPdfTexto.buscar("", "garante").isEmpty());
   }
 
   @Test

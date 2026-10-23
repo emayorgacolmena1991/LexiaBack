@@ -24,6 +24,10 @@ public final class CoactivaDiagnosticoParser {
       TENTATIVA DE ETAPA. El mensaje de usuario es el OCR consolidado del PDF único (marcas --- FOJA n ---).
       La etapa del contexto es la reportada por el banco. etapa_sugerida se decide solo con el OCR y estas reglas.
       Gana el hito más avanzado que tenga extracto literal y foja. Sin esa evidencia, no avances.
+      Decide por actuaciones con fecha, no por palabras sueltas. Distingue solicitada, ordenada, notificada, ejecutada y levantada:
+      una solicitud o un borrador no prueba la etapa; una orden sin razón de notificación no prueba la notificación;
+      una medida levantada no sostiene Medidas cautelares. Si se contradicen, gana la actuación posterior por fecha.
+      Si ningún hito tiene extracto literal en el OCR, la etapa es INDETERMINADA. No uses la etapa del banco para rellenar.
       Citación válida: 1 notificación personal, o 2 boletas por persona, o correo fijado.
       Liquidación usada en providencia: alerta si pasaron más de 3 días desde su emisión.
       - PREVIA: pagaré a la orden, aviso de vencimiento, liquidación previa u orden de cobro con número de operación.
@@ -45,64 +49,114 @@ public final class CoactivaDiagnosticoParser {
 
       Responde ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto adicional.
       etapa_sugerida es la tentativa. etapa_procesal_detectada debe ser igual a etapa_sugerida.codigo.
-      Códigos: PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO.
-      evidencia.extracto_texto es cita literal del OCR. Si no hay foja o fecha, usa null.
+      Códigos: PREVIA|RPV|OPI_EMITIDA|NOTIFICACION_COA|MEDIDAS_CAUTELARES|ESCRITO|EMBARGO|HONORARIOS|AVALUO|REMATE|CONVENIO|ARCHIVADO|INDETERMINADA.
+      Devuelve una sola etapa, la más probable. No listes alternativas.
+      justificacion_juridica: máximo dos frases y 300 caracteres, con la forma
+      "El expediente se encuentra en <etapa> porque se identificó <actuación> de <fecha>". Solo hechos del OCR.
+      Nunca justifiques con acciones pendientes, recomendaciones ni faltantes.
+      evidencia es un solo documento: documento_origen, foja_pagina, fecha_documento y extracto_texto.
+      extracto_texto es una cita literal de hasta 180 caracteres. Si no hay foja o fecha, usa null.
+      Sin cita literal en el OCR: codigo INDETERMINADA y evidencia null. No inventes extractos.
+      documentos_identificados: como máximo 8, solo los presentes.
+      alertas_inconsistencias: como máximo 4 frases cortas. acciones_sugeridas: como máximo 2.
+      datos_extraidos: incluye estas claves. Valor literal del OCR si consta; null si no consta. No omitas claves ni inventes valores.
+      siguiente_accion_sugerida: una frase.
       {"porcentaje_completitud": 0,
        "etapa_procesal_detectada": "MEDIDAS_CAUTELARES",
        "etapa_sugerida": {
          "codigo": "MEDIDAS_CAUTELARES",
          "nombre": "Medidas cautelares",
-         "justificacion_juridica": "por qué esta etapa y no la anterior",
+         "justificacion_juridica": "El expediente se encuentra en Medidas cautelares porque se identificó una providencia de retención del 28 de septiembre de 2026.",
          "evidencia": {
-           "documento_origen": "nombre del PDF",
+           "documento_origen": "Providencia de medidas cautelares",
            "foja_pagina": 3,
            "fecha_documento": "2026-09-28",
            "extracto_texto": "cita literal corta"
          }
        },
-       "suficiencia_documental": {
-         "porcentaje_completitud": 0,
-         "estado_diagnostico": "VERDE|AMARILLO|ROJO",
-         "requisitos_faltantes": ["documento que el OCR no contiene"]
+       "documentos_identificados": [{"tipo": "PROVIDENCIA", "foja_inicio": 3, "foja_fin": 3, "presente": true}],
+       "alertas_inconsistencias": [],
+       "datos_extraidos": {
+         "numero_juicio_coactivo": null, "numero_operacion": null,
+         "nombre_deudor_principal_1": null, "cedula_deudor_principal_1": null, "correo_notificacion_1": null,
+         "nombre_deudor_principal_2": null, "cedula_deudor_principal_2": null,
+         "nombre_garante_solidario_1": null, "cedula_garante_solidario_1": null,
+         "nombre_garante_solidario_2": null, "cedula_garante_solidario_2": null,
+         "monto_deuda_total": null, "monto_credito_original": null,
+         "monto_retencion": null, "monto_retencion_1": null, "monto_retencion_2": null,
+         "monto_embargo_1": null, "monto_embargo_2": null, "monto_embargo_3": null,
+         "fecha_liquidacion": null, "fecha_actuacion": null, "hora_actuacion": null,
+         "fecha_providencia": null, "fecha_embargo": null, "fecha_orden_pago_inmediato": null,
+         "fecha_escrito_presentado": null, "fecha_comprobante_pago": null,
+         "ciudad_actuacion": null,
+         "funcionario_coactiva": null, "abogado_secretario": null,
+         "numero_resolucion_delegacion": null, "fecha_resolucion_delegacion": null,
+         "nombre_gerente_general": null,
+         "numero_oficio": null, "numero_oficio_retencion_1": null, "numero_oficio_retencion_2": null,
+         "numero_cuenta_1": null, "numero_cuenta_2": null, "numero_cuenta_3": null,
+         "numero_cuenta_destino": null, "numero_cuenta_embargada": null, "numero_cuenta_retencion_1": null,
+         "numero_comprobante_pago": null,
+         "institucion_financiera": null, "ruc_entidad_financiera": null,
+         "entidad_financiera_destino": null, "tipo_cuenta_destino": null,
+         "nombre_coactivado": null, "cedula_coactivado": null, "calidad_coactivado": null,
+         "nombre_embargado": null, "cedula_embargado": null, "calidad_embargado": null,
+         "nombre_depositario": null, "cedula_depositario": null, "titulo_depositario": null,
+         "fecha_auto_designacion": null, "numero_zona": null,
+         "objetivo_medida": null,
+         "monto_honorarios": null, "cuenta_honorarios_abogado": null, "monto_abono": null,
+         "monto_embargo_total": null, "monto_liquidacion": null, "fecha_liquidacion_actualizada": null,
+         "fecha_acta": null, "fecha_aplicacion_cobis": null, "fecha_convenio": null,
+         "fecha_resolucion_facilidad": null, "numero_cuotas": null,
+         "numero_memorandum_convenio": null, "numero_memorandum_traslado": null,
+         "fecha_memorandum_convenio": null, "fecha_memorandum_traslado": null,
+         "numero_resolucion_facilidad": null, "detalle_abono": null,
+         "correo_notificacion_2": null, "correo_notificacion_3": null,
+         "numero_cuenta_retencion": null, "cedula_receptor": null, "nombre_receptor": null,
+         "cliente_beneficiario": null
        },
        "acciones_sugeridas": [
-         {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "acción concreta", "descripcion": "por qué", "prioridad": "ALTA|MEDIA|BAJA"}
+         {"codigo_accion": "REQUERIR_LIQUIDACION", "titulo": "acción concreta", "descripcion": "por qué", "prioridad": "ALTA"}
        ],
-       "documentos_identificados": [{"tipo": "PAGARE", "foja_inicio": 1, "foja_fin": 4, "presente": true}],
-       "alertas_inconsistencias": ["motivo concreto"],
-       "datos_extraidos": {
-         "juicio": null, "operacion": null, "deudor": null, "monto_mora": null,
-         "cedula_deudor_principal": null, "correo_notificacion_deudor": null,
-         "nombre_garante_solidario": null, "cedula_garante_solidario": null,
-         "nombre_depositario_judicial": null, "cedula_depositario_judicial": null,
-         "nombre_funcionario_coactiva": null, "nombre_gerente_general": null, "nombre_abogado_secretario": null,
-         "numero_resolucion_delegacion": null, "fecha_resolucion_delegacion": null,
-         "monto_deuda_total": null, "monto_honorarios": null, "cuenta_honorarios_abogado": null,
-         "banco_embargado": null,
-         "cuentas_embargadas": [{"numero_cuenta": null, "tipo": "CORRIENTE|AHORROS", "titular": "DEUDOR|GARANTE", "banco": null, "monto_retenido": null}],
-         "correo_estudio_juridico_externo": null, "correo_funcionario_coactiva": null, "correo_coactiva_institucional": null,
-         "nombre_deudor_principal_2": null, "cedula_deudor_principal_2": null,
-         "nombre_garante_solidario_2": null, "cedula_garante_solidario_2": null,
-         "fecha_liquidacion": null, "fecha_embargo": null, "fecha_orden_pago_inmediato": null,
-         "fecha_escrito_presentado": null, "fecha_comprobante_pago": null, "numero_comprobante_pago": null,
-         "monto_retencion": null, "monto_credito_original": null, "monto_abono": null,
-         "monto_retencion_1": null, "monto_retencion_2": null,
-         "numero_oficio": null, "institucion_financiera": null,
-         "nombre_embargado": null, "cedula_embargado": null, "calidad_embargado": null,
-         "nombre_coactivado": null, "cedula_coactivado": null, "calidad_coactivado": null,
-         "numero_cuenta_retencion": null, "numero_cuenta_destino": null, "tipo_cuenta_destino": null,
-         "numero_oficio_retencion_1": null, "numero_oficio_retencion_2": null,
-         "correo_notificacion_2": null, "correo_notificacion_3": null,
-         "numero_cuotas": null, "fecha_convenio": null,
-         "nombre_receptor": null, "cedula_receptor": null,
-         "titulo_delegado": null, "titulo_secretario": null, "titulo_gerente_general": null, "titulo_depositario": null},
        "siguiente_accion_sugerida": "qué debe hacer el abogado"}
-      No inventes documentos ni fojas que no estén en el texto. Si falta, presente=false y sin fojas.
-      En datos_extraidos copia solo valores que consten literalmente en el texto; si un dato no aparece usa null
-      (cuentas_embargadas: [] si no hay oficios de retención). No deduzcas, completes ni estimes valores.
-      Nombres sin títulos ni tratamientos (sin "señor", "Sr.", "Abg.", "Mgs.", "Ing."). Cédulas solo con dígitos.
+      REGLAS DE EXTRACCIÓN (busca activamente en el OCR):
+      REGLA GENERAL ANTI-NULL: Si no encuentras un dato, NO devuelvas null de inmediato. Busca primero el cargo clave en el texto
+      (ej. 'DEPOSITARIO(A) JUDICIAL', 'SECRETARIO(A) EXTERNO', 'FUNCIONARIO EJECUTOR'). Si encuentras el cargo, extrae el nombre propio,
+      la cédula y la fecha que consten en ese mismo párrafo. Devuelve null solo si el párrafo del cargo no existe en absoluto en el OCR.
+      NOTA: El OCR puede tener tildes o eñes corruptas (ej. ï¿½). Busca las palabras ignorando estas tildes (ej. busca 'Prohibicion', 'Hora', 'Oficio').
+      - hora_actuacion: patrón "HORA: HH:MM" o "a las HH:MM". Devuelve "HH:MM".
+      - numero_oficio / numero_oficio_retencion_N: Busca cualquier número que esté junto a la palabra 'oficio' (ej. 11426). Solo el número, sin texto.
+      - numero_cuenta_N / numero_cuenta_destino / numero_cuenta_embargada / numero_cuenta_retencion_N: Busca cualquier número largo (más de 6 dígitos) que esté cerca de la palabra 'cuenta' o 'ahorros'. Solo dígitos.
+      - monto_embargo_N: patrón "embargo de $<monto>" o "monto de embargo $<monto>". Si no hay monto explícito de embargo, null.
+      - institucion_financiera: nombre del banco/cooperativa (ej. "Banco Pichincha", "JEP", "Cooperativa ...").
+      - ruc_entidad_financiera: patrón "RUC: <13 digitos>".
+      - fecha_embargo, fecha_providencia, fecha_orden_pago_inmediato: buscar providencias y oficios con fecha explícita.
+      - numero_comprobante_pago: patrón "comprobante No. <numero>" o "documento No. <numero>".
+      - calidad_coactivado / calidad_embargado: "deudor principal", "garante solidario", "codeudor", "fiador".
+      - nombre_depositario: Busca el nombre completo de la persona que sigue o antecede a la frase "DEPOSITARIO(A) JUDICIAL" o "Depositario Judicial".
+      - cedula_depositario: Busca el número de 10 dígitos que aparece en la misma oración o párrafo que el nombre del depositario.
+      - titulo_secretario / titulo_delegado / titulo_depositario: Extrae la abreviatura exacta del título (Abg., Ing., Lcda., Dr.) que precede al nombre de la persona en el texto, tal cual está escrita.
+      - fecha_auto_designacion: Busca cualquier fecha (ej. "14 de octubre de 2026") que esté en el mismo párrafo donde se nombra al depositario. Si no hallas la fecha exacta, usa la fecha de la providencia principal del documento.
+      - numero_zona: Extrae el número de la zona o zonal (ej. "ZONAL 4", "Zona 2") que se mencione en el encabezado o en el cuerpo del texto.
+      - monto_honorarios: total de honorarios con IVA si consta (10% + IVA o factura). Número decimal.
+      - cuenta_honorarios_abogado: número de cuenta (más de 6 dígitos) junto a honorarios del abogado/SAE.
+      - monto_abono: patrón "abono de $<monto>" o "valor del abono". Número decimal.
+      - monto_embargo_total: suma o total de embargo/retención si el documento la nombra. Número decimal.
+      - monto_liquidacion / fecha_liquidacion_actualizada: monto y fecha de la liquidación (actualizada si el texto lo dice).
+      - fecha_acta: fecha del acta de entrega o de posesión del depositario.
+      - fecha_aplicacion_cobis: fecha de aplicación en COBIS/COVIS.
+      - fecha_convenio / numero_cuotas / fecha_resolucion_facilidad / numero_resolucion_facilidad: facilidad de pago (36, 48 o 60 meses).
+      - numero_memorandum_convenio / fecha_memorandum_convenio: número y fecha del memorando de convenio.
+      - numero_memorandum_traslado / fecha_memorandum_traslado: número y fecha del memorando de traslado.
+      - detalle_abono: texto literal que describe el abono (concepto, cuota o referencia).
+      - correo_notificacion_2 / correo_notificacion_3: segundo y tercer correo de notificación, distintos de correo_notificacion_1.
+      - numero_cuenta_retencion: cuenta de retención si no está numerada como _1/_2/_3. Solo dígitos.
+      - nombre_receptor / cedula_receptor: persona que recibe copias certificadas (receptor/recibí). Cédula solo dígitos.
+      - cliente_beneficiario: nombre del cliente o beneficiario de la cuenta destino/transferencia.
+      - Si el patrón no aparece literalmente en el OCR, devuelve null. No inventes.
+      REGLA DE VALIDACIÓN CRUZADA: Si un campo obligatorio no tiene un valor claro, revisa el OCR. Si encuentras el patrón pero está incompleto o es ambiguo, devuelve la cadena literal '[DATO EN TEXTO NO EXTRAÍDO POR IA]'. Si el patrón no existe en absoluto en el OCR, devuelve null.
+      No inventes documentos ni fojas que no estén en el texto.
+      Nombres sin títulos ni tratamientos. Cédulas solo con dígitos.
       Montos como número decimal sin símbolo ni separador de miles. Fechas tal como constan en el documento.
-      Correos solo si aparecen escritos en el expediente.
       """;
 
   private final ObjectMapper objectMapper;
@@ -408,10 +462,41 @@ public final class CoactivaDiagnosticoParser {
           ev == null ? null : texto(ev, "extracto_texto", "extractoTexto"),
           suf == null ? null : texto(suf, "estado_diagnostico", "estadoDiagnostico"),
           suf == null ? List.of() : textos(suf, "requisitos_faltantes", "requisitosFaltantes"),
-          acciones);
+          acciones,
+          evidencias(etapa, ev),
+          etapa == null ? null : texto(etapa, "archivo_id"),
+          etapa == null ? null : texto(etapa, "archivo_nombre"));
     } catch (Exception e) {
       return Tentativa.vacia();
     }
+  }
+
+  /** Lista {@code evidencias}; los diagnósticos anteriores solo traen {@code evidencia}. */
+  private static List<Tentativa.Evidencia> evidencias(JsonNode etapa, JsonNode principal) {
+    List<Tentativa.Evidencia> items = new ArrayList<>();
+    JsonNode arr = etapa == null ? null : etapa.get("evidencias");
+    if (arr != null && arr.isArray()) {
+      for (JsonNode item : arr) {
+        if (item.isObject()) {
+          agregarEvidencia(items, item);
+        }
+      }
+    }
+    if (items.isEmpty() && principal != null) {
+      agregarEvidencia(items, principal);
+    }
+    return items;
+  }
+
+  private static void agregarEvidencia(List<Tentativa.Evidencia> items, JsonNode n) {
+    String documento = texto(n, "documento_origen", "documentoOrigen");
+    String extracto = texto(n, "extracto_texto", "extractoTexto");
+    if (!StringUtils.hasText(documento) && !StringUtils.hasText(extracto)) {
+      return;
+    }
+    items.add(
+        new Tentativa.Evidencia(
+            documento, foja(n, "foja_pagina", "fojaPagina"), texto(n, "fecha_documento", "fechaDocumento"), extracto));
   }
 
   public record Tentativa(
@@ -424,13 +509,19 @@ public final class CoactivaDiagnosticoParser {
       String extractoTexto,
       String estadoDiagnostico,
       List<String> requisitosFaltantes,
-      List<Accion> acciones) {
+      List<Accion> acciones,
+      List<Evidencia> evidencias,
+      String archivoId,
+      String archivoNombre) {
 
     public static Tentativa vacia() {
-      return new Tentativa(null, null, null, null, null, null, null, null, List.of(), List.of());
+      return new Tentativa(
+          null, null, null, null, null, null, null, null, List.of(), List.of(), List.of(), null, null);
     }
 
     public record Accion(String codigo, String titulo, String descripcion, String prioridad) {}
+
+    public record Evidencia(String documentoOrigen, Integer fojaPagina, String fechaDocumento, String extractoTexto) {}
   }
 
   private static String texto(JsonNode root, String... keys) {
