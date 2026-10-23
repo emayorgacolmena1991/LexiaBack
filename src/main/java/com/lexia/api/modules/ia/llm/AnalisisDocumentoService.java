@@ -21,16 +21,6 @@ public interface AnalisisDocumentoService {
         "Procesamiento unificado no disponible para este proveedor LLM.");
   }
 
-  /** Cotejo con el modelo liviano y JSON estricto. */
-  default ExtraccionExpedienteCompleto procesarCotejo(String ocrMarcado, String systemPrompt) {
-    return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
-  }
-
-  /** Dictamen con el modelo pesado. Solo si el cotejo dejó incoherencias. */
-  default ExtraccionExpedienteCompleto procesarDictamen(String ocrMarcado, String systemPrompt) {
-    return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
-  }
-
   /**
    * Extracción JSON estricta de las variables del acto. Sin producto/plantilla usa el esquema
    * amplio. Default: no soportado.

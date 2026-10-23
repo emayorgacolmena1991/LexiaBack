@@ -26,10 +26,13 @@ public final class OcrExpedienteTexto {
         continue;
       }
       String id = raw.trim();
-      String elegido =
-          masDocumentos(desdeResultados(cache.listResults(id)), marcarConsolidado(cache.getConsolidated(id)));
-      if (StringUtils.hasText(elegido)) {
-        return elegido;
+      String marcado = desdeResultados(cache.listResults(id));
+      if (StringUtils.hasText(marcado)) {
+        return marcado;
+      }
+      String envuelto = envolverPlano(cache.getConsolidated(id));
+      if (StringUtils.hasText(envuelto)) {
+        return envuelto;
       }
     }
     return "";
@@ -79,70 +82,6 @@ public final class OcrExpedienteTexto {
     }
     sb.append("</expediente_ocr>");
     return sb.toString();
-  }
-
-  private static final Pattern MARCA_DOCUMENTO =
-      Pattern.compile("===\\s*DOCUMENTO:\\s*([^=\\n]+?)\\s*===");
-
-  /** El texto con más bloques gana. Un consolidado tardío de un solo PDF no pisa el lote. */
-  public static String masDocumentos(String porArchivo, String consolidado) {
-    if (contarDocumentos(consolidado) > contarDocumentos(porArchivo) && StringUtils.hasText(consolidado)) {
-      return consolidado;
-    }
-    if (StringUtils.hasText(porArchivo)) {
-      return porArchivo;
-    }
-    return consolidado == null ? "" : consolidado;
-  }
-
-  /** {@code === DOCUMENTO: TIPO ===} del front pasa a un {@code <documento>} por archivo. */
-  public static String marcarConsolidado(String texto) {
-    List<DocOcr> partes = partirConsolidado(texto);
-    if (partes.size() > 1) {
-      return documentos(partes);
-    }
-    return envolverPlano(texto);
-  }
-
-  public static int contarDocumentos(String texto) {
-    if (!StringUtils.hasText(texto)) {
-      return 0;
-    }
-    int tags = 0;
-    for (int i = 0; (i = texto.indexOf("<documento", i)) >= 0; i += 10) {
-      tags++;
-    }
-    int marcas = 0;
-    Matcher m = MARCA_DOCUMENTO.matcher(texto);
-    while (m.find()) {
-      marcas++;
-    }
-    return Math.max(tags, marcas);
-  }
-
-  static List<DocOcr> partirConsolidado(String texto) {
-    List<DocOcr> out = new ArrayList<>();
-    if (!StringUtils.hasText(texto)) {
-      return out;
-    }
-    Matcher m = MARCA_DOCUMENTO.matcher(texto);
-    List<Integer> marcas = new ArrayList<>();
-    List<Integer> cuerpos = new ArrayList<>();
-    List<String> tipos = new ArrayList<>();
-    while (m.find()) {
-      marcas.add(m.start());
-      cuerpos.add(m.end());
-      tipos.add(m.group(1).trim());
-    }
-    for (int i = 0; i < cuerpos.size(); i++) {
-      int fin = i + 1 < marcas.size() ? marcas.get(i + 1) : texto.length();
-      String cuerpo = texto.substring(cuerpos.get(i), fin).trim();
-      if (!StringUtils.hasText(cuerpo)) {
-        continue;
-      }
-      out.add(new DocOcr("doc-" + (i + 1), tipos.get(i), null, cuerpo));
-    }
-    return out;
   }
 
   public static String envolverPlano(String texto) {

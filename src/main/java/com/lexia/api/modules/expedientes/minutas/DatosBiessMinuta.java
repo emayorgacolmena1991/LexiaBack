@@ -71,25 +71,6 @@ public record DatosBiessMinuta(
         data.getApoderadoBiess());
   }
 
-  /** La minuta no tiene tag para reposición ni porcentaje: no se pisan si el dato nuevo viene vacío. */
-  public DatosBiessMinuta conRespaldo(DatosBiessMinuta previo) {
-    if (previo == null) {
-      return this;
-    }
-    return new DatosBiessMinuta(
-        primero(monto, previo.monto),
-        primero(tasa, previo.tasa),
-        primero(plazo, previo.plazo),
-        primero(cuota, previo.cuota),
-        primero(valorReposicion, previo.valorReposicion),
-        primero(porcentajeValorFinanciado, previo.porcentajeValorFinanciado),
-        primero(apoderado, previo.apoderado));
-  }
-
-  private static String primero(String actual, String respaldo) {
-    return actual != null && !actual.isBlank() ? actual : (respaldo == null ? "" : respaldo);
-  }
-
   public boolean isEmpty() {
     return monto.isEmpty()
         && tasa.isEmpty()
@@ -101,9 +82,8 @@ public record DatosBiessMinuta(
   }
 
   /**
-   * Captura BIESS → tag canónico. Solo entra si el acto lo lista.
-   * No salen de la captura: precio, entrada, saldo, cédula del apoderado, banco anterior,
-   * forma de pago, reposición ni porcentaje financiado (no tienen tag).
+   * Único mapeo captura BIESS → tag canónico de la plantilla. Valor de reposición y porcentaje
+   * financiado no tienen tag en la minuta.
    */
   public enum CampoPlantilla {
     MONTO("monto", "monto_prestamo", DatosBiessMinuta::monto, MinutaViviendaData::setMontoPrestamo),

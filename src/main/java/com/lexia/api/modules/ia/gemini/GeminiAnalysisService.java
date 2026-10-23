@@ -2,8 +2,6 @@ package com.lexia.api.modules.ia.gemini;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.genai.Client;
-import com.google.genai.types.HttpOptions;
-import com.lexia.api.modules.ia.llm.LlmTimeoutException;
 import com.google.genai.types.Content;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
@@ -12,7 +10,6 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
-import com.lexia.api.modules.ia.llm.IaConsumoLog;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
@@ -65,38 +62,19 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
   private final String apiKey;
   private final ObjectMapper objectMapper;
   private final ActoVariableCatalog actos;
-  private final IaConsumoLog consumo;
-  private final ThreadLocal<List<String>> modelosForzados = new ThreadLocal<>();
 
   public GeminiAnalysisService(
       @Value("${gemini.api.key:}") String apiKey,
       ObjectMapper objectMapper,
-      ActoVariableCatalog actos,
-      IaConsumoLog consumo) {
+      ActoVariableCatalog actos) {
     this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.objectMapper = objectMapper;
     this.actos = actos;
-    this.consumo = consumo;
   }
 
   @Override
   public boolean isConfigured() {
     return StringUtils.hasText(apiKey);
-  }
-
-  @Override
-  public ExtraccionExpedienteCompleto procesarCotejo(String ocrMarcado, String systemPrompt) {
-    return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
-  }
-
-  @Override
-  public ExtraccionExpedienteCompleto procesarDictamen(String ocrMarcado, String systemPrompt) {
-    modelosForzados.set(List.of("gemini-2.5-pro"));
-    try {
-      return procesarExpedienteCompleto(ocrMarcado, systemPrompt);
-    } finally {
-      modelosForzados.remove();
-    }
   }
 
   @Override
@@ -128,8 +106,8 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = cliente()) {
-      for (String modelo : modelosForzados.get() == null ? MODELOS_FREE : modelosForzados.get()) {
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
+      for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
             LOG.info(
@@ -137,10 +115,8 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
                 modelo,
                 intento,
                 MAX_INTENTOS_POR_MODELO);
-            long inicio = System.nanoTime();
             GenerateContentResponse response =
                 client.models.generateContent(modelo, content, config);
-            anotarUso(response, modelo, inicio);
             String raw = response.text();
             if (!StringUtils.hasText(raw)) {
               ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
@@ -159,12 +135,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " JSON sin datosConsolidados/dictamen";
             sleepBackoff(intento, false);
-          } catch (LlmTimeoutException timeout) {
-            throw timeout;
           } catch (Exception e) {
-            if (LlmTimeoutException.es(e)) {
-              throw new LlmTimeoutException(e.getMessage(), e);
-            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -179,21 +150,6 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
     }
     return ExtraccionExpedienteCompleto.error(
         "No se pudo procesar el expediente con Gemini. Último: " + ultimoDiagnostico);
-  }
-
-  private void anotarUso(GenerateContentResponse response, String modelo, long inicio) {
-    try {
-      var meta = response.usageMetadata();
-      if (meta.isEmpty()) {
-        return;
-      }
-      var usage = meta.get();
-      int prompt = usage.promptTokenCount().orElse(0);
-      int completion = usage.candidatesTokenCount().orElse(0);
-      consumo.registrar(modelo, prompt, completion, (System.nanoTime() - inicio) / 1_000_000L);
-    } catch (RuntimeException ex) {
-      LOG.debug("Sin usage de Gemini: {}", ex.getMessage());
-    }
   }
 
   @Override
@@ -220,7 +176,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = cliente()) {
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -234,12 +190,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
                 MinutaVariableBinder.bind(
                     objectMapper.readTree(GeminiJsonSanitizer.limpiar(raw)), objectMapper);
             return ExtraccionMinutaVivienda.ok(data);
-          } catch (LlmTimeoutException timeout) {
-            throw timeout;
           } catch (Exception e) {
-            if (LlmTimeoutException.es(e)) {
-              throw new LlmTimeoutException(e.getMessage(), e);
-            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -282,7 +233,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = cliente()) {
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -293,12 +244,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
-          } catch (LlmTimeoutException timeout) {
-            throw timeout;
           } catch (Exception e) {
-            if (LlmTimeoutException.es(e)) {
-              throw new LlmTimeoutException(e.getMessage(), e);
-            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -355,7 +301,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .maxOutputTokens(maxTokens)
             .build();
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = cliente()) {
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
           try {
@@ -366,12 +312,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
-          } catch (LlmTimeoutException timeout) {
-            throw timeout;
           } catch (Exception e) {
-            if (LlmTimeoutException.es(e)) {
-              throw new LlmTimeoutException(e.getMessage(), e);
-            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -410,7 +351,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             .build();
 
     String ultimoDiagnostico = "sin respuesta";
-    try (Client client = cliente()) {
+    try (Client client = Client.builder().apiKey(apiKey).build()) {
       for (String modelo : MODELOS_FREE) {
         for (int intento = 1; intento <= 2; intento++) {
           try {
@@ -423,12 +364,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
-          } catch (LlmTimeoutException timeout) {
-            throw timeout;
           } catch (Exception e) {
-            if (LlmTimeoutException.es(e)) {
-              throw new LlmTimeoutException(e.getMessage(), e);
-            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -461,13 +397,6 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
       return "UNAVAILABLE";
     }
     return "OTHER";
-  }
-
-  private Client cliente() {
-    return Client.builder()
-        .apiKey(apiKey)
-        .httpOptions(HttpOptions.builder().timeout(30_000).build())
-        .build();
   }
 
   private static void sleepBackoff(int intento, boolean rateLimit) {

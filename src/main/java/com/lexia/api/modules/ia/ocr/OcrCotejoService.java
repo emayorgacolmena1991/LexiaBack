@@ -4,8 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
-import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
-import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
 import com.lexia.api.modules.expedientes.escrituracion.core.ProcesarExpedienteCompletoResult;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
@@ -101,17 +99,14 @@ public class OcrCotejoService {
 
   private final DocumentosExtraidosStore documentos;
   private final ExpedienteBorradorStore borradores;
-  private final DocumentoTextoOcrRepository ocrRows;
   private final ObjectMapper objectMapper;
 
   public OcrCotejoService(
       DocumentosExtraidosStore documentos,
       ExpedienteBorradorStore borradores,
-      DocumentoTextoOcrRepository ocrRows,
       ObjectMapper objectMapper) {
     this.documentos = documentos;
     this.borradores = borradores;
-    this.ocrRows = ocrRows;
     this.objectMapper = objectMapper;
   }
 
@@ -137,19 +132,10 @@ public class OcrCotejoService {
     if (docs.isEmpty()) {
       docs = documentosBorrador(caso, tenantId);
     }
-    if (docs.isEmpty()) {
-      docs = documentosDictamen(caso);
-    }
     SeccionesCotejo secciones = seccionesDesdeExtraccion(docs);
     if (secciones.sections().isEmpty()) {
-      if (estudioEnDb(caso, tenantId)) {
-        LOG.info("Cotejo sessionId={} caseId={}: estudio en DB, sin documentos para comparar", id, caso);
-        return empty(id);
-      }
       LOG.info("Cotejo sessionId={} caseId={}: sin extracción (ejecutar analizar-ia)", id, caso);
-      CotejoResponse vacio = empty(id);
-      return new CotejoResponse(
-          vacio.sessionId(), vacio.resumen(), vacio.comparaciones(), vacio.grupos(), "SIN_EXTRACCION", null);
+      return empty(id);
     }
 
     CotejoResponse porCampos = cotejarPorCampos(id, secciones.sections(), secciones.datos());
@@ -177,35 +163,6 @@ public class OcrCotejoService {
         .filter(StringUtils::hasText)
         .map(this::docsDesdeJson)
         .orElse(List.of());
-  }
-
-  private List<DocumentoExtraidoDTO> documentosDictamen(UUID caso) {
-    for (DocumentoTextoOcr row : ocrRows.findByIdExpedienteOrderByCreatedAtAsc(caso.toString())) {
-      if (row == null || !StringUtils.hasText(row.getAnalisisJson())) {
-        continue;
-      }
-      List<DocumentoExtraidoDTO> docs = docsDesdeJson(row.getAnalisisJson());
-      if (!docs.isEmpty()) {
-        return docs;
-      }
-    }
-    return List.of();
-  }
-
-  private boolean estudioEnDb(UUID caso, UUID tenantId) {
-    if (borradores
-        .find(caso, tenantId)
-        .map(row -> row.getDatosExtraidos())
-        .filter(StringUtils::hasText)
-        .isPresent()) {
-      return true;
-    }
-    for (DocumentoTextoOcr row : ocrRows.findByIdExpedienteOrderByCreatedAtAsc(caso.toString())) {
-      if (row != null && StringUtils.hasText(row.getAnalisisJson())) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private List<DocumentoExtraidoDTO> docsDesdeJson(String json) {

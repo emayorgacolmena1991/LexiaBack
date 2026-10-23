@@ -199,9 +199,7 @@ public class OcrAzureBatchService {
         item.motivo(),
         item.scoreConfianza(),
         item.textoExtraido(),
-        estado,
-        "AZURE",
-        null);
+        estado);
   }
 
   public LayoutExtractResult evaluarYExtraer(byte[] bytes, String mimeType) {

@@ -1,7 +1,6 @@
 package com.lexia.api.modules.ia.ocr;
 
 import java.util.List;
-import java.util.UUID;
 
 /** DTOs E01–E04 flujo OCR Azure + caché (sin LLM). */
 public final class OcrFlujoDtos {
@@ -35,9 +34,7 @@ public final class OcrFlujoDtos {
       String mensaje,
       Double confianza,
       String textoExtraido,
-      String estado,
-      String origen,
-      Integer duracionMs) {}
+      String estado) {}
 
   public record ReuploadResponse(
       String fileId,
@@ -48,11 +45,7 @@ public final class OcrFlujoDtos {
       String textoExtraido,
       String motivo) {}
 
-  public record ConsolidateRequest(String sessionId, String consolidatedContent, Boolean encolar) {
-    public ConsolidateRequest(String sessionId, String consolidatedContent) {
-      this(sessionId, consolidatedContent, null);
-    }
-  }
+  public record ConsolidateRequest(String sessionId, String consolidatedContent) {}
 
   public record ConsolidateResponse(boolean success, String cacheKey) {}
 
@@ -99,16 +92,5 @@ public final class OcrFlujoDtos {
       /** Lista plana (compatibilidad / consumo detallado). */
       List<CotejoComparacion> comparaciones,
       /** Vista principal: categorías funcionales (Identidad, Inmueble, Linderos, …). */
-      List<CotejoGrupo> grupos,
-      String estado,
-      UUID jobId) {
-
-    public CotejoResponse(
-        String sessionId,
-        CotejoResumen resumen,
-        List<CotejoComparacion> comparaciones,
-        List<CotejoGrupo> grupos) {
-      this(sessionId, resumen, comparaciones, grupos, null, null);
-    }
-  }
+      List<CotejoGrupo> grupos) {}
 }
