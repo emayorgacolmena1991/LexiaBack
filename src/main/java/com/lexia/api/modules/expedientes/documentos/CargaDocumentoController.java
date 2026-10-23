@@ -11,9 +11,7 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActua
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
 import jakarta.validation.Valid;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
-import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -60,23 +58,6 @@ public class CargaDocumentoController {
   @GetMapping("/{idExpediente}/documentos")
   public List<DocumentoCargadoDTO> listarDocumentos(@PathVariable String idExpediente) {
     return cargaDocumentoService.listarDocumentos(idExpediente);
-  }
-
-  @GetMapping("/{idExpediente}/documentos/{idDocumento}/contenido")
-  public ResponseEntity<byte[]> contenido(
-      @PathVariable String idExpediente, @PathVariable String idDocumento) {
-    CargaDocumentoService.StoredDoc doc = cargaDocumentoService.requireStoredDoc(idExpediente, idDocumento);
-    MediaType media =
-        doc.mimeType() == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(doc.mimeType());
-    return ResponseEntity.ok()
-        .contentType(media)
-        .header(
-            "Content-Disposition",
-            ContentDisposition.inline()
-                .filename(doc.nombreOriginal() == null ? "documento" : doc.nombreOriginal(), StandardCharsets.UTF_8)
-                .build()
-                .toString())
-        .body(doc.bytes());
   }
 
   @PostMapping(

@@ -34,12 +34,6 @@ public class AsyncConfig {
     return wrapWithTenantAuth(newPool("AzureOCR-", 10, 20, 100));
   }
 
-  /** Pool de la ingesta masiva de escrituración. */
-  @Bean(name = "ingestaTaskExecutor")
-  Executor ingestaTaskExecutor() {
-    return wrapWithTenantAuth(newPool("ingesta-", 5, 20, 100));
-  }
-
   private static ThreadPoolTaskExecutor newPool(
       String prefix, int core, int max, int queueCapacity) {
     ThreadPoolTaskExecutor delegate = new ThreadPoolTaskExecutor();

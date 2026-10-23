@@ -1,6 +1,5 @@
 package com.lexia.api.modules.expedientes.caso;
 
-import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.StageAdvanceRequest;
@@ -13,15 +12,12 @@ import com.lexia.api.modules.tenancy.TenantParameterService;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -36,8 +32,6 @@ import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
 public class CaseStageTransitionService {
-
-  private static final Logger LOG = LoggerFactory.getLogger(CaseStageTransitionService.class);
 
   private final LegalCaseRepository legalCases;
   private final CaseStageRepository caseStages;
@@ -193,29 +187,20 @@ public class CaseStageTransitionService {
     }
     String block = blockReason(context);
     if (block != null) {
-      throw rechazo(context, MotivoRechazoAdvance.desdeDetalle(block), block, faltantes(context, block));
+      throw new AuthException(HttpStatus.CONFLICT, "STAGE_BLOCKED", block);
     }
 
     ProcessStageDef targetDef = resolveTarget(context, request);
     if (targetDef == null) {
-      throw rechazo(
-          context,
-          MotivoRechazoAdvance.ESTADO_INVALIDO,
-          "No hay etapa destino disponible.",
-          List.of());
-    }
-
-    if (context.currentStageDef() != null
-        && context.currentStageDef().getCode().equalsIgnoreCase(targetDef.getCode())) {
-      throw rechazo(context, MotivoRechazoAdvance.MISMO_ESTADO, "La etapa destino es la actual.", List.of());
+      throw new AuthException(
+          HttpStatus.BAD_REQUEST, "NO_TARGET_STAGE", "No hay etapa destino disponible.");
     }
 
     if (!isTransitionAllowed(context, targetDef.getCode())) {
-      throw rechazo(
-          context,
-          MotivoRechazoAdvance.ESTADO_INVALIDO,
-          "La transición de etapa no está permitida en la parametrización.",
-          List.of());
+      throw new AuthException(
+          HttpStatus.BAD_REQUEST,
+          "TRANSITION_NOT_ALLOWED",
+          "La transición de etapa no está permitida en la parametrización.");
     }
 
     Instant now = Instant.now();
@@ -229,11 +214,8 @@ public class CaseStageTransitionService {
             .findFirst()
             .orElseThrow(
                 () ->
-                    rechazo(
-                        context,
-                        MotivoRechazoAdvance.ESTADO_INVALIDO,
-                        "Instancia de etapa no encontrada.",
-                        List.of()));
+                    new AuthException(
+                        HttpStatus.CONFLICT, "STAGE_ROW_MISSING", "Instancia de etapa no encontrada."));
 
     nextRow.markCurrent(now);
     caseStages.save(nextRow);
@@ -350,40 +332,6 @@ public class CaseStageTransitionService {
 
   private static StageTransitionOptions emptyTransitionOptions() {
     return new StageTransitionOptions(false, null, null, null, false, null, null, null);
-  }
-
-  private ApiException rechazo(
-      TransitionContext context, MotivoRechazoAdvance motivo, String detalle, List<String> faltantes) {
-    String actual =
-        context.currentStageDef() == null ? "" : context.currentStageDef().getCode();
-    String objetivo = context.nextStageDef() == null ? "" : context.nextStageDef().getCode();
-    LOG.info(
-        "stages/advance rechazado caseId={} motivo={} stageActual={} stageObjetivo={}",
-        context.legalCase().getId(),
-        motivo,
-        actual,
-        objetivo);
-    Map<String, Object> body = new LinkedHashMap<>();
-    body.put("error", "STAGE_ADVANCE_RECHAZADO");
-    body.put("motivo", motivo.name());
-    body.put("detalle", detalle);
-    body.put("stageActual", actual);
-    body.put("stageObjetivo", objetivo);
-    body.put("faltantes", faltantes == null ? List.of() : faltantes);
-    return new ApiException(
-        HttpStatus.CONFLICT, "STAGE_ADVANCE_RECHAZADO", detalle, List.of(), body);
-  }
-
-  private List<String> faltantes(TransitionContext context, String block) {
-    if (MotivoRechazoAdvance.desdeDetalle(block) != MotivoRechazoAdvance.OBSERVACIONES_ABIERTAS) {
-      return List.of();
-    }
-    return caseValidations
-        .findByCaseIdAndTenantIdOrderByCreatedAtAsc(context.legalCase().getId(), context.tenantId())
-        .stream()
-        .filter(v -> "FAIL".equals(v.getResult()))
-        .map(v -> v.getId().toString())
-        .toList();
   }
 
   private String blockReason(TransitionContext context) {

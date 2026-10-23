@@ -5,7 +5,7 @@ import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDto
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.ResolucionDelegadoRequest;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoService;
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
+import com.lexia.api.modules.expedientes.coactivas.jobs.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaBandejaService.Filtro;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.AnalisisResponse;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
@@ -273,7 +273,7 @@ public class CoactivaExpedienteController {
     } catch (org.springframework.http.InvalidMediaTypeException ignored) {
       // MIME declarado por el cliente al subir: si es ilegible se descarga como binario.
     }
-    // El MIME lo declara quien sube: HTML o SVG inline ejecutarían script en el origen de Lexia.
+    // El MIME lo declara quien sube: HTML o SVG inline ejecutarÃ­an script en el origen de Lexia.
     boolean inline =
         MediaType.APPLICATION_PDF.equalsTypeAndSubtype(mediaType)
             || ("image".equals(mediaType.getType())

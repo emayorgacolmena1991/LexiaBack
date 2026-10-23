@@ -5,8 +5,8 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
+import com.lexia.api.modules.expedientes.coactivas.jobs.BatchEventPublisherService;
+import com.lexia.api.modules.expedientes.coactivas.jobs.CoactivaJobQueue;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,7 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class CoactivaReemplazoDocumentoIntegrationTest {
 
-  @Mock private IngestaJobQueue jobs;
+  @Mock private CoactivaJobQueue jobs;
   @Mock private BatchEventPublisherService sse;
 
   @Test

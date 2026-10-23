@@ -10,9 +10,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.BatchEventPublisherService;
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobQueue;
-import com.lexia.api.modules.expedientes.escrituracion.ingesta.IngestaJobWorker;
+import com.lexia.api.modules.expedientes.coactivas.jobs.BatchEventPublisherService;
+import com.lexia.api.modules.expedientes.coactivas.jobs.CoactivaJobQueue;
+import com.lexia.api.modules.expedientes.coactivas.jobs.CoactivaJobWorker;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,18 +26,18 @@ class CoactivaJobPayloadTest {
   private final UUID tenant = UUID.randomUUID();
   private final UUID expediente = UUID.randomUUID();
   private final UUID archivo = UUID.randomUUID();
-  private final IngestaJobQueue cola = mock(IngestaJobQueue.class);
+  private final CoactivaJobQueue cola = mock(CoactivaJobQueue.class);
   private final BatchEventPublisherService sse = mock(BatchEventPublisherService.class);
   private final CoactivaExpedienteAnalisisWorker diagnostico = mock(CoactivaExpedienteAnalisisWorker.class);
   private final CoactivaValidacionIaWorker anexo = mock(CoactivaValidacionIaWorker.class);
 
   @SuppressWarnings("unchecked")
-  private IngestaJobWorker worker() {
+  private CoactivaJobWorker worker() {
     ObjectProvider<CoactivaExpedienteAnalisisWorker> d = mock(ObjectProvider.class);
     ObjectProvider<CoactivaValidacionIaWorker> a = mock(ObjectProvider.class);
     when(d.getIfAvailable()).thenReturn(diagnostico);
     when(a.getIfAvailable()).thenReturn(anexo);
-    return new IngestaJobWorker(cola, d, a, sse, new ObjectMapper());
+    return new CoactivaJobWorker(cola, d, a, sse, new ObjectMapper());
   }
 
   private String comoJsonb(String payload) {
@@ -50,13 +50,13 @@ class CoactivaJobPayloadTest {
       if (!tipos.contains(tipo)) {
         return Optional.empty();
       }
-      return Optional.of(new IngestaJobQueue.Job(UUID.randomUUID(), tenant, tipo, payload, intentos));
+      return Optional.of(new CoactivaJobQueue.Job(UUID.randomUUID(), tenant, tipo, payload, intentos));
     });
   }
 
   @Test
   void elPayloadDelProductorLlegaAlWorkerTrasPasarPorJsonb() {
-    IngestaJobQueue productor = mock(IngestaJobQueue.class);
+    CoactivaJobQueue productor = mock(CoactivaJobQueue.class);
     new CoactivaExpedienteAnalisisWorker(
             null, null, null, null, null, null, null, null, null, null, null, productor, sse, null, null, false)
         .encolar(tenant, expediente, archivo);

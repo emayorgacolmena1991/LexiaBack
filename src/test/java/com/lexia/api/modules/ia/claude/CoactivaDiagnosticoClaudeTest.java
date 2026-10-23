@@ -75,7 +75,7 @@ class CoactivaDiagnosticoClaudeTest {
     assertEquals(2, claude.enviados.size());
     JsonNode primera = json.readTree(claude.enviados.get(0));
     JsonNode segunda = json.readTree(claude.enviados.get(1));
-    assertEquals(4096, primera.get("max_tokens").asInt());
+    assertEquals(8192, primera.get("max_tokens").asInt());
     assertEquals(1024, segunda.get("max_tokens").asInt());
     assertTrue(primera.toString().contains("datos_extraidos"));
     assertFalse(segunda.toString().contains("datos_extraidos"));
@@ -97,7 +97,7 @@ class CoactivaDiagnosticoClaudeTest {
     private final ArrayDeque<String> respuestas = new ArrayDeque<>();
 
     StubClaude() {
-      super("test-key", "claude-sonnet-5", new ObjectMapper(), null, null);
+      super("test-key", "claude-sonnet-5", new ObjectMapper(), null);
     }
 
     void responde(String body) {

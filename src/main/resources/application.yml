@@ -244,8 +244,6 @@ lexia:
   ocr:
     cache-ttl-hours: ${LEXIA_OCR_CACHE_TTL_HOURS:24}
     cache-cleanup-ms: ${LEXIA_OCR_CACHE_CLEANUP_MS:600000}
-    azure:
-      timeout-min: ${LEXIA_OCR_AZURE_TIMEOUT_MIN:5}
   integrations:
     ejd:
       # false = worker live (S0 / producción). Override: LEXIA_EJD_STUB_LIVE=true

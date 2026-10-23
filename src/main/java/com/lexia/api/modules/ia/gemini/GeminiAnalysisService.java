@@ -10,6 +10,7 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.LlmTimeoutException;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
@@ -244,7 +245,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -312,7 +318,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
