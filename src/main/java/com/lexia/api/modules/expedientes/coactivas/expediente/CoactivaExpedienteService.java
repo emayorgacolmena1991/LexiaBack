@@ -908,22 +908,23 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaExpediente expediente = require(tenantId, id);
-    return CoactivaPdfTexto.buscar(textoOcrGuardado(tenantId, expediente.getAnalisisArchivoId()), q);
+    DocumentoCacheStore.Hit hit = ocrCache(tenantId, expediente.getAnalisisArchivoId());
+    if (hit == null || hit.textoOcr() == null) {
+      return List.of();
+    }
+    return CoactivaPdfTexto.buscar(hit.textoOcr(), hit.resultadoJson(), q);
   }
 
-  private String textoOcrGuardado(UUID tenantId, UUID archivoId) {
+  private DocumentoCacheStore.Hit ocrCache(UUID tenantId, UUID archivoId) {
     if (archivoId == null || cache == null) {
-      return "";
+      return null;
     }
     CoactivaArchivo archivo = archivos.findByIdAndTenantIdAndDeletedAtIsNull(archivoId, tenantId).orElse(null);
     String sha = archivo == null ? null : archivo.getSha256();
     if (sha == null || sha.isBlank()) {
-      return "";
+      return null;
     }
-    return cache
-        .buscar(tenantId, sha, CoactivaPdfTexto.VERSION_CACHE)
-        .map(DocumentoCacheStore.Hit::textoOcr)
-        .orElse("");
+    return cache.buscar(tenantId, sha, CoactivaPdfTexto.VERSION_CACHE).orElse(null);
   }
 
   @Transactional(readOnly = true)
