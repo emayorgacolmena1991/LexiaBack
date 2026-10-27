@@ -210,8 +210,15 @@ public class IngestaMasivaEscrituracionService {
       }
       actualizarContadoresLote(lote.id, tenant, lote.fase);
       for (ArchivoParaEncolar pendiente : archivosParaEncolar) {
-        encolarProcesarDocumento(lote, pendiente.fila(), pendiente.archivo(), principal);
+        Fila filaEncolar = pendiente.fila();
+        synchronized (filaEncolar) {
+          if ("ERROR".equals(filaEncolar.ocrEstado) || "ERROR".equals(filaEncolar.iaEstado)) {
+            continue;
+          }
+        }
+        encolarProcesarDocumento(lote, filaEncolar, pendiente.archivo(), principal);
       }
+      emitirLoteActualizado(tenant, lote.id);
     }
     return cargar(principal.tenantId(), batchId).snapshot();
   }
@@ -274,6 +281,7 @@ public class IngestaMasivaEscrituracionService {
       } else if (fila.expedienteId == null || fila.archivos.isEmpty()) {
         throw ApiException.badRequest("La fila no tiene archivos guardados. No se llama a OCR.");
       } else {
+        fila.archivos.removeIf(archivo -> esFalloSubida(archivo));
         for (Archivo archivo : fila.archivos) {
           if (!archivo.ocrListo || "ROJO".equals(archivo.semaforo)) {
             archivo.reset();
@@ -292,6 +300,9 @@ public class IngestaMasivaEscrituracionService {
       lote.fase = soloIa ? "IA" : "OCR";
     }
     for (Archivo archivo : fila.archivos) {
+      if (esFalloSubida(archivo)) {
+        continue;
+      }
       if (soloIa || !archivo.ocrListo || "ROJO".equals(archivo.semaforo)) {
         encolarProcesarDocumento(lote, fila, archivo, principal);
       }
@@ -321,6 +332,7 @@ public class IngestaMasivaEscrituracionService {
       carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
     }
     synchronized (fila) {
+      fila.archivos.removeIf(archivo -> esFalloSubida(archivo));
       if (StringUtils.hasText(fileId)) {
         fila.archivos.removeIf(archivo -> fileId.equals(archivo.fileId));
       }
@@ -566,6 +578,12 @@ public class IngestaMasivaEscrituracionService {
     return "Error técnico en archivo: " + detalle;
   }
 
+  private static boolean esFalloSubida(Archivo archivo) {
+    return archivo != null
+        && StringUtils.hasText(archivo.fileId)
+        && archivo.fileId.startsWith("upload-error-");
+  }
+
   /** Tras persistir el archivo actual, relee la fila desde BD (estado de otros workers). */
   private static boolean filaExpedienteBloqueado(Fila fila) {
     if (fila == null) {
@@ -576,6 +594,9 @@ public class IngestaMasivaEscrituracionService {
         return true;
       }
       for (Archivo item : fila.archivos) {
+        if (esFalloSubida(item)) {
+          return true;
+        }
         if ("ROJO".equals(item.semaforo) || (item.ocrListo && !item.legible)) {
           return true;
         }
@@ -674,11 +695,17 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private boolean esUltimoArchivo(Fila fila, UUID expedienteId) {
+    if (expedienteId != null && jobs.pendientesDelExpediente(expedienteId) > 0) {
+      return false;
+    }
     if (fila == null) {
-      return expedienteId == null || jobs.pendientesDelExpediente(expedienteId) == 0;
+      return true;
     }
     synchronized (fila) {
       for (Archivo archivo : fila.archivos) {
+        if (esFalloSubida(archivo)) {
+          continue;
+        }
         if (!archivo.ocrListo) {
           return false;
         }
@@ -1164,18 +1191,27 @@ public class IngestaMasivaEscrituracionService {
     }
 
     private boolean cotejoHabilitado() {
-      if (filas.isEmpty()) {
-        return false;
-      }
       for (Fila fila : filas) {
+        if (filaListaParaCotejo(fila)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    private static boolean filaListaParaCotejo(Fila fila) {
+      synchronized (fila) {
+        if ("ERROR".equals(fila.ocrEstado) || "ERROR".equals(fila.iaEstado)) {
+          return false;
+        }
         if (fila.expedienteId == null || fila.archivos.isEmpty() || "PROCESANDO".equals(fila.ocrEstado)) {
           return false;
         }
-        if (!"VERDE".equals(fila.semaforo) && !"NARANJA".equals(fila.semaforo)) {
-          return false;
+        if ("VERDE".equals(fila.semaforo) || "NARANJA".equals(fila.semaforo)) {
+          return true;
         }
+        return "LISTO".equals(fila.ocrEstado) || "COMPLETADO".equals(fila.ocrEstado);
       }
-      return true;
     }
 
     private LoteStatus snapshot() {
@@ -1245,12 +1281,22 @@ public class IngestaMasivaEscrituracionService {
       String color = "VERDE";
       int suma = 0;
       List<String> notas = new ArrayList<>();
+      int procesables = 0;
       for (Archivo archivo : archivos) {
+        if (esFalloSubida(archivo)) {
+          continue;
+        }
+        procesables++;
         color = peor(color, archivo.semaforo);
         suma += archivo.confianza;
         if (StringUtils.hasText(archivo.mensaje)) {
           notas.add(archivo.nombre + ": " + archivo.mensaje);
         }
+      }
+      if (procesables == 0) {
+        ocrEstado = "ERROR";
+        semaforo = "ROJO";
+        return;
       }
       if (faltantes != null && !faltantes.isEmpty()) {
         if (!"ROJO".equals(color)) {
@@ -1260,7 +1306,7 @@ public class IngestaMasivaEscrituracionService {
       }
       ocrEstado = "LISTO";
       semaforo = color;
-      confianza = suma / archivos.size();
+      confianza = suma / procesables;
       observaciones = notas.isEmpty() ? null : recortar(String.join(" · ", notas), 800);
     }
 
@@ -1340,7 +1386,7 @@ public class IngestaMasivaEscrituracionService {
       confianza = 0;
       mensaje = error;
       semaforo = "ROJO";
-      ocrListo = true;
+      ocrListo = false;
     }
 
     private ArchivoStatus status() {
