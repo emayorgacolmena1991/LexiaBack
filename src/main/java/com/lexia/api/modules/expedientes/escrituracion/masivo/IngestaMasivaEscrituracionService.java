@@ -34,6 +34,7 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionArchivo;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionesPayload;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.CrearLoteRequest;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ExpedienteEnLoteDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarDocumento;
@@ -53,6 +54,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +62,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -406,6 +409,74 @@ public class IngestaMasivaEscrituracionService {
       throw ApiException.notFound("Lote de ingesta no encontrado.");
     }
     return mapLoteListItem((Object[]) rows.get(0));
+  }
+
+  public List<ExpedienteEnLoteDto> listarExpedientesLote(UUID batchId) {
+    Lote lote = require(batchId);
+    Map<String, List<Fila>> porExpediente =
+        lote.filas.stream()
+            .filter(f -> f.expedienteId != null)
+            .collect(Collectors.groupingBy(f -> f.expedienteId.toString()));
+
+    return porExpediente.entrySet().stream()
+        .map(
+            e -> {
+              List<Fila> filas = e.getValue();
+              Fila first = filas.get(0);
+
+              String sem =
+                  filas.stream()
+                      .flatMap(f -> f.archivos.stream())
+                      .map(a -> a.semaforo)
+                      .reduce("GRIS", IngestaMasivaEscrituracionService::peor);
+
+              String obs =
+                  filas.stream()
+                      .flatMap(f -> f.archivos.stream())
+                      .filter(a -> a.ocrListo && !a.legible)
+                      .findFirst()
+                      .map(a -> "Documento ilegible: " + a.nombre)
+                      .orElse(
+                          filas.stream()
+                              .filter(f -> "ERROR".equals(f.ocrEstado))
+                              .findFirst()
+                              .map(f -> f.observaciones)
+                              .orElse(null));
+
+              int totalArch = filas.stream().mapToInt(f -> f.archivos.size()).sum();
+              int legibles =
+                  (int)
+                      filas.stream()
+                          .flatMap(f -> f.archivos.stream())
+                          .filter(a -> a.legible)
+                          .count();
+
+              String codigo =
+                  StringUtils.hasText(first.codigo)
+                      ? first.codigo
+                      : shortUuid(first.expedienteId);
+
+              return new ExpedienteEnLoteDto(
+                  e.getKey(),
+                  first.clientRowId,
+                  codigo,
+                  first.cliente,
+                  first.clienteIdentificacion,
+                  first.productCode,
+                  first.canton,
+                  totalArch,
+                  legibles,
+                  sem,
+                  obs,
+                  first.ocrEstado,
+                  first.iaEstado,
+                  ultimaActualizacion(filas));
+            })
+        .sorted(
+            Comparator.comparing(
+                ExpedienteEnLoteDto::ultimaActualizacion,
+                Comparator.nullsLast(Comparator.reverseOrder())))
+        .toList();
   }
 
   public LoteStatus procesarIa(UUID batchId) {
@@ -1429,14 +1500,50 @@ public class IngestaMasivaEscrituracionService {
     return "VERDE";
   }
 
+  /** ROJO > NARANJA > VERDE > GRIS */
   private static String peor(String actual, String siguiente) {
-    if ("ROJO".equals(actual) || "ROJO".equals(siguiente)) {
-      return "ROJO";
+    return rangoSemaforo(siguiente) > rangoSemaforo(actual)
+        ? normSemaforo(siguiente)
+        : normSemaforo(actual);
+  }
+
+  private static int rangoSemaforo(String color) {
+    if ("ROJO".equals(color)) {
+      return 3;
     }
-    if ("NARANJA".equals(actual) || "NARANJA".equals(siguiente)) {
-      return "NARANJA";
+    if ("NARANJA".equals(color)) {
+      return 2;
     }
-    return "VERDE";
+    if ("VERDE".equals(color)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  private static String normSemaforo(String color) {
+    if ("ROJO".equals(color) || "NARANJA".equals(color) || "VERDE".equals(color)) {
+      return color;
+    }
+    return "GRIS";
+  }
+
+  private static String shortUuid(UUID id) {
+    String raw = id.toString().replace("-", "");
+    return raw.substring(0, Math.min(8, raw.length())).toUpperCase();
+  }
+
+  private static OffsetDateTime ultimaActualizacion(List<Fila> filas) {
+    long maxMs = 0;
+    for (Fila fila : filas) {
+      long fin = fila.inicioMs + Math.max(0L, fila.duracionMs);
+      if (fin > maxMs) {
+        maxMs = fin;
+      }
+    }
+    if (maxMs <= 0) {
+      return null;
+    }
+    return OffsetDateTime.ofInstant(Instant.ofEpochMilli(maxMs), ZoneOffset.UTC);
   }
 
   private static final class Lote {
@@ -1512,6 +1619,8 @@ public class IngestaMasivaEscrituracionService {
     private String canton;
     private String ingestionMode;
     private String codigo;
+    private String cliente;
+    private String clienteIdentificacion;
     private UUID borradorId;
     private UUID expedienteId;
     private String ocrEstado = "PENDIENTE";

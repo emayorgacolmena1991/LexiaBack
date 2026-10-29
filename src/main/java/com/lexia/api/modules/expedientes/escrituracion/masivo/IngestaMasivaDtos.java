@@ -88,4 +88,20 @@ public final class IngestaMasivaDtos {
       int rojos,
       boolean cotejoHabilitado,
       List<FilaStatus> filas) {}
+
+  public record ExpedienteEnLoteDto(
+      String expedienteId,
+      String itemId,
+      String codigoExpediente,
+      String clienteNombre,
+      String clienteIdentificacion,
+      String producto,
+      String canton,
+      int totalArchivos,
+      int archivosLegibles,
+      String semaforo,
+      String observacion,
+      String estado,
+      String iaEstado,
+      OffsetDateTime ultimaActualizacion) {}
 }
