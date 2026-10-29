@@ -70,6 +70,12 @@ public class Role {
     return deletedAt;
   }
 
+  public static Role createSystem(UUID tenantId, String code, String name, String description) {
+    Role role = create(tenantId, code, name, description);
+    role.system = true;
+    return role;
+  }
+
   public static Role create(UUID tenantId, String code, String name, String description) {
     Role role = new Role();
     role.id = UUID.randomUUID();

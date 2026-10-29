@@ -79,4 +79,78 @@ public final class EmailTemplates {
         body,
         "Puedes desactivar estas alertas en Seguridad → Notificaciones.");
   }
+
+  public static String notariaRemisionFromBufete(
+      String toName,
+      String expedienteCodigo,
+      String asunto,
+      String emitidoPor,
+      String notariaNombre,
+      String observaciones,
+      String bandejaUrl) {
+    String obs =
+        observaciones == null || observaciones.isBlank()
+            ? ""
+            : EmailLayout.infoBox(
+                "<strong>Instrucciones del bufete:</strong><br/>"
+                    + observaciones.replace("\n", "<br/>"));
+    String body =
+        """
+        <p>Hola <strong>%s</strong>,</p>
+        <p>El bufete de abogados remitió un paquete de escrituración a <strong>%s</strong> mediante LEXIA (demostración).</p>
+        %s
+        <p><strong>Expediente:</strong> %s<br/><strong>Asunto:</strong> %s<br/><strong>Enviado por:</strong> %s</p>
+        %s
+        <p style="margin-top:16px;font-size:13px;color:#64748b;">Enlace a la bandeja notarial:<br/><span style="word-break:break-all;">%s</span></p>
+        """
+            .formatted(
+                toName,
+                notariaNombre,
+                EmailLayout.infoBox(
+                    "Incluye acta y expediente digital tras revisión documental (simulado en este entorno)."),
+                expedienteCodigo,
+                asunto,
+                emitidoPor,
+                obs,
+                EmailLayout.button("Abrir bandeja notaría", bandejaUrl),
+                bandejaUrl);
+    return EmailLayout.wrap(
+        "Nuevo paquete desde el bufete",
+        body,
+        "Notificación operativa LEXIA · flujo bufete ↔ notaría.");
+  }
+
+  public static String notariaDevolucionAlBufete(
+      String toName,
+      String expedienteCodigo,
+      String asunto,
+      String notariaNombre,
+      String observacionesNotaria,
+      String expedienteUrl) {
+    String obs =
+        observacionesNotaria == null || observacionesNotaria.isBlank()
+            ? ""
+            : EmailLayout.infoBox(
+                "<strong>Observaciones de la notaría:</strong><br/>"
+                    + observacionesNotaria.replace("\n", "<br/>"));
+    String body =
+        """
+        <p>Hola <strong>%s</strong>,</p>
+        <p><strong>%s</strong> devolvió el trámite notarial del expediente <strong>%s</strong> a su bufete en LEXIA.</p>
+        <p><strong>Asunto:</strong> %s</p>
+        %s
+        %s
+        """
+            .formatted(
+                toName,
+                notariaNombre,
+                expedienteCodigo,
+                asunto,
+                obs,
+                EmailLayout.button("Abrir expediente", expedienteUrl));
+    return EmailLayout.wrap(
+        "Devolución desde notaría",
+        body,
+        "Notificación operativa LEXIA · flujo bufete ↔ notaría.");
+  }
 }

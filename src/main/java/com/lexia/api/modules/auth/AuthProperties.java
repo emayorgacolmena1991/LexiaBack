@@ -1,5 +1,7 @@
 package com.lexia.api.modules.auth;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "lexia.auth")
@@ -13,6 +15,8 @@ public class AuthProperties {
   private int lockoutMinutes = 30;
   private boolean cookieSecure = false;
   private String demoPassword = "Lexia-Demo-2026!";
+  /** Correos cuyo hash se (re)aplica al arrancar si aún no es Argon2 real. */
+  private List<String> bootstrapEmails = new ArrayList<>(List.of("emayorga@colmenas.ec"));
   private String cryptoKey = "";
 
   public boolean isEnabled() {
@@ -77,6 +81,14 @@ public class AuthProperties {
 
   public void setDemoPassword(String demoPassword) {
     this.demoPassword = demoPassword;
+  }
+
+  public List<String> getBootstrapEmails() {
+    return bootstrapEmails;
+  }
+
+  public void setBootstrapEmails(List<String> bootstrapEmails) {
+    this.bootstrapEmails = bootstrapEmails == null ? new ArrayList<>() : bootstrapEmails;
   }
 
   public String getCryptoKey() {

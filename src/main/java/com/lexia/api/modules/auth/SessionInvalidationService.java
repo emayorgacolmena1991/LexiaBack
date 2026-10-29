@@ -26,4 +26,13 @@ public class SessionInvalidationService {
           refreshTokens.deleteAll(refreshTokens.findBySessionId(session.getId()));
         });
   }
+
+  @Transactional
+  public void invalidateTenantSessions(UUID tenantId) {
+    sessions.findByTenantIdAndRevokedAtIsNull(tenantId).forEach(
+        session -> {
+          session.revoke();
+          refreshTokens.deleteAll(refreshTokens.findBySessionId(session.getId()));
+        });
+  }
 }

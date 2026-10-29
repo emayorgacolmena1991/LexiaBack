@@ -9,6 +9,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.orm.jpa.JpaSystemException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -80,12 +81,36 @@ public class ApiExceptionHandler {
 
   @ExceptionHandler(DataIntegrityViolationException.class)
   public ResponseEntity<Map<String, String>> integrity(DataIntegrityViolationException exception) {
+    LOG.warn("Integridad de datos: {}", exception.getMostSpecificCause().getMessage());
+    String detail = exception.getMostSpecificCause().getMessage();
     return ResponseEntity.status(409)
         .body(
             Map.of(
                 "code",
                 "CONFLICT",
                 "message",
-                "No fue posible completar la operación porque ya existe un registro relacionado."));
+                detail != null && !detail.isBlank()
+                    ? detail
+                    : "No fue posible completar la operación porque ya existe un registro relacionado."));
+  }
+
+  @ExceptionHandler(JpaSystemException.class)
+  public ResponseEntity<Map<String, String>> jpa(JpaSystemException exception) {
+    LOG.error("JPA error", exception);
+    String detail = exception.getMostSpecificCause().getMessage();
+    return ResponseEntity.internalServerError()
+        .body(
+            Map.of(
+                "code",
+                "INTERNAL_ERROR",
+                "message",
+                detail != null && !detail.isBlank() ? detail : "Error de persistencia."));
+  }
+
+  @ExceptionHandler(Exception.class)
+  public ResponseEntity<Map<String, String>> unexpected(Exception exception) {
+    LOG.error("Unhandled API error", exception);
+    return ResponseEntity.internalServerError()
+        .body(Map.of("code", "INTERNAL_ERROR", "message", "Error interno del servidor."));
   }
 }

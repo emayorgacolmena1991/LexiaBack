@@ -1,0 +1,13 @@
+# Perfil production-like: sin atajos E2E ni bootstrap amplio de demos.
+spring:
+  config:
+    activate:
+      on-profile: production
+
+lexia:
+  e2e:
+    enabled: false
+    trust-bootstrap-emails: false
+  auth:
+    cookie-secure: ${LEXIA_COOKIE_SECURE:true}
+    bootstrap-emails: ${LEXIA_AUTH_BOOTSTRAP_EMAILS:emayorga@colmenas.ec}

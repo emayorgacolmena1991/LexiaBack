@@ -264,7 +264,10 @@ lexia:
     max-failed-attempts: 5
     lockout-minutes: 30
     cookie-secure: ${LEXIA_COOKIE_SECURE:false}
-    demo-password: ${LEXIA_DEMO_PASSWORD:Lexia-Demo-2026!}
+    # Contraseña inicial para cuentas bootstrap. Cambiar en producción (LEXIA_BOOTSTRAP_PASSWORD).
+    demo-password: ${LEXIA_DEMO_PASSWORD:${LEXIA_BOOTSTRAP_PASSWORD:Lexia-Demo-2026!}}
+    # Lista separada por comas. Producción: solo cuentas operativas (p. ej. emayorga@colmenas.ec).
+    bootstrap-emails: ${LEXIA_AUTH_BOOTSTRAP_EMAILS:emayorga@colmenas.ec}
     crypto-key: ${LEXIA_CRYPTO_KEY:}
   brevo:
     enabled: ${LEXIA_BREVO_ENABLED:false}
@@ -274,6 +277,7 @@ lexia:
     frontend-url: ${LEXIA_FRONTEND_URL:http://localhost:4200}
   e2e:
     enabled: ${LEXIA_E2E_ENABLED:false}
+    trust-bootstrap-emails: ${LEXIA_E2E_TRUST_BOOTSTRAP_EMAILS:${LEXIA_E2E_ENABLED:false}}
   azure:
     document-intelligence:
       enabled: ${AZURE_DOCUMENT_INTELLIGENCE_ENABLED:true}

@@ -2,5 +2,9 @@
 lexia:
   brevo:
     enabled: ${LEXIA_BREVO_ENABLED:true}
+  e2e:
+    enabled: false
+    trust-bootstrap-emails: false
   auth:
     cookie-secure: ${LEXIA_COOKIE_SECURE:true}
+    bootstrap-emails: ${LEXIA_AUTH_BOOTSTRAP_EMAILS:emayorga@colmenas.ec}

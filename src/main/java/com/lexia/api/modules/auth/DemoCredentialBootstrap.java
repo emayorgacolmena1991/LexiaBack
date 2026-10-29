@@ -17,9 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class DemoCredentialBootstrap implements ApplicationRunner {
 
   private static final Logger LOG = LoggerFactory.getLogger(DemoCredentialBootstrap.class);
-  private static final java.util.List<String> DEMO_EMAILS =
-      java.util.List.of("laura.gomez@lexia.demo", "admin.demo@lexia.demo");
-
   private final AppUserRepository users;
   private final UserCredentialRepository credentials;
   private final PasswordHasher hasher;
@@ -39,8 +36,12 @@ public class DemoCredentialBootstrap implements ApplicationRunner {
   @Override
   @Transactional
   public void run(ApplicationArguments args) {
-    for (String email : DEMO_EMAILS) {
-      Optional<AppUser> user = users.findByEmail(email);
+    for (String email : resolveBootstrapEmails()) {
+      if (email == null || email.isBlank()) {
+        continue;
+      }
+      String normalized = email.trim().toLowerCase();
+      Optional<AppUser> user = users.findByEmail(normalized);
       if (user.isEmpty()) {
         continue;
       }
@@ -56,8 +57,23 @@ public class DemoCredentialBootstrap implements ApplicationRunner {
                 credential.setAlgorithm("argon2id");
                 credential.setLastChangedAt(Instant.now());
                 credential.setMustChange(false);
-                LOG.info("Credencial demo lista para {}", email);
+                LOG.info("Contraseña bootstrap aplicada para {}", email);
               });
     }
+  }
+
+  private java.util.List<String> resolveBootstrapEmails() {
+    java.util.List<String> configured = properties.getBootstrapEmails();
+    if (configured == null || configured.isEmpty()) {
+      return java.util.List.of();
+    }
+    if (configured.size() == 1 && configured.get(0).contains(",")) {
+      return java.util.Arrays.stream(configured.get(0).split(","))
+          .map(String::trim)
+          .filter(s -> !s.isEmpty())
+          .map(String::toLowerCase)
+          .toList();
+    }
+    return configured.stream().map(String::trim).filter(s -> !s.isEmpty()).map(String::toLowerCase).toList();
   }
 }

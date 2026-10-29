@@ -55,6 +55,20 @@ public class AuthController {
     return authService.verifyMfa(request, http, response);
   }
 
+  @PostMapping("/select-tenant")
+  public AuthDtos.AuthResponse selectTenant(
+      @Valid @RequestBody AuthDtos.SelectTenantRequest request,
+      HttpServletRequest http,
+      HttpServletResponse response) {
+    return authService.selectTenant(request, http, response);
+  }
+
+  @GetMapping("/tenant-selection/{challengeId}/options")
+  public java.util.List<AuthDtos.MembershipOptionDto> tenantSelectionOptions(
+      @org.springframework.web.bind.annotation.PathVariable String challengeId) {
+    return authService.tenantSelectionOptions(challengeId);
+  }
+
   @PostMapping("/refresh")
   public AuthDtos.AuthResponse refresh(HttpServletRequest request, HttpServletResponse response) {
     return authService.refresh(request, response);
@@ -69,6 +83,19 @@ public class AuthController {
   @GetMapping("/me")
   public AuthDtos.SessionResponse me() {
     return authService.me();
+  }
+
+  @GetMapping("/memberships")
+  public java.util.List<AuthDtos.MembershipOptionDto> memberships() {
+    return authService.listMemberships();
+  }
+
+  @PostMapping("/switch-tenant")
+  public AuthDtos.AuthResponse switchTenant(
+      @Valid @RequestBody AuthDtos.SwitchTenantRequest request,
+      HttpServletRequest http,
+      HttpServletResponse response) {
+    return authService.switchTenant(request, http, response);
   }
 
   @GetMapping("/mfa")

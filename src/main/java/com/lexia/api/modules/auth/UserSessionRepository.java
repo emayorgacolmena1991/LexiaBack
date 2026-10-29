@@ -6,4 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface UserSessionRepository extends JpaRepository<UserSession, UUID> {
   List<UserSession> findByUserIdAndRevokedAtIsNull(UUID userId);
+
+  List<UserSession> findByTenantIdAndRevokedAtIsNull(UUID tenantId);
 }

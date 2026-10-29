@@ -65,4 +65,30 @@ public class LegalEntity {
   public String getLegalName() {
     return legalName;
   }
+
+  public Instant getDeletedAt() {
+    return deletedAt;
+  }
+
+  public static LegalEntity create(
+      UUID tenantId,
+      String nit,
+      String legalName,
+      String tradeName,
+      String entityType,
+      String domicile) {
+    LegalEntity entity = new LegalEntity();
+    entity.id = UUID.randomUUID();
+    entity.tenantId = tenantId;
+    entity.nit = nit != null && !nit.isBlank() ? nit.trim() : null;
+    entity.legalName = legalName.trim();
+    entity.tradeName = tradeName != null && !tradeName.isBlank() ? tradeName.trim() : null;
+    entity.entityType = entityType != null && !entityType.isBlank() ? entityType.trim() : "COMPANY";
+    entity.domicile = domicile != null && !domicile.isBlank() ? domicile.trim() : null;
+    entity.status = "ACTIVE";
+    Instant now = Instant.now();
+    entity.createdAt = now;
+    entity.updatedAt = now;
+    return entity;
+  }
 }

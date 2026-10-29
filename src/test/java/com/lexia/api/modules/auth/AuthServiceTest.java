@@ -92,7 +92,7 @@ class AuthServiceTest {
             AuthException.class,
             () ->
                 service.login(
-                    new AuthDtos.LoginRequest("laura.gomez@lexia.demo", "Lexia-Demo-2026!"),
+                    new AuthDtos.LoginRequest("laura.gomez@lexia.demo", "Lexia-Demo-2026!", null),
                     mock(HttpServletRequest.class),
                     mock(HttpServletResponse.class)));
 
@@ -122,7 +122,7 @@ class AuthServiceTest {
         AuthException.class,
         () ->
             service.login(
-                new AuthDtos.LoginRequest("emayorga@colmenas.ec", "wrong"),
+                new AuthDtos.LoginRequest("emayorga@colmenas.ec", "wrong", null),
                 mock(HttpServletRequest.class),
                 mock(HttpServletResponse.class)));
 
