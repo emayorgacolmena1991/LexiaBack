@@ -21,9 +21,6 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
     baseline-version: 10
-    # Missing migrations 79-87: aplicadas por el DBA directamente a la BD.
-    # Los archivos no están en el repo. Se ignora el gap con *:missing.
-    ignore-migration-patterns: "*:missing"
   jpa:
     open-in-view: false
     hibernate:

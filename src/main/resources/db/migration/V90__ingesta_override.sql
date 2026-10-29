@@ -19,3 +19,8 @@ CREATE INDEX idx_ingesta_override_lote
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE app.ingesta_override TO lexia_app;
 GRANT SELECT ON TABLE app.ingesta_override TO lexia_readonly;
+
+ALTER TABLE app.ingesta_override ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON app.ingesta_override
+    USING (tenant_id = app.current_tenant_id())
+    WITH CHECK (tenant_id = app.current_tenant_id());
