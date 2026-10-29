@@ -259,6 +259,10 @@ public class IngestaMasivaEscrituracionService {
         }
         pendientes = new ArrayList<>();
         for (Archivo archivo : fila.archivos) {
+          // develop: no re-encolar placeholders upload-error-* (ocrListo=false tras fallo)
+          if (esFalloSubida(archivo)) {
+            continue;
+          }
           if (!archivo.ocrListo) {
             pendientes.add(archivo);
           }
