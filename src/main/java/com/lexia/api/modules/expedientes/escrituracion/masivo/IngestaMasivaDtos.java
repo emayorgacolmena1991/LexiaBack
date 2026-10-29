@@ -104,4 +104,13 @@ public final class IngestaMasivaDtos {
       String estado,
       String iaEstado,
       OffsetDateTime ultimaActualizacion) {}
+
+  public record OverrideRequest(@NotBlank String justificacion) {}
+
+  public record OverrideResponseDto(
+      String expedienteId,
+      String semaforoNuevo,
+      String observacion,
+      String aprobadoPor,
+      OffsetDateTime aprobadoAt) {}
 }

@@ -8,6 +8,8 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteListItemDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.OverrideRequest;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.OverrideResponseDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -107,6 +109,15 @@ public class IngestaMasivaEscrituracionController {
   @GetMapping("/{batchId}/expedientes")
   public List<ExpedienteEnLoteDto> listarExpedientesLote(@PathVariable UUID batchId) {
     return ingesta.listarExpedientesLote(batchId);
+  }
+
+  @PostMapping("/{batchId}/expedientes/{expedienteId}/override")
+  public OverrideResponseDto overrideExpediente(
+      @PathVariable UUID batchId,
+      @PathVariable UUID expedienteId,
+      @Valid @RequestBody OverrideRequest request) {
+    return ingesta.aplicarOverride(
+        batchId, expedienteId, request.justificacion(), AuthContext.require().userId());
   }
 
   @PostMapping("/{batchId}/process-ia")

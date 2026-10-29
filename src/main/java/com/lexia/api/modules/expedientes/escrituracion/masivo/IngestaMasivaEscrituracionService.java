@@ -11,6 +11,8 @@ import org.hibernate.Session;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.lexia.api.common.api.ApiException;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
@@ -39,6 +41,7 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarDocumento;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarIaExpediente;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.OverrideResponseDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteListItemDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
@@ -92,6 +95,7 @@ public class IngestaMasivaEscrituracionService {
   private final DocumentoTextoOcrRepository textoOcr;
   private final ObjectMapper objectMapper;
   private final EntityManager entityManager;
+  private final JdbcTemplate jdbcTemplate;
   private final TransactionTemplate tx;
   private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> streams = new ConcurrentHashMap<>();
 
@@ -107,6 +111,7 @@ public class IngestaMasivaEscrituracionService {
       DocumentoTextoOcrRepository textoOcr,
       ObjectMapper objectMapper,
       EntityManager entityManager,
+      JdbcTemplate jdbcTemplate,
       PlatformTransactionManager transactionManager) {
     this.carga = carga;
     this.casos = casos;
@@ -119,6 +124,7 @@ public class IngestaMasivaEscrituracionService {
     this.textoOcr = textoOcr;
     this.objectMapper = objectMapper;
     this.entityManager = entityManager;
+    this.jdbcTemplate = jdbcTemplate;
     this.tx = new TransactionTemplate(transactionManager);
   }
 
@@ -477,6 +483,75 @@ public class IngestaMasivaEscrituracionService {
                 ExpedienteEnLoteDto::ultimaActualizacion,
                 Comparator.nullsLast(Comparator.reverseOrder())))
         .toList();
+  }
+
+  public OverrideResponseDto aplicarOverride(
+      UUID batchId, UUID expedienteId, String justificacion, UUID userId) {
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenant = TenantContext.getTenantId() != null ? TenantContext.getTenantId() : principal.tenantId();
+    Lote lote = require(batchId);
+    List<Fila> filasExp =
+        lote.filas.stream()
+            .filter(f -> f.expedienteId != null && f.expedienteId.equals(expedienteId))
+            .toList();
+    if (filasExp.isEmpty()) {
+      throw new ApiException(
+          HttpStatus.NOT_FOUND, "COA_EXPEDIENTE_NO_EN_LOTE", "El expediente no pertenece a este lote");
+    }
+    String semAntes =
+        filasExp.stream()
+            .flatMap(f -> f.archivos.stream())
+            .map(a -> a.semaforo)
+            .reduce("GRIS", IngestaMasivaEscrituracionService::peor);
+    if ("VERDE".equals(semAntes)) {
+      throw new ApiException(
+          HttpStatus.BAD_REQUEST, "COA_OVERRIDE_INNECESARIO", "El expediente ya está en verde");
+    }
+    String obsAntes =
+        filasExp.stream()
+            .map(f -> f.observaciones)
+            .filter(o -> o != null && !o.isBlank())
+            .findFirst()
+            .orElse(null);
+    UUID itemId;
+    try {
+      itemId = UUID.fromString(filasExp.get(0).clientRowId);
+    } catch (IllegalArgumentException ex) {
+      throw new ApiException(
+          HttpStatus.BAD_REQUEST, "COA_ITEM_INVALIDO", "El item del expediente no es un UUID.");
+    }
+    jdbcTemplate.update(
+        """
+        INSERT INTO app.ingesta_override
+          (id, tenant_id, lote_id, expediente_id, item_id, justificacion,
+           aprobado_por, semaforo_antes, observacion_antes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        UUID.randomUUID(),
+        tenant,
+        batchId,
+        expedienteId,
+        itemId,
+        justificacion,
+        userId,
+        semAntes,
+        obsAntes);
+    String observacion = "Aprobado manual: " + justificacion;
+    for (Fila fila : filasExp) {
+      synchronized (fila) {
+        fila.semaforo = "VERDE";
+        fila.observaciones = observacion;
+        for (Archivo archivo : fila.archivos) {
+          if ("ROJO".equals(archivo.semaforo) || "NARANJA".equals(archivo.semaforo)) {
+            archivo.semaforo = "VERDE";
+          }
+        }
+      }
+      persistirItemWorker(lote, fila);
+    }
+    emitirLoteActualizado(tenant, batchId);
+    return new OverrideResponseDto(
+        expedienteId.toString(), "VERDE", observacion, userId.toString(), OffsetDateTime.now());
   }
 
   public LoteStatus procesarIa(UUID batchId) {
