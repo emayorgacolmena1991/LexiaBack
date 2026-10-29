@@ -4,7 +4,9 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionesPayload;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.CrearLoteRequest;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteListItemDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -29,6 +31,22 @@ public class IngestaMasivaEscrituracionController {
 
   public IngestaMasivaEscrituracionController(IngestaMasivaEscrituracionService ingesta) {
     this.ingesta = ingesta;
+  }
+
+  @GetMapping("/lotes")
+  public LotesPageDto listarLotes(
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(required = false) String status,
+      @RequestParam(required = false) String producto,
+      @RequestParam(required = false) String canton,
+      @RequestParam(required = false) String q) {
+    return ingesta.listarLotes(page, size, status, producto, canton, q);
+  }
+
+  @GetMapping("/lotes/{batchId}")
+  public LoteListItemDto detalleLote(@PathVariable UUID batchId) {
+    return ingesta.detalleLote(batchId);
   }
 
   @PostMapping("/batch")

@@ -38,13 +38,20 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarDocumento;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarIaExpediente;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteListItemDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.ia.ocr.LayoutExtractResult;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.tenancy.TenantContext;
 import java.io.IOException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -129,6 +136,8 @@ public class IngestaMasivaEscrituracionService {
       lote.filas.add(crearFila(principal, fila));
     }
     lote.fase = "CREADO";
+    lote.producto = valorComun(request.filas().stream().map(FilaRequest::productCode).toList());
+    lote.canton = valorComun(request.filas().stream().map(FilaRequest::canton).toList());
     persistir(lote);
     LOG.info("ingesta-masiva lote={} filas={} tenant={}", lote.id, lote.filas.size(), principal.tenantId());
     return lote.snapshot();
@@ -204,6 +213,11 @@ public class IngestaMasivaEscrituracionService {
     if (!tocadas.isEmpty()) {
       synchronized (lote) {
         lote.fase = "ARCHIVOS";
+        if (!StringUtils.hasText(lote.producto)) {
+          Fila primera = tocadas.get(0);
+          lote.producto = primera.productCode;
+          lote.canton = primera.canton;
+        }
       }
       UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
       for (Fila tocada : tocadas) {
@@ -340,6 +354,58 @@ public class IngestaMasivaEscrituracionService {
 
   public LoteStatus status(UUID batchId) {
     return require(batchId).snapshot();
+  }
+
+  public LotesPageDto listarLotes(
+      int page, int size, String status, String producto, String canton, String q) {
+    AuthPrincipal principal = AuthContext.require();
+    int pagina = Math.max(page, 0);
+    int tamano = Math.min(Math.max(size, 1), 100);
+    String statusFiltro = textoFiltro(status);
+    String productoFiltro = textoFiltro(producto);
+    String cantonFiltro = textoFiltro(canton);
+    String busqueda = textoFiltro(q);
+    List<LoteListItemDto> items = new ArrayList<>();
+    for (Object row :
+        consultaLotes(
+                false,
+                principal.tenantId(),
+                productoFiltro,
+                cantonFiltro,
+                busqueda,
+                statusFiltro,
+                tamano,
+                pagina * tamano)
+            .getResultList()) {
+      items.add(mapLoteListItem((Object[]) row));
+    }
+    Number total =
+        (Number)
+            consultaLotes(
+                    true,
+                    principal.tenantId(),
+                    productoFiltro,
+                    cantonFiltro,
+                    busqueda,
+                    statusFiltro,
+                    tamano,
+                    0)
+                .getSingleResult();
+    return new LotesPageDto(items, total.longValue(), pagina, tamano);
+  }
+
+  public LoteListItemDto detalleLote(UUID batchId) {
+    AuthPrincipal principal = AuthContext.require();
+    List<?> rows =
+        entityManager
+            .createNativeQuery(sqlLoteDetalle())
+            .setParameter("tenant", principal.tenantId())
+            .setParameter("batchId", batchId)
+            .getResultList();
+    if (rows.isEmpty()) {
+      throw ApiException.notFound("Lote de ingesta no encontrado.");
+    }
+    return mapLoteListItem((Object[]) rows.get(0));
   }
 
   public LoteStatus procesarIa(UUID batchId) {
@@ -862,6 +928,179 @@ public class IngestaMasivaEscrituracionService {
     }
   }
 
+  private static String sqlLotes(boolean contar, boolean producto, boolean canton, boolean q, boolean status) {
+    String cuerpo =
+        """
+        SELECT
+          l.id,
+          l.created_at,
+          l.producto,
+          l.canton,
+          l.status_revision,
+          l.estado,
+          l.total_filas,
+          COUNT(i.client_row_id) AS total_exp,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'VERDE') AS verdes,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'NARANJA') AS naranjas,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'ERROR' OR i.detalle->>'semaforo' = 'ROJO') AS rojos,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO') AS completados,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado IN ('PENDIENTE','EN_PROCESO')) AS en_proceso
+        FROM app.ingesta_lote l
+        LEFT JOIN app.ingesta_item i ON i.lote_id = l.id AND i.tenant_id = l.tenant_id
+        WHERE l.tenant_id = :tenant
+        """
+            + (producto ? " AND l.producto = :producto" : "")
+            + (canton ? " AND l.canton = :canton" : "")
+            + (q ? " AND l.id::text ILIKE '%' || :q || '%'" : "")
+            + """
+         GROUP BY l.id, l.created_at, l.producto, l.canton, l.status_revision, l.estado, l.total_filas
+        """
+            + (status
+                ? """
+                 HAVING CASE
+                   WHEN l.status_revision = 'CONFIRMADO' THEN 'CONFIRMADO'
+                   WHEN COUNT(i.client_row_id) FILTER (WHERE i.estado IN ('PENDIENTE','EN_PROCESO')) > 0 THEN 'PROCESANDO'
+                   WHEN COUNT(i.client_row_id) > 0 THEN 'REVISAR'
+                   ELSE 'BORRADOR'
+                 END = :status
+                """
+                : "");
+    if (contar) {
+      return "SELECT count(*) FROM (" + cuerpo + ") lotes";
+    }
+    return cuerpo + " ORDER BY l.created_at DESC LIMIT :limite OFFSET :offset";
+  }
+
+  private static String sqlLoteDetalle() {
+    return """
+        SELECT
+          l.id,
+          l.created_at,
+          l.producto,
+          l.canton,
+          l.status_revision,
+          l.estado,
+          l.total_filas,
+          COUNT(i.client_row_id) AS total_exp,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'VERDE') AS verdes,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'NARANJA') AS naranjas,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'ERROR' OR i.detalle->>'semaforo' = 'ROJO') AS rojos,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO') AS completados,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado IN ('PENDIENTE','EN_PROCESO')) AS en_proceso
+        FROM app.ingesta_lote l
+        LEFT JOIN app.ingesta_item i ON i.lote_id = l.id AND i.tenant_id = l.tenant_id
+        WHERE l.tenant_id = :tenant AND l.id = :batchId
+        GROUP BY l.id, l.created_at, l.producto, l.canton, l.status_revision, l.estado, l.total_filas
+        """;
+  }
+
+  private jakarta.persistence.Query consultaLotes(
+      boolean contar,
+      UUID tenant,
+      String producto,
+      String canton,
+      String q,
+      String status,
+      int limite,
+      int offset) {
+    var consulta =
+        entityManager.createNativeQuery(
+            sqlLotes(contar, producto != null, canton != null, q != null, status != null));
+    consulta.setParameter("tenant", tenant);
+    if (producto != null) {
+      consulta.setParameter("producto", producto);
+    }
+    if (canton != null) {
+      consulta.setParameter("canton", canton);
+    }
+    if (q != null) {
+      consulta.setParameter("q", q);
+    }
+    if (status != null) {
+      consulta.setParameter("status", status);
+    }
+    if (!contar) {
+      consulta.setParameter("limite", limite);
+      consulta.setParameter("offset", offset);
+    }
+    return consulta;
+  }
+
+  private static LoteListItemDto mapLoteListItem(Object[] row) {
+    int totalFilas = numero(row[6]);
+    int totalItems = numero(row[7]);
+    int enProceso = numero(row[12]);
+    return new LoteListItemDto(
+        (UUID) row[0],
+        aFecha(row[1]),
+        row[2] == null ? null : String.valueOf(row[2]),
+        row[3] == null ? null : String.valueOf(row[3]),
+        totalFilas,
+        numero(row[8]),
+        numero(row[9]),
+        numero(row[10]),
+        statusCalculado(String.valueOf(row[4]), enProceso, totalItems),
+        row[5] == null ? null : String.valueOf(row[5]),
+        numero(row[11]),
+        enProceso);
+  }
+
+  private static String statusCalculado(String persistido, int enProceso, int totalItems) {
+    if ("CONFIRMADO".equals(persistido)) {
+      return "CONFIRMADO";
+    }
+    if (enProceso > 0) {
+      return "PROCESANDO";
+    }
+    if (totalItems > 0) {
+      return "REVISAR";
+    }
+    return "BORRADOR";
+  }
+
+  private static String valorComun(List<String> valores) {
+    Set<String> distintos = new LinkedHashSet<>();
+    for (String valor : valores) {
+      if (StringUtils.hasText(valor)) {
+        distintos.add(valor.trim());
+      }
+    }
+    if (distintos.isEmpty()) {
+      return null;
+    }
+    if (distintos.size() == 1) {
+      return distintos.iterator().next();
+    }
+    return "MIXTO";
+  }
+
+  private static String textoFiltro(String valor) {
+    return StringUtils.hasText(valor) ? valor.trim() : null;
+  }
+
+  private static int numero(Object valor) {
+    return valor == null ? 0 : ((Number) valor).intValue();
+  }
+
+  private static OffsetDateTime aFecha(Object valor) {
+    if (valor == null) {
+      return null;
+    }
+    if (valor instanceof OffsetDateTime fecha) {
+      return fecha;
+    }
+    if (valor instanceof Instant instante) {
+      return instante.atOffset(ZoneOffset.UTC);
+    }
+    if (valor instanceof Timestamp marca) {
+      return marca.toInstant().atOffset(ZoneOffset.UTC);
+    }
+    if (valor instanceof LocalDateTime local) {
+      return local.atOffset(ZoneOffset.UTC);
+    }
+    return OffsetDateTime.parse(valor.toString());
+  }
+
   private Lote require(UUID batchId) {
     AuthPrincipal principal = AuthContext.require();
     Lote lote = cargar(principal.tenantId(), batchId);
@@ -925,18 +1164,23 @@ public class IngestaMasivaEscrituracionService {
     try (PreparedStatement upsert =
         connection.prepareStatement(
             """
-            INSERT INTO app.ingesta_lote (id, tenant_id, estado, total_filas, filas_completadas)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO app.ingesta_lote
+              (id, tenant_id, estado, total_filas, filas_completadas, producto, canton)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
               estado = EXCLUDED.estado,
               total_filas = EXCLUDED.total_filas,
-              filas_completadas = EXCLUDED.filas_completadas
+              filas_completadas = EXCLUDED.filas_completadas,
+              producto = COALESCE(EXCLUDED.producto, app.ingesta_lote.producto),
+              canton = COALESCE(EXCLUDED.canton, app.ingesta_lote.canton)
             """)) {
       upsert.setObject(1, lote.id);
       upsert.setObject(2, tenant);
       upsert.setString(3, lote.fase);
       upsert.setInt(4, lote.filas.size());
       upsert.setInt(5, hechas);
+      upsert.setString(6, lote.producto);
+      upsert.setString(7, lote.canton);
       upsert.executeUpdate();
     }
     int orden = 0;
@@ -1058,15 +1302,18 @@ public class IngestaMasivaEscrituracionService {
     List<?> fase =
         entityManager
             .createNativeQuery(
-                "SELECT estado FROM app.ingesta_lote WHERE id = :id AND tenant_id = :tenant")
+                "SELECT estado, producto, canton FROM app.ingesta_lote WHERE id = :id AND tenant_id = :tenant")
             .setParameter("id", loteId)
             .setParameter("tenant", tenantId)
             .getResultList();
     if (fase.isEmpty()) {
       return null;
     }
+    Object[] cabecera = (Object[]) fase.get(0);
     Lote lote = new Lote(loteId, tenantId);
-    lote.fase = String.valueOf(fase.get(0));
+    lote.fase = String.valueOf(cabecera[0]);
+    lote.producto = cabecera[1] == null ? null : String.valueOf(cabecera[1]);
+    lote.canton = cabecera[2] == null ? null : String.valueOf(cabecera[2]);
     List<?> rows =
         entityManager
             .createNativeQuery(
@@ -1197,6 +1444,8 @@ public class IngestaMasivaEscrituracionService {
     private final UUID tenantId;
     private final List<Fila> filas = new ArrayList<>();
     private String fase = "CREADO";
+    private String producto;
+    private String canton;
 
     private Lote(UUID id, UUID tenantId) {
       this.id = id;
