@@ -1,6 +1,10 @@
 package com.lexia.api.modules.expedientes.coactivas.ia;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.modules.ia.ocr.AzureOcrService;
 import com.lexia.api.modules.ia.ocr.DocumentoCacheStore;
 import java.nio.charset.StandardCharsets;
@@ -23,6 +27,7 @@ import org.springframework.util.StringUtils;
 public class CoactivaPdfTexto {
 
   private static final Logger LOG = LoggerFactory.getLogger(CoactivaPdfTexto.class);
+  private static final ObjectMapper JSON = new ObjectMapper();
   static final int MIN_CARACTERES = 50;
   static final int MIN_FOJAS_CALIDAD = 5;
 
@@ -44,16 +49,19 @@ public class CoactivaPdfTexto {
   public TextoOcr extraer(UUID tenantId, String sha256, Supplier<byte[]> bytes, String mime, String nombre) {
     if (cache != null && StringUtils.hasText(sha256)) {
       var hit = cache.buscar(tenantId, sha256, VERSION_CACHE);
-      if (hit.isPresent() && StringUtils.hasText(hit.get().textoOcr())) {
+      // ponytail: la caché vieja guardó solo texto. Sin polígonos, el siguiente análisis vuelve a Azure una vez.
+      if (hit.isPresent()
+          && StringUtils.hasText(hit.get().textoOcr())
+          && StringUtils.hasText(hit.get().resultadoJson())) {
         String texto = asegurarUtf8(hit.get().textoOcr());
         LOG.info("OCR coactivas desde caché sha256={}", sha256);
-        return new TextoOcr(texto, contarFojas(texto), texto.length());
+        return new TextoOcr(texto, contarFojas(texto), texto.length(), hit.get().resultadoJson());
       }
     }
     TextoOcr extraido = extraer(bytes.get(), mime, nombre);
     if (cache != null && StringUtils.hasText(sha256) && StringUtils.hasText(extraido.texto())
         && !calidadInsuficiente(extraido)) {
-      cache.guardar(tenantId, sha256, VERSION_CACHE, "AZURE_READ", extraido.texto(), null);
+      cache.guardar(tenantId, sha256, VERSION_CACHE, "AZURE_READ", extraido.texto(), extraido.indice());
     }
     return extraido;
   }
@@ -67,7 +75,9 @@ public class CoactivaPdfTexto {
     }
     String tipo = StringUtils.hasText(mime) ? mime : (esPdf(nombre, bytes) ? "application/pdf" : "application/octet-stream");
     try {
-      TextoOcr extraido = formatear(ocr.analizarLectura(bytes, tipo));
+      JsonNode analyze = ocr.analizarLectura(bytes, tipo);
+      TextoOcr base = formatear(analyze);
+      TextoOcr extraido = new TextoOcr(base.texto(), base.paginas(), base.caracteres(), indicePalabras(analyze));
       LOG.info("OCR Azure coactivas paginas={} chars={}", extraido.paginas(), extraido.caracteres());
       return extraido;
     } catch (RuntimeException e) {
@@ -78,29 +88,93 @@ public class CoactivaPdfTexto {
 
   /** Hasta 12 extractos cortos. {@code q} de menos de 2 caracteres no busca. */
   public static List<Coincidencia> buscar(String texto, String q) {
-    if (texto == null || texto.isEmpty() || q == null) {
+    return buscar(texto, null, q);
+  }
+
+  /**
+   * Si {@code indiceJson} trae las palabras de Azure, cada acierto incluye el polígono.
+   * Sin índice (caché vieja) el resultado es solo foja y extracto.
+   */
+  public static List<Coincidencia> buscar(String texto, String indiceJson, String q) {
+    String needle = aguja(q);
+    if (needle == null) {
       return List.of();
     }
-    String needle = q.trim();
-    if (needle.length() < 2) {
-      return List.of();
+    JsonNode indice = leerIndice(indiceJson);
+    if (indice != null) {
+      List<Coincidencia> conCajas = buscarEnIndice(indice, needle);
+      if (!conCajas.isEmpty()) {
+        return conCajas;
+      }
     }
-    if (needle.length() > 80) {
-      needle = needle.substring(0, 80);
+    if (texto == null || texto.isEmpty()) {
+      return List.of();
     }
     String hay = texto.toLowerCase(Locale.ROOT);
-    String n = needle.toLowerCase(Locale.ROOT);
     List<Coincidencia> hits = new ArrayList<>();
     int from = 0;
     while (hits.size() < 12) {
-      int at = hay.indexOf(n, from);
+      int at = hay.indexOf(needle, from);
       if (at < 0) {
         break;
       }
-      hits.add(new Coincidencia(fojaEn(texto, at), extracto(texto, at, n.length())));
-      from = at + n.length();
+      hits.add(new Coincidencia(fojaEn(texto, at), extracto(texto, at, needle.length())));
+      from = at + needle.length();
     }
     return hits;
+  }
+
+  /**
+   * Índice compacto de {@code analyzeResult} ({@code prebuilt-read}): una entrada por palabra,
+   * o por línea si la página no trae palabras con polígono. Coordenadas en la unidad de la página
+   * (pulgadas o píxeles), origen arriba a la izquierda.
+   */
+  static String indicePalabras(JsonNode analyzeResult) {
+    ObjectNode root = JSON.createObjectNode();
+    ArrayNode pages = root.putArray("pages");
+    JsonNode fuente = analyzeResult == null ? null : analyzeResult.path("pages");
+    if (fuente != null && fuente.isArray()) {
+      int index = 0;
+      for (JsonNode page : fuente) {
+        index++;
+        double width = page.path("width").asDouble(0);
+        double height = page.path("height").asDouble(0);
+        if (width <= 0 || height <= 0) {
+          continue;
+        }
+        JsonNode words = palabrasDe(page);
+        if (!words.isArray() || words.isEmpty()) {
+          continue;
+        }
+        ObjectNode out = pages.addObject();
+        out.put("n", page.path("pageNumber").asInt(index));
+        out.put("w", width);
+        out.put("h", height);
+        out.put("u", page.path("unit").asText("inch"));
+        ArrayNode lista = out.putArray("words");
+        for (JsonNode word : words) {
+          String t = word.path("content").asText("").replaceAll("\\s+", " ").trim();
+          List<Double> poly = leerPoligono(word);
+          if (t.isEmpty() || poly.isEmpty()) {
+            continue;
+          }
+          ObjectNode item = lista.addObject();
+          item.put("t", t);
+          ArrayNode coords = item.putArray("p");
+          for (Double n : poly) {
+            coords.add(n);
+          }
+        }
+        if (lista.isEmpty()) {
+          pages.remove(pages.size() - 1);
+        }
+      }
+    }
+    try {
+      return JSON.writeValueAsString(root);
+    } catch (JsonProcessingException ex) {
+      return null;
+    }
   }
 
   static int fojaEn(String texto, int pos) {
@@ -131,7 +205,150 @@ public class CoactivaPdfTexto {
     return (a > 0 ? "..." : "") + slice + (b < texto.length() ? "..." : "");
   }
 
-  public record Coincidencia(int foja, String extracto) {}
+  public record Caja(int pagina, double pageWidth, double pageHeight, String unit, List<Double> polygon) {}
+
+  public record Coincidencia(int foja, String extracto, List<Caja> cajas) {
+    public Coincidencia {
+      cajas = cajas == null ? List.of() : List.copyOf(cajas);
+    }
+
+    public Coincidencia(int foja, String extracto) {
+      this(foja, extracto, List.of());
+    }
+  }
+
+  private static String aguja(String q) {
+    if (q == null) {
+      return null;
+    }
+    String needle = q.trim();
+    if (needle.length() < 2) {
+      return null;
+    }
+    if (needle.length() > 80) {
+      needle = needle.substring(0, 80);
+    }
+    return needle.toLowerCase(Locale.ROOT);
+  }
+
+  private static JsonNode leerIndice(String indiceJson) {
+    if (!StringUtils.hasText(indiceJson)) {
+      return null;
+    }
+    try {
+      JsonNode node = JSON.readTree(indiceJson);
+      return node.path("pages").isArray() ? node : null;
+    } catch (JsonProcessingException ex) {
+      return null;
+    }
+  }
+
+  private static List<Coincidencia> buscarEnIndice(JsonNode indice, String needle) {
+    List<Coincidencia> hits = new ArrayList<>();
+    for (JsonNode page : indice.path("pages")) {
+      JsonNode words = page.path("words");
+      if (!words.isArray() || words.isEmpty()) {
+        continue;
+      }
+      StringBuilder sb = new StringBuilder();
+      int[] inicio = new int[words.size()];
+      int[] fin = new int[words.size()];
+      int usados = 0;
+      for (JsonNode word : words) {
+        String t = word.path("t").asText("");
+        if (t.isEmpty()) {
+          continue;
+        }
+        if (usados > 0) {
+          sb.append(' ');
+        }
+        inicio[usados] = sb.length();
+        sb.append(t);
+        fin[usados] = sb.length();
+        usados++;
+      }
+      if (usados == 0) {
+        continue;
+      }
+      String hay = sb.toString().toLowerCase(Locale.ROOT);
+      int from = 0;
+      while (hits.size() < 12) {
+        int at = hay.indexOf(needle, from);
+        if (at < 0) {
+          break;
+        }
+        int matchEnd = at + needle.length();
+        List<Caja> cajas = new ArrayList<>();
+        int cursor = 0;
+        for (JsonNode word : words) {
+          if (word.path("t").asText("").isEmpty()) {
+            continue;
+          }
+          if (cursor < usados && fin[cursor] > at && inicio[cursor] < matchEnd) {
+            cajas.add(cajaDe(page, word));
+          }
+          cursor++;
+        }
+        hits.add(new Coincidencia(page.path("n").asInt(), extracto(sb.toString(), at, needle.length()), cajas));
+        from = matchEnd;
+      }
+      if (hits.size() >= 12) {
+        break;
+      }
+    }
+    return hits;
+  }
+
+  private static Caja cajaDe(JsonNode page, JsonNode word) {
+    return new Caja(
+        page.path("n").asInt(),
+        page.path("w").asDouble(),
+        page.path("h").asDouble(),
+        page.path("u").asText("inch"),
+        leerPoligono(word));
+  }
+
+  /** Palabras con polígono; si no hay, las líneas. */
+  private static JsonNode palabrasDe(JsonNode page) {
+    JsonNode words = page.path("words");
+    if (words.isArray()) {
+      for (JsonNode word : words) {
+        if (!word.path("content").asText("").isBlank() && !leerPoligono(word).isEmpty()) {
+          return words;
+        }
+      }
+    }
+    JsonNode lines = page.path("lines");
+    return lines.isArray() ? lines : JSON.createArrayNode();
+  }
+
+  /** {@code polygon} o {@code boundingBox}: lista plana o puntos {@code {x,y}}. En el índice la clave es {@code p}. */
+  static List<Double> leerPoligono(JsonNode node) {
+    if (node == null || node.isMissingNode() || node.isNull()) {
+      return List.of();
+    }
+    JsonNode poly = node.has("polygon") ? node.get("polygon") : node.has("boundingBox") ? node.get("boundingBox") : node.get("p");
+    if (poly == null || !poly.isArray() || poly.size() < 2) {
+      return List.of();
+    }
+    List<Double> out = new ArrayList<>();
+    if (poly.get(0).isNumber()) {
+      for (JsonNode n : poly) {
+        if (n.isNumber()) {
+          out.add(n.asDouble());
+        }
+      }
+    } else {
+      for (JsonNode pt : poly) {
+        out.add(pt.path("x").asDouble());
+        out.add(pt.path("y").asDouble());
+      }
+    }
+    if ((out.size() & 1) == 1) {
+      out.remove(out.size() - 1);
+    }
+    return out.size() >= 4 ? out : List.of();
+  }
 
   static int contarFojas(String texto) {
     String t = "\n" + texto;
@@ -248,9 +465,13 @@ public class CoactivaPdfTexto {
     return bytes.length > 4 && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F';
   }
 
-  public record TextoOcr(String texto, int paginas, int caracteres) {
+  public record TextoOcr(String texto, int paginas, int caracteres, String indice) {
+    public TextoOcr(String texto, int paginas, int caracteres) {
+      this(texto, paginas, caracteres, null);
+    }
+
     public static TextoOcr vacio() {
-      return new TextoOcr("", 0, 0);
+      return new TextoOcr("", 0, 0, null);
     }
   }
 }

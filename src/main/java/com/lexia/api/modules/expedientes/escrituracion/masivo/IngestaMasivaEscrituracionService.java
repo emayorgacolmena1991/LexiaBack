@@ -34,17 +34,27 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionArchivo;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionesPayload;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.CrearLoteRequest;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ExpedienteEnLoteDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.FilaStatus;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarDocumento;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaJobWorker.ProcesarIaExpediente;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteListItemDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.ia.ocr.LayoutExtractResult;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.tenancy.TenantContext;
 import java.io.IOException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +62,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -128,6 +139,8 @@ public class IngestaMasivaEscrituracionService {
       lote.filas.add(crearFila(principal, fila));
     }
     lote.fase = "CREADO";
+    lote.producto = valorComun(request.filas().stream().map(FilaRequest::productCode).toList());
+    lote.canton = valorComun(request.filas().stream().map(FilaRequest::canton).toList());
     persistir(lote);
     LOG.info("ingesta-masiva lote={} filas={} tenant={}", lote.id, lote.filas.size(), principal.tenantId());
     return lote.snapshot();
@@ -203,6 +216,11 @@ public class IngestaMasivaEscrituracionService {
     if (!tocadas.isEmpty()) {
       synchronized (lote) {
         lote.fase = "ARCHIVOS";
+        if (!StringUtils.hasText(lote.producto)) {
+          Fila primera = tocadas.get(0);
+          lote.producto = primera.productCode;
+          lote.canton = primera.canton;
+        }
       }
       UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
       for (Fila tocada : tocadas) {
@@ -226,40 +244,36 @@ public class IngestaMasivaEscrituracionService {
   public LoteStatus ejecutarOcr(UUID batchId) {
     Lote lote = require(batchId);
     AuthPrincipal principal = AuthContext.require();
-    List<Fila> objetivo = new ArrayList<>();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    synchronized (lote) {
+      lote.fase = "OCR";
+    }
     for (Fila fila : lote.filas) {
+      List<Archivo> pendientes;
       synchronized (fila) {
-        if (fila.expedienteId == null || fila.archivos.isEmpty()) {
-          fila.ocrEstado = "ERROR";
-          fila.semaforo = "ROJO";
-          fila.observaciones = "Sin archivos guardados. No se llama a OCR.";
+        if (!"PENDIENTE".equals(fila.ocrEstado) && !"ERROR".equals(fila.ocrEstado)) {
           continue;
         }
-        if ("LISTO".equals(fila.ocrEstado) && !"ROJO".equals(fila.semaforo)) {
+        if (fila.expedienteId == null) {
+          continue;
+        }
+        pendientes = new ArrayList<>();
+        for (Archivo archivo : fila.archivos) {
+          if (!archivo.ocrListo) {
+            pendientes.add(archivo);
+          }
+        }
+        if (pendientes.isEmpty()) {
           continue;
         }
         fila.ocrEstado = "PROCESANDO";
         fila.semaforo = "GRIS";
         fila.observaciones = null;
-        objetivo.add(fila);
       }
-    }
-    if (objetivo.isEmpty()) {
-      throw ApiException.badRequest("No hay archivos guardados para OCR.");
-    }
-    synchronized (lote) {
-      lote.fase = "OCR";
-    }
-    for (Fila fila : objetivo) {
-      for (Archivo archivo : fila.archivos) {
-        if (!archivo.ocrListo) {
-          encolarProcesarDocumento(lote, fila, archivo, principal);
-        }
-      }
-    }
-    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
-    for (Fila fila : objetivo) {
       actualizarItemEnBd(lote.id, tenant, fila, false);
+      for (Archivo archivo : pendientes) {
+        encolarProcesarDocumento(lote, fila, archivo, principal);
+      }
     }
     actualizarContadoresLote(lote.id, tenant, lote.fase);
     return cargar(principal.tenantId(), batchId).snapshot();
@@ -357,8 +371,157 @@ public class IngestaMasivaEscrituracionService {
     return require(batchId).snapshot();
   }
 
+  public LotesPageDto listarLotes(
+      int page, int size, String status, String producto, String canton, String q) {
+    AuthPrincipal principal = AuthContext.require();
+    int pagina = Math.max(page, 0);
+    int tamano = Math.min(Math.max(size, 1), 100);
+    String statusFiltro = textoFiltro(status);
+    String productoFiltro = textoFiltro(producto);
+    String cantonFiltro = textoFiltro(canton);
+    String busqueda = textoFiltro(q);
+    List<LoteListItemDto> items = new ArrayList<>();
+    for (Object row :
+        consultaLotes(
+                false,
+                principal.tenantId(),
+                productoFiltro,
+                cantonFiltro,
+                busqueda,
+                statusFiltro,
+                tamano,
+                pagina * tamano)
+            .getResultList()) {
+      items.add(mapLoteListItem((Object[]) row));
+    }
+    Number total =
+        (Number)
+            consultaLotes(
+                    true,
+                    principal.tenantId(),
+                    productoFiltro,
+                    cantonFiltro,
+                    busqueda,
+                    statusFiltro,
+                    tamano,
+                    0)
+                .getSingleResult();
+    return new LotesPageDto(items, total.longValue(), pagina, tamano);
+  }
+
+  public LoteListItemDto detalleLote(UUID batchId) {
+    AuthPrincipal principal = AuthContext.require();
+    List<?> rows =
+        entityManager
+            .createNativeQuery(sqlLoteDetalle())
+            .setParameter("tenant", principal.tenantId())
+            .setParameter("batchId", batchId)
+            .getResultList();
+    if (rows.isEmpty()) {
+      throw ApiException.notFound("Lote de ingesta no encontrado.");
+    }
+    return mapLoteListItem((Object[]) rows.get(0));
+  }
+
+  public List<ExpedienteEnLoteDto> listarExpedientesLote(UUID batchId) {
+    Lote lote = require(batchId);
+    Map<String, List<Fila>> porExpediente =
+        lote.filas.stream()
+            .filter(f -> f.expedienteId != null)
+            .collect(Collectors.groupingBy(f -> f.expedienteId.toString()));
+
+    return porExpediente.entrySet().stream()
+        .map(
+            e -> {
+              List<Fila> filas = e.getValue();
+              Fila first = filas.get(0);
+
+              String sem =
+                  filas.stream()
+                      .flatMap(f -> f.archivos.stream())
+                      .map(a -> a.semaforo)
+                      .reduce("GRIS", IngestaMasivaEscrituracionService::peor);
+
+              String obs =
+                  filas.stream()
+                      .flatMap(f -> f.archivos.stream())
+                      .filter(a -> a.ocrListo && !a.legible)
+                      .findFirst()
+                      .map(a -> "Documento ilegible: " + a.nombre)
+                      .orElse(
+                          filas.stream()
+                              .filter(f -> "ERROR".equals(f.ocrEstado))
+                              .findFirst()
+                              .map(f -> f.observaciones)
+                              .orElse(null));
+
+              int totalArch = filas.stream().mapToInt(f -> f.archivos.size()).sum();
+              int legibles =
+                  (int)
+                      filas.stream()
+                          .flatMap(f -> f.archivos.stream())
+                          .filter(a -> a.legible)
+                          .count();
+
+              String codigo =
+                  StringUtils.hasText(first.codigo)
+                      ? first.codigo
+                      : shortUuid(first.expedienteId);
+
+              return new ExpedienteEnLoteDto(
+                  e.getKey(),
+                  first.clientRowId,
+                  codigo,
+                  first.cliente,
+                  first.clienteIdentificacion,
+                  first.productCode,
+                  first.canton,
+                  totalArch,
+                  legibles,
+                  sem,
+                  obs,
+                  first.ocrEstado,
+                  first.iaEstado,
+                  ultimaActualizacion(filas));
+            })
+        .sorted(
+            Comparator.comparing(
+                ExpedienteEnLoteDto::ultimaActualizacion,
+                Comparator.nullsLast(Comparator.reverseOrder())))
+        .toList();
+  }
+
   public LoteStatus procesarIa(UUID batchId) {
-    return require(batchId).snapshot();
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    int encolados = 0;
+    for (Fila fila : lote.filas) {
+      synchronized (fila) {
+        if (filaExpedienteBloqueado(fila) || fila.expedienteId == null) {
+          continue;
+        }
+        boolean ilegible = false;
+        for (Archivo archivo : fila.archivos) {
+          if (!archivo.legible) {
+            ilegible = true;
+            break;
+          }
+        }
+        if (ilegible) {
+          continue;
+        }
+        if ("EN_PROCESO".equals(fila.iaEstado) || "COMPLETADO".equals(fila.iaEstado)) {
+          continue;
+        }
+        fila.iaEstado = "PENDIENTE";
+      }
+      actualizarItemEnBd(lote.id, tenant, fila, false);
+      encolarProcesarIa(lote, fila, principal);
+      encolados++;
+    }
+    LOG.info("procesarIa batch={} encolados={}", batchId, encolados);
+    return cargar(principal.tenantId(), batchId).snapshot();
   }
 
   private Fila crearFila(AuthPrincipal principal, FilaRequest request) {
@@ -457,6 +620,23 @@ public class IngestaMasivaEscrituracionService {
     LOG.info("job PROCESAR_DOCUMENTO {}", payload);
   }
 
+  private void encolarProcesarIa(Lote lote, Fila fila, AuthPrincipal principal) {
+    ProcesarIaExpediente payload =
+        new ProcesarIaExpediente(
+            lote.id,
+            fila.clientRowId,
+            fila.expedienteId,
+            principal.tenantId(),
+            principal.userId(),
+            fila.expedienteId.toString());
+    try {
+      jobs.encolar(principal.tenantId(), "PROCESAR_IA_EXPEDIENTE", objectMapper.writeValueAsString(payload));
+    } catch (JsonProcessingException ex) {
+      throw ApiException.badRequest("No se pudo encolar el cotejo IA.");
+    }
+    LOG.info("job PROCESAR_IA_EXPEDIENTE {}", payload);
+  }
+
   public void procesarDocumento(ProcesarDocumento payload) {
     Lote lote = cargar(payload.tenantId(), payload.loteId());
     Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
@@ -508,52 +688,13 @@ public class IngestaMasivaEscrituracionService {
         bloquearExpedientePorArchivosConError(lote, fila, tenantId, loteId, payload.itemId());
         return;
       }
-      if (!esUltimoArchivo(fila, payload.expedienteId())) {
-        if (lote != null) {
-          emitirLoteActualizado(tenantId, loteId);
-        }
-        return;
-      }
-      lote = cargar(tenantId, loteId);
-      fila = lote == null ? null : filaONull(lote, payload.itemId());
-      if (filaExpedienteBloqueado(fila)) {
-        bloquearExpedientePorArchivosConError(lote, fila, tenantId, loteId, payload.itemId());
-        return;
-      }
-      if (!intentarTomarControlIa(loteId, tenantId, payload.itemId())) {
-        LOG.info("IA omitida: otro worker ya consolidó la fila {}", payload.itemId());
-        return;
-      }
-      lote = cargar(tenantId, loteId);
-      fila = lote == null ? null : filaONull(lote, payload.itemId());
-      String unido = textoConsolidado(sesion);
-      if (!StringUtils.hasText(unido)) {
-        archivo = fila == null ? archivo : archivoDe(fila, payload.docId());
-        abortarErrorTecnicoArchivo(lote, fila, archivo, tenantId, loteId, payload.itemId(), MSG_ILEGIBLE);
-        return;
-      }
-      carga.guardarResultadoOcr(
-          sesion,
-          new DocumentoOcrResultadoDTO(
-              "consolidado", "consolidado", "CONSOLIDADO", unido, null, "LEGIBLE", null, confianza));
-      ProcesarExpedienteCompletoResult resultado =
-          ia.analizarExpedienteConPromptProducto(
-              payload.expedienteId(), new AnalysisRequestDTO(Boolean.TRUE, sesion));
-      String resumen = "OK";
-      if (resultado.dictamen() != null && StringUtils.hasText(resultado.dictamen().estado())) {
-        resumen = resultado.dictamen().estado();
-      }
-      if (fila != null) {
+      if (fila != null && lote != null && esUltimoArchivo(fila, payload.expedienteId())) {
         synchronized (fila) {
           fila.cerrarOcr(List.of());
-          fila.iaEstado = "COMPLETADO";
-          fila.iaResumen = resumen;
-          fila.ocrEstado = "COMPLETADO";
-          fila.duracionMs = Math.max(0, System.currentTimeMillis() - fila.inicioMs);
         }
-      }
-      if (fila != null && lote != null) {
         persistirItemWorker(lote, fila);
+      }
+      if (lote != null) {
         emitirLoteActualizado(tenantId, loteId);
       }
     } catch (Exception ex) {
@@ -687,10 +828,60 @@ public class IngestaMasivaEscrituracionService {
     return filas[0] == 1;
   }
 
+  public void procesarIaExpediente(ProcesarIaExpediente payload) {
+    Lote lote = cargar(payload.tenantId(), payload.loteId());
+    Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
+    if (fila == null || lote == null || fila.expedienteId == null) {
+      throw new IllegalStateException("Fila no encontrada: " + payload.itemId());
+    }
+    if (filaExpedienteBloqueado(fila)) {
+      throw new IllegalStateException("Expediente bloqueado");
+    }
+    String sesion =
+        StringUtils.hasText(payload.sessionId())
+            ? payload.sessionId()
+            : payload.expedienteId().toString();
+    synchronized (fila) {
+      fila.iaEstado = "EN_PROCESO";
+    }
+    persistirItemWorker(lote, fila);
+    String unido = textoConsolidado(sesion);
+    if (!StringUtils.hasText(unido)) {
+      throw new IllegalStateException("Sin texto OCR consolidable.");
+    }
+    carga.guardarResultadoOcr(
+        sesion,
+        new DocumentoOcrResultadoDTO(
+            "consolidado", "consolidado", "CONSOLIDADO", unido, null, "LEGIBLE", null, fila.confianza));
+    ProcesarExpedienteCompletoResult resultado =
+        ia.analizarExpedienteConPromptProducto(
+            payload.expedienteId(), new AnalysisRequestDTO(Boolean.TRUE, sesion));
+    String resumen = "OK";
+    if (resultado.dictamen() != null && StringUtils.hasText(resultado.dictamen().estado())) {
+      resumen = resultado.dictamen().estado();
+    }
+    synchronized (fila) {
+      fila.iaEstado = "COMPLETADO";
+      fila.iaResumen = resumen;
+      fila.ocrEstado = "COMPLETADO";
+      fila.duracionMs = Math.max(0, System.currentTimeMillis() - fila.inicioMs);
+    }
+    persistirItemWorker(lote, fila);
+    emitirLoteActualizado(payload.tenantId(), payload.loteId(), true);
+  }
+
   private void emitirLoteActualizado(UUID tenantId, UUID loteId) {
+    emitirLoteActualizado(tenantId, loteId, false);
+  }
+
+  private void emitirLoteActualizado(UUID tenantId, UUID loteId, boolean iaCompletada) {
     Lote fresh = cargar(tenantId, loteId);
-    if (fresh != null) {
-      emitir(loteId, "DOCUMENTO_LISTO", fresh.snapshot());
+    if (fresh == null) {
+      return;
+    }
+    emitir(loteId, "DOCUMENTO_LISTO", fresh.snapshot());
+    if (iaCompletada) {
+      emitir(loteId, "IA_COMPLETADA", fresh.snapshot());
     }
   }
 
@@ -835,6 +1026,179 @@ public class IngestaMasivaEscrituracionService {
     }
   }
 
+  private static String sqlLotes(boolean contar, boolean producto, boolean canton, boolean q, boolean status) {
+    String cuerpo =
+        """
+        SELECT
+          l.id,
+          l.created_at,
+          l.producto,
+          l.canton,
+          l.status_revision,
+          l.estado,
+          l.total_filas,
+          COUNT(i.client_row_id) AS total_exp,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'VERDE') AS verdes,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'NARANJA') AS naranjas,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'ERROR' OR i.detalle->>'semaforo' = 'ROJO') AS rojos,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO') AS completados,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado IN ('PENDIENTE','EN_PROCESO')) AS en_proceso
+        FROM app.ingesta_lote l
+        LEFT JOIN app.ingesta_item i ON i.lote_id = l.id AND i.tenant_id = l.tenant_id
+        WHERE l.tenant_id = :tenant
+        """
+            + (producto ? " AND l.producto = :producto" : "")
+            + (canton ? " AND l.canton = :canton" : "")
+            + (q ? " AND l.id::text ILIKE '%' || :q || '%'" : "")
+            + """
+         GROUP BY l.id, l.created_at, l.producto, l.canton, l.status_revision, l.estado, l.total_filas
+        """
+            + (status
+                ? """
+                 HAVING CASE
+                   WHEN l.status_revision = 'CONFIRMADO' THEN 'CONFIRMADO'
+                   WHEN COUNT(i.client_row_id) FILTER (WHERE i.estado IN ('PENDIENTE','EN_PROCESO')) > 0 THEN 'PROCESANDO'
+                   WHEN COUNT(i.client_row_id) > 0 THEN 'REVISAR'
+                   ELSE 'BORRADOR'
+                 END = :status
+                """
+                : "");
+    if (contar) {
+      return "SELECT count(*) FROM (" + cuerpo + ") lotes";
+    }
+    return cuerpo + " ORDER BY l.created_at DESC LIMIT :limite OFFSET :offset";
+  }
+
+  private static String sqlLoteDetalle() {
+    return """
+        SELECT
+          l.id,
+          l.created_at,
+          l.producto,
+          l.canton,
+          l.status_revision,
+          l.estado,
+          l.total_filas,
+          COUNT(i.client_row_id) AS total_exp,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'VERDE') AS verdes,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO' AND i.detalle->>'semaforo' = 'NARANJA') AS naranjas,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'ERROR' OR i.detalle->>'semaforo' = 'ROJO') AS rojos,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado = 'COMPLETADO') AS completados,
+          COUNT(i.client_row_id) FILTER (WHERE i.estado IN ('PENDIENTE','EN_PROCESO')) AS en_proceso
+        FROM app.ingesta_lote l
+        LEFT JOIN app.ingesta_item i ON i.lote_id = l.id AND i.tenant_id = l.tenant_id
+        WHERE l.tenant_id = :tenant AND l.id = :batchId
+        GROUP BY l.id, l.created_at, l.producto, l.canton, l.status_revision, l.estado, l.total_filas
+        """;
+  }
+
+  private jakarta.persistence.Query consultaLotes(
+      boolean contar,
+      UUID tenant,
+      String producto,
+      String canton,
+      String q,
+      String status,
+      int limite,
+      int offset) {
+    var consulta =
+        entityManager.createNativeQuery(
+            sqlLotes(contar, producto != null, canton != null, q != null, status != null));
+    consulta.setParameter("tenant", tenant);
+    if (producto != null) {
+      consulta.setParameter("producto", producto);
+    }
+    if (canton != null) {
+      consulta.setParameter("canton", canton);
+    }
+    if (q != null) {
+      consulta.setParameter("q", q);
+    }
+    if (status != null) {
+      consulta.setParameter("status", status);
+    }
+    if (!contar) {
+      consulta.setParameter("limite", limite);
+      consulta.setParameter("offset", offset);
+    }
+    return consulta;
+  }
+
+  private static LoteListItemDto mapLoteListItem(Object[] row) {
+    int totalFilas = numero(row[6]);
+    int totalItems = numero(row[7]);
+    int enProceso = numero(row[12]);
+    return new LoteListItemDto(
+        (UUID) row[0],
+        aFecha(row[1]),
+        row[2] == null ? null : String.valueOf(row[2]),
+        row[3] == null ? null : String.valueOf(row[3]),
+        totalFilas,
+        numero(row[8]),
+        numero(row[9]),
+        numero(row[10]),
+        statusCalculado(String.valueOf(row[4]), enProceso, totalItems),
+        row[5] == null ? null : String.valueOf(row[5]),
+        numero(row[11]),
+        enProceso);
+  }
+
+  private static String statusCalculado(String persistido, int enProceso, int totalItems) {
+    if ("CONFIRMADO".equals(persistido)) {
+      return "CONFIRMADO";
+    }
+    if (enProceso > 0) {
+      return "PROCESANDO";
+    }
+    if (totalItems > 0) {
+      return "REVISAR";
+    }
+    return "BORRADOR";
+  }
+
+  private static String valorComun(List<String> valores) {
+    Set<String> distintos = new LinkedHashSet<>();
+    for (String valor : valores) {
+      if (StringUtils.hasText(valor)) {
+        distintos.add(valor.trim());
+      }
+    }
+    if (distintos.isEmpty()) {
+      return null;
+    }
+    if (distintos.size() == 1) {
+      return distintos.iterator().next();
+    }
+    return "MIXTO";
+  }
+
+  private static String textoFiltro(String valor) {
+    return StringUtils.hasText(valor) ? valor.trim() : null;
+  }
+
+  private static int numero(Object valor) {
+    return valor == null ? 0 : ((Number) valor).intValue();
+  }
+
+  private static OffsetDateTime aFecha(Object valor) {
+    if (valor == null) {
+      return null;
+    }
+    if (valor instanceof OffsetDateTime fecha) {
+      return fecha;
+    }
+    if (valor instanceof Instant instante) {
+      return instante.atOffset(ZoneOffset.UTC);
+    }
+    if (valor instanceof Timestamp marca) {
+      return marca.toInstant().atOffset(ZoneOffset.UTC);
+    }
+    if (valor instanceof LocalDateTime local) {
+      return local.atOffset(ZoneOffset.UTC);
+    }
+    return OffsetDateTime.parse(valor.toString());
+  }
+
   private Lote require(UUID batchId) {
     AuthPrincipal principal = AuthContext.require();
     Lote lote = cargar(principal.tenantId(), batchId);
@@ -898,18 +1262,23 @@ public class IngestaMasivaEscrituracionService {
     try (PreparedStatement upsert =
         connection.prepareStatement(
             """
-            INSERT INTO app.ingesta_lote (id, tenant_id, estado, total_filas, filas_completadas)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO app.ingesta_lote
+              (id, tenant_id, estado, total_filas, filas_completadas, producto, canton)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
               estado = EXCLUDED.estado,
               total_filas = EXCLUDED.total_filas,
-              filas_completadas = EXCLUDED.filas_completadas
+              filas_completadas = EXCLUDED.filas_completadas,
+              producto = COALESCE(EXCLUDED.producto, app.ingesta_lote.producto),
+              canton = COALESCE(EXCLUDED.canton, app.ingesta_lote.canton)
             """)) {
       upsert.setObject(1, lote.id);
       upsert.setObject(2, tenant);
       upsert.setString(3, lote.fase);
       upsert.setInt(4, lote.filas.size());
       upsert.setInt(5, hechas);
+      upsert.setString(6, lote.producto);
+      upsert.setString(7, lote.canton);
       upsert.executeUpdate();
     }
     int orden = 0;
@@ -1031,15 +1400,18 @@ public class IngestaMasivaEscrituracionService {
     List<?> fase =
         entityManager
             .createNativeQuery(
-                "SELECT estado FROM app.ingesta_lote WHERE id = :id AND tenant_id = :tenant")
+                "SELECT estado, producto, canton FROM app.ingesta_lote WHERE id = :id AND tenant_id = :tenant")
             .setParameter("id", loteId)
             .setParameter("tenant", tenantId)
             .getResultList();
     if (fase.isEmpty()) {
       return null;
     }
+    Object[] cabecera = (Object[]) fase.get(0);
     Lote lote = new Lote(loteId, tenantId);
-    lote.fase = String.valueOf(fase.get(0));
+    lote.fase = String.valueOf(cabecera[0]);
+    lote.producto = cabecera[1] == null ? null : String.valueOf(cabecera[1]);
+    lote.canton = cabecera[2] == null ? null : String.valueOf(cabecera[2]);
     List<?> rows =
         entityManager
             .createNativeQuery(
@@ -1155,14 +1527,50 @@ public class IngestaMasivaEscrituracionService {
     return "VERDE";
   }
 
+  /** ROJO > NARANJA > VERDE > GRIS */
   private static String peor(String actual, String siguiente) {
-    if ("ROJO".equals(actual) || "ROJO".equals(siguiente)) {
-      return "ROJO";
+    return rangoSemaforo(siguiente) > rangoSemaforo(actual)
+        ? normSemaforo(siguiente)
+        : normSemaforo(actual);
+  }
+
+  private static int rangoSemaforo(String color) {
+    if ("ROJO".equals(color)) {
+      return 3;
     }
-    if ("NARANJA".equals(actual) || "NARANJA".equals(siguiente)) {
-      return "NARANJA";
+    if ("NARANJA".equals(color)) {
+      return 2;
     }
-    return "VERDE";
+    if ("VERDE".equals(color)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  private static String normSemaforo(String color) {
+    if ("ROJO".equals(color) || "NARANJA".equals(color) || "VERDE".equals(color)) {
+      return color;
+    }
+    return "GRIS";
+  }
+
+  private static String shortUuid(UUID id) {
+    String raw = id.toString().replace("-", "");
+    return raw.substring(0, Math.min(8, raw.length())).toUpperCase();
+  }
+
+  private static OffsetDateTime ultimaActualizacion(List<Fila> filas) {
+    long maxMs = 0;
+    for (Fila fila : filas) {
+      long fin = fila.inicioMs + Math.max(0L, fila.duracionMs);
+      if (fin > maxMs) {
+        maxMs = fin;
+      }
+    }
+    if (maxMs <= 0) {
+      return null;
+    }
+    return OffsetDateTime.ofInstant(Instant.ofEpochMilli(maxMs), ZoneOffset.UTC);
   }
 
   private static final class Lote {
@@ -1170,6 +1578,8 @@ public class IngestaMasivaEscrituracionService {
     private final UUID tenantId;
     private final List<Fila> filas = new ArrayList<>();
     private String fase = "CREADO";
+    private String producto;
+    private String canton;
 
     private Lote(UUID id, UUID tenantId) {
       this.id = id;
@@ -1245,6 +1655,8 @@ public class IngestaMasivaEscrituracionService {
     private String canton;
     private String ingestionMode;
     private String codigo;
+    private String cliente;
+    private String clienteIdentificacion;
     private UUID borradorId;
     private UUID expedienteId;
     private String ocrEstado = "PENDIENTE";

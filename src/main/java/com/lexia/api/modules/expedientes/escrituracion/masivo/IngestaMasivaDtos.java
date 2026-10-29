@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -61,6 +62,22 @@ public final class IngestaMasivaDtos {
       int fallidos,
       long tiempoEstimadoRestanteSegundos) {}
 
+  public record LoteListItemDto(
+      UUID id,
+      OffsetDateTime fecha,
+      String producto,
+      String canton,
+      int totalExpedientes,
+      int verdes,
+      int naranjas,
+      int rojos,
+      String statusRevision,
+      String estado,
+      int completados,
+      int enProceso) {}
+
+  public record LotesPageDto(List<LoteListItemDto> items, long total, int page, int size) {}
+
   public record LoteStatus(
       UUID batchId,
       String fase,
@@ -71,4 +88,20 @@ public final class IngestaMasivaDtos {
       int rojos,
       boolean cotejoHabilitado,
       List<FilaStatus> filas) {}
+
+  public record ExpedienteEnLoteDto(
+      String expedienteId,
+      String itemId,
+      String codigoExpediente,
+      String clienteNombre,
+      String clienteIdentificacion,
+      String producto,
+      String canton,
+      int totalArchivos,
+      int archivosLegibles,
+      String semaforo,
+      String observacion,
+      String estado,
+      String iaEstado,
+      OffsetDateTime ultimaActualizacion) {}
 }

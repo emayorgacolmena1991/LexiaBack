@@ -35,11 +35,18 @@ public class IngestaJobWorker {
   @Scheduled(fixedDelay = 2000)
   public void poll() {
     jobs.liberarJobsColgados();
-    Optional<JobRow> claimed = jobs.reclamar("PROCESAR_DOCUMENTO");
-    if (claimed.isEmpty()) {
+    Optional<JobRow> documento = jobs.reclamar("PROCESAR_DOCUMENTO");
+    if (documento.isPresent()) {
+      ejecutarDocumento(documento.get());
       return;
     }
-    JobRow job = claimed.get();
+    Optional<JobRow> ia = jobs.reclamar("PROCESAR_IA_EXPEDIENTE");
+    if (ia.isPresent()) {
+      ejecutarIa(ia.get());
+    }
+  }
+
+  private void ejecutarDocumento(JobRow job) {
     ProcesarDocumento payload;
     try {
       payload = objectMapper.readValue(job.payload(), ProcesarDocumento.class);
@@ -49,31 +56,71 @@ public class IngestaJobWorker {
     }
     AuthContext.set(new AuthPrincipal(payload.userId(), null, payload.tenantId(), null));
     TenantContext.setTenantId(payload.tenantId());
+    autenticar(payload.userId());
+    try {
+      ingesta.procesarDocumento(payload);
+      jobs.completar(job.id());
+    } catch (RuntimeException ex) {
+      fallar(job, ex);
+    } finally {
+      limpiarContexto();
+    }
+  }
+
+  private void ejecutarIa(JobRow job) {
+    ProcesarIaExpediente payload;
+    try {
+      payload = objectMapper.readValue(job.payload(), ProcesarIaExpediente.class);
+    } catch (Exception ex) {
+      jobs.error(job.id(), "payload ilegible: " + ex.getMessage());
+      return;
+    }
+    AuthContext.set(new AuthPrincipal(payload.userId(), null, payload.tenantId(), null));
+    TenantContext.setTenantId(payload.tenantId());
+    autenticar(payload.userId());
+    try {
+      ingesta.procesarIaExpediente(payload);
+      jobs.completar(job.id());
+    } catch (IllegalStateException ex) {
+      if ("Expediente bloqueado".equals(ex.getMessage())) {
+        jobs.error(job.id(), "Expediente bloqueado");
+        return;
+      }
+      fallar(job, ex);
+    } catch (RuntimeException ex) {
+      fallar(job, ex);
+    } finally {
+      TenantContext.clear();
+      limpiarContexto();
+    }
+  }
+
+  private void fallar(JobRow job, RuntimeException ex) {
+    if (job.intentos() >= 3) {
+      jobs.error(job.id(), ex.getMessage());
+    } else {
+      jobs.devolverAPendiente(job.id());
+    }
+    LOG.error("job {} intento {} falló", job.id(), job.intentos(), ex);
+    throw ex;
+  }
+
+  private static void autenticar(UUID userId) {
     SecurityContextHolder.getContext()
         .setAuthentication(
             new UsernamePasswordAuthenticationToken(
-                payload.userId().toString(),
+                userId.toString(),
                 null,
                 List.of(
                     new SimpleGrantedAuthority("ROLE_USER"),
                     new SimpleGrantedAuthority("USER"),
                     new SimpleGrantedAuthority("expedientes:caso:escribir"))));
-    try {
-      ingesta.procesarDocumento(payload);
-      jobs.completar(job.id());
-    } catch (RuntimeException ex) {
-      if (job.intentos() >= 3) {
-        jobs.error(job.id(), ex.getMessage());
-      } else {
-        jobs.devolverAPendiente(job.id());
-      }
-      LOG.error("job {} intento {} falló", job.id(), job.intentos(), ex);
-      throw ex;
-    } finally {
-      SecurityContextHolder.clearContext();
-      AuthContext.clear();
-      TenantContext.clear();
-    }
+  }
+
+  private static void limpiarContexto() {
+    SecurityContextHolder.clearContext();
+    AuthContext.clear();
+    TenantContext.clear();
   }
 
   public record ProcesarDocumento(
@@ -85,4 +132,12 @@ public class IngestaJobWorker {
       UUID tenantId,
       UUID userId,
       String tipoDocumento) {}
+
+  public record ProcesarIaExpediente(
+      UUID loteId,
+      String itemId,
+      UUID expedienteId,
+      UUID tenantId,
+      UUID userId,
+      String sessionId) {}
 }
