@@ -1,4 +1,4 @@
-CREATE TABLE app.ingesta_override (
+CREATE TABLE IF NOT EXISTS app.ingesta_override (
     id              UUID PRIMARY KEY,
     tenant_id       UUID NOT NULL,
     lote_id         UUID NOT NULL,
@@ -11,16 +11,22 @@ CREATE TABLE app.ingesta_override (
     observacion_antes TEXT
 );
 
-CREATE INDEX idx_ingesta_override_expediente
+CREATE INDEX IF NOT EXISTS idx_ingesta_override_expediente
   ON app.ingesta_override (tenant_id, expediente_id);
 
-CREATE INDEX idx_ingesta_override_lote
+CREATE INDEX IF NOT EXISTS idx_ingesta_override_lote
   ON app.ingesta_override (tenant_id, lote_id, aprobado_at DESC);
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE app.ingesta_override TO lexia_app;
 GRANT SELECT ON TABLE app.ingesta_override TO lexia_readonly;
 
-ALTER TABLE app.ingesta_override ENABLE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON app.ingesta_override
-    USING (tenant_id = app.current_tenant_id())
-    WITH CHECK (tenant_id = app.current_tenant_id());
+DO $$
+BEGIN
+    ALTER TABLE app.ingesta_override ENABLE ROW LEVEL SECURITY;
+    
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'tenant_isolation' AND tablename = 'ingesta_override') THEN
+        CREATE POLICY tenant_isolation ON app.ingesta_override
+            USING (tenant_id = app.current_tenant_id())
+            WITH CHECK (tenant_id = app.current_tenant_id());
+    END IF;
+END $$;

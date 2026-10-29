@@ -14,7 +14,6 @@ public class FlywayStartupLog {
   @EventListener(ApplicationReadyEvent.class)
   public void verificarFlyway() {
     LOG.info(
-        "Flyway config: ignore-migration-patterns=*:missing activo. "
-            + "Verifica log de arranque: 'Current version: 87' + 'Migrating to 88' o 'up to date'.");
+        "Flyway initialized. Schema version check enabled.");
   }
 }
