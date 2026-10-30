@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import org.hibernate.Session;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.lexia.api.common.api.ApiException;
@@ -547,6 +548,188 @@ public class IngestaMasivaEscrituracionService {
         snap.cotejoHabilitado(),
         snap.filas(),
         encolados);
+  }
+
+  public LoteStatus overrideExpediente(UUID batchId, UUID expedienteId, String motivo) {
+    if (motivo == null || motivo.trim().length() < 15) {
+      throw new IllegalArgumentException("El motivo debe tener al menos 15 caracteres.");
+    }
+    AuthPrincipal principal = AuthContext.require();
+    Lote lote = require(batchId);
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    String justificacion = motivo.trim();
+    int[] actualizadas = new int[1];
+    tx.executeWithoutResult(
+        status ->
+            entityManager
+                .unwrap(Session.class)
+                .doWork(
+                    connection -> {
+                      aplicarTenant(connection, tenant);
+                      List<String[]> antes = new ArrayList<>();
+                      try (PreparedStatement select =
+                          connection.prepareStatement(
+                              """
+                              SELECT client_row_id,
+                                     COALESCE(detalle->>'semaforo', 'GRIS'),
+                                     detalle->>'observaciones'
+                              FROM app.ingesta_item
+                              WHERE lote_id = ? AND expediente_id = ? AND tenant_id = ?
+                              """)) {
+                        select.setObject(1, batchId);
+                        select.setObject(2, expedienteId);
+                        select.setObject(3, tenant);
+                        try (ResultSet rs = select.executeQuery()) {
+                          while (rs.next()) {
+                            antes.add(new String[] {rs.getString(1), rs.getString(2), rs.getString(3)});
+                          }
+                        }
+                      }
+                      try (PreparedStatement update =
+                          connection.prepareStatement(
+                              """
+                              UPDATE app.ingesta_item
+                              SET estado = 'COMPLETADO',
+                                  detalle = jsonb_set(
+                                      jsonb_set(
+                                          jsonb_set(detalle, '{ocrEstado}', '"COMPLETADO"'),
+                                          '{iaEstado}', '"PENDIENTE"'
+                                      ),
+                                      '{semaforo}', '"VERDE"'
+                                  )
+                              WHERE lote_id = ? AND expediente_id = ? AND tenant_id = ?
+                              """)) {
+                        update.setObject(1, batchId);
+                        update.setObject(2, expedienteId);
+                        update.setObject(3, tenant);
+                        actualizadas[0] = update.executeUpdate();
+                      }
+                      try (PreparedStatement insert =
+                          connection.prepareStatement(
+                              """
+                              INSERT INTO app.ingesta_override
+                                (id, tenant_id, lote_id, expediente_id, item_id, justificacion,
+                                 aprobado_por, semaforo_antes, observacion_antes)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              """)) {
+                        for (String[] row : antes) {
+                          UUID itemId;
+                          try {
+                            itemId = UUID.fromString(row[0]);
+                          } catch (IllegalArgumentException ex) {
+                            LOG.warn("override sin auditoría item={} no es UUID", row[0]);
+                            continue;
+                          }
+                          String semaforo = row[1] == null ? "GRIS" : row[1];
+                          if (semaforo.length() > 16) {
+                            semaforo = semaforo.substring(0, 16);
+                          }
+                          insert.setObject(1, UUID.randomUUID());
+                          insert.setObject(2, tenant);
+                          insert.setObject(3, batchId);
+                          insert.setObject(4, expedienteId);
+                          insert.setObject(5, itemId);
+                          insert.setString(6, justificacion);
+                          insert.setObject(7, principal.userId());
+                          insert.setString(8, semaforo);
+                          insert.setString(9, row[2]);
+                          insert.addBatch();
+                        }
+                        insert.executeBatch();
+                      }
+                    }));
+    if (actualizadas[0] == 0) {
+      throw ApiException.notFound("Expediente no encontrado en el lote.");
+    }
+    emitirLoteActualizado(tenant, batchId);
+    Lote fresh = cargar(tenant, batchId);
+    if (fresh == null) {
+      throw ApiException.notFound("Lote de ingesta no encontrado.");
+    }
+    return fresh.snapshot();
+  }
+
+  public LoteStatus confirmarLote(UUID batchId, String confirmadoPor) {
+    AuthPrincipal principal = AuthContext.require();
+    Lote lote = require(batchId);
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    UUID usuario = usuarioConfirmacion(confirmadoPor, principal.userId());
+    tx.executeWithoutResult(
+        status ->
+            entityManager
+                .unwrap(Session.class)
+                .doWork(
+                    connection -> {
+                      aplicarTenant(connection, tenant);
+                      int filas = contarItems(connection, batchId, tenant);
+                      if (filas == 0) {
+                        throw ApiException.badRequest("El lote no tiene filas.");
+                      }
+                      if (contarRojos(connection, batchId, tenant) > 0) {
+                        throw new ApiException(
+                            HttpStatus.CONFLICT,
+                            "COA_LOTE_CON_ROJOS",
+                            "No se puede confirmar un lote con archivos en rojo");
+                      }
+                      try (PreparedStatement update =
+                          connection.prepareStatement(
+                              """
+                              UPDATE app.ingesta_lote
+                              SET status_revision = 'CONFIRMADO', confirmado_por = ?, confirmado_at = NOW()
+                              WHERE id = ? AND tenant_id = ?
+                              """)) {
+                        update.setObject(1, usuario);
+                        update.setObject(2, batchId);
+                        update.setObject(3, tenant);
+                        if (update.executeUpdate() == 0) {
+                          throw ApiException.notFound("Lote de ingesta no encontrado.");
+                        }
+                      }
+                    }));
+    Lote fresh = cargar(tenant, batchId);
+    if (fresh == null) {
+      throw ApiException.notFound("Lote de ingesta no encontrado.");
+    }
+    return fresh.snapshot();
+  }
+
+  private static UUID usuarioConfirmacion(String confirmadoPor, UUID actual) {
+    if (confirmadoPor == null || confirmadoPor.isBlank()) {
+      return actual;
+    }
+    try {
+      return UUID.fromString(confirmadoPor.trim());
+    } catch (IllegalArgumentException ex) {
+      throw ApiException.badRequest("confirmadoPor no es un UUID.");
+    }
+  }
+
+  private static int contarItems(Connection connection, UUID loteId, UUID tenant) throws java.sql.SQLException {
+    try (PreparedStatement query =
+        connection.prepareStatement(
+            "SELECT COUNT(*) FROM app.ingesta_item WHERE lote_id = ? AND tenant_id = ?")) {
+      query.setObject(1, loteId);
+      query.setObject(2, tenant);
+      try (ResultSet rs = query.executeQuery()) {
+        return rs.next() ? rs.getInt(1) : 0;
+      }
+    }
+  }
+
+  private static int contarRojos(Connection connection, UUID loteId, UUID tenant) throws java.sql.SQLException {
+    try (PreparedStatement query =
+        connection.prepareStatement(
+            """
+            SELECT COUNT(*) FROM app.ingesta_item
+            WHERE lote_id = ? AND tenant_id = ?
+              AND (detalle->>'semaforo' = 'ROJO' OR detalle->>'ocrEstado' = 'ERROR')
+            """)) {
+      query.setObject(1, loteId);
+      query.setObject(2, tenant);
+      try (ResultSet rs = query.executeQuery()) {
+        return rs.next() ? rs.getInt(1) : 0;
+      }
+    }
   }
 
   private Fila crearFila(AuthPrincipal principal, FilaRequest request) {
@@ -1197,23 +1380,23 @@ public class IngestaMasivaEscrituracionService {
         numero(row[8]),
         numero(row[9]),
         numero(row[10]),
-        statusCalculado(String.valueOf(row[4]), enProceso, totalItems),
+        statusCalculado(String.valueOf(row[4]), enProceso, totalItems, numero(row[10])),
         row[5] == null ? null : String.valueOf(row[5]),
         numero(row[11]),
         enProceso);
   }
 
-  private static String statusCalculado(String persistido, int enProceso, int totalItems) {
+  private static String statusCalculado(String persistido, int enProceso, int totalItems, int rojos) {
     if ("CONFIRMADO".equals(persistido)) {
       return "CONFIRMADO";
     }
-    if (enProceso > 0) {
-      return "PROCESANDO";
+    if (totalItems == 0) {
+      return "BORRADOR";
     }
-    if (totalItems > 0) {
-      return "REVISAR";
+    if (rojos > 0 || enProceso > 0) {
+      return "POR_REVISAR";
     }
-    return "BORRADOR";
+    return "REVISAR";
   }
 
   private static String valorComun(List<String> valores) {

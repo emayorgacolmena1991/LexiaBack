@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.escrituracion.masivo;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -118,4 +119,8 @@ public final class IngestaMasivaDtos {
       String estado,
       String iaEstado,
       OffsetDateTime ultimaActualizacion) {}
+
+  public record OverrideRequest(@JsonAlias("justificacion") String motivo) {}
+
+  public record ConfirmarLoteRequest(String confirmadoPor) {}
 }

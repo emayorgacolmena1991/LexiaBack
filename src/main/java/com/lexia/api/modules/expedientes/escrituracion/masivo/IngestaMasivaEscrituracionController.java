@@ -3,17 +3,21 @@ package com.lexia.api.modules.expedientes.escrituracion.masivo;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.AsignacionesPayload;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ConfirmarLoteRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.CrearLoteRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ExpedienteEnLoteDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteListItemDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LoteStatus;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.OverrideRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -112,5 +116,20 @@ public class IngestaMasivaEscrituracionController {
   @PostMapping("/{batchId}/process-ia")
   public LoteStatus procesarIa(@PathVariable UUID batchId) {
     return ingesta.procesarIa(batchId);
+  }
+
+  @PostMapping("/{batchId}/expedientes/{expedienteId}/override")
+  public ResponseEntity<LoteStatus> overrideExpediente(
+      @PathVariable UUID batchId,
+      @PathVariable UUID expedienteId,
+      @RequestBody OverrideRequest request) {
+    return ResponseEntity.ok(ingesta.overrideExpediente(batchId, expedienteId, request.motivo()));
+  }
+
+  @PatchMapping("/{batchId}/confirmar")
+  public ResponseEntity<LoteStatus> confirmarLote(
+      @PathVariable UUID batchId,
+      @RequestBody ConfirmarLoteRequest request) {
+    return ResponseEntity.ok(ingesta.confirmarLote(batchId, request.confirmadoPor()));
   }
 }
