@@ -60,6 +60,23 @@ public class JobRepository {
   }
 
   public int liberarJobsColgados() {
+    jdbc.update(
+        """
+        UPDATE app.ingesta_item
+           SET detalle = jsonb_set(
+                 jsonb_set(
+                   jsonb_set(detalle, '{ocrEstado}', '"ERROR"'),
+                   '{semaforo}', '"ROJO"'),
+                 '{observaciones}', '"Job colgado >5min. Reintentar o reemplazar."'),
+               error_log = 'Job colgado >5min',
+               estado = 'ERROR'
+         WHERE lote_id IN (
+                 SELECT (payload->>'loteId')::uuid
+                   FROM app.jobs
+                  WHERE estado = 'EN_PROCESO'
+                    AND created_at < NOW() - INTERVAL '5 minutes')
+           AND (detalle->>'ocrEstado') = 'PROCESANDO'
+        """);
     return jdbc.update(
         """
         UPDATE app.jobs
@@ -76,6 +93,20 @@ public class JobRepository {
             SELECT count(*)::int FROM app.jobs
             WHERE tipo = 'PROCESAR_DOCUMENTO'
               AND estado = 'PENDIENTE'
+              AND payload->>'expedienteId' = ?
+            """,
+            Integer.class,
+            expedienteId.toString());
+    return n == null ? 0 : n;
+  }
+
+  public int enProcesoDelExpediente(UUID expedienteId) {
+    Integer n =
+        jdbc.queryForObject(
+            """
+            SELECT count(*)::int FROM app.jobs
+            WHERE tipo = 'PROCESAR_DOCUMENTO'
+              AND estado = 'EN_PROCESO'
               AND payload->>'expedienteId' = ?
             """,
             Integer.class,

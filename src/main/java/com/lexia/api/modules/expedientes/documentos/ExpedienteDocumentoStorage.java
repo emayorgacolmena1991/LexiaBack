@@ -9,6 +9,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -16,6 +18,8 @@ import org.springframework.stereotype.Component;
 /** Bytes de escrituración en disco. La fila vive en {@code document_version.storage_key}. */
 @Component
 public class ExpedienteDocumentoStorage {
+
+  private static final Logger LOG = LoggerFactory.getLogger(ExpedienteDocumentoStorage.class);
 
   private final Path root;
 
@@ -31,6 +35,7 @@ public class ExpedienteDocumentoStorage {
     try {
       Files.createDirectories(dir);
       Files.write(target, bytes);
+      LOG.info("Storage.write OK path={} size={} bytes", target, bytes.length);
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       return new Stored(target.toString(), HexFormat.of().formatHex(digest.digest(bytes)));
     } catch (IOException | NoSuchAlgorithmException ex) {
@@ -44,7 +49,8 @@ public class ExpedienteDocumentoStorage {
       throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
     }
     Path path = Path.of(storageKey).toAbsolutePath().normalize();
-    if (!path.startsWith(root) || !Files.exists(path)) {
+    if (!Files.exists(path)) {
+      LOG.warn("Storage.read FALLO path={} NO EXISTE", path);
       throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
     }
     try {

@@ -8,6 +8,11 @@ import com.lexia.api.modules.tenancy.TenantContext;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,25 +29,79 @@ public class IngestaJobWorker {
   private final JobRepository jobs;
   private final IngestaMasivaEscrituracionService ingesta;
   private final ObjectMapper objectMapper;
+  private final ExecutorService executor;
 
   public IngestaJobWorker(
-      JobRepository jobs, IngestaMasivaEscrituracionService ingesta, ObjectMapper objectMapper) {
+      JobRepository jobs,
+      IngestaMasivaEscrituracionService ingesta,
+      ObjectMapper objectMapper,
+      ExecutorService ingestaWorkerExecutor) {
     this.jobs = jobs;
     this.ingesta = ingesta;
     this.objectMapper = objectMapper;
+    this.executor = ingestaWorkerExecutor;
   }
 
   @Scheduled(fixedDelay = 2000)
   public void poll() {
+    LOG.info("ingesta poll tick");
     jobs.liberarJobsColgados();
     Optional<JobRow> documento = jobs.reclamar("PROCESAR_DOCUMENTO");
+    Optional<JobRow> ia = Optional.empty();
+    if (documento.isEmpty()) {
+      ia = jobs.reclamar("PROCESAR_IA_EXPEDIENTE");
+    }
+    LOG.info("ingesta poll documento={} ia={}", documento.isPresent(), ia.isPresent());
     if (documento.isPresent()) {
-      ejecutarDocumento(documento.get());
+      JobRow job = documento.get();
+      try {
+        CompletableFuture.supplyAsync(
+                () -> {
+                  ejecutarDocumento(job);
+                  return null;
+                },
+                executor)
+            .get(120, TimeUnit.SECONDS);
+        jobs.completar(job.id());
+      } catch (TimeoutException ex) {
+        LOG.error("worker timeout job={} tipo=DOCUMENTO", job.id());
+        fallar(job, new RuntimeException("Timeout 120s"));
+      } catch (ExecutionException ex) {
+        if (ex.getCause() instanceof JobTerminalHandled) {
+          return;
+        }
+        LOG.error("worker ERROR job={} tipo=DOCUMENTO", job.id(), ex.getCause());
+        fallar(job, toRuntime(ex.getCause()));
+      } catch (Exception ex) {
+        LOG.error("worker ERROR job={} tipo=DOCUMENTO", job.id(), ex);
+        fallar(job, toRuntime(ex));
+      }
       return;
     }
-    Optional<JobRow> ia = jobs.reclamar("PROCESAR_IA_EXPEDIENTE");
     if (ia.isPresent()) {
-      ejecutarIa(ia.get());
+      JobRow job = ia.get();
+      try {
+        CompletableFuture.supplyAsync(
+                () -> {
+                  ejecutarIa(job);
+                  return null;
+                },
+                executor)
+            .get(120, TimeUnit.SECONDS);
+        jobs.completar(job.id());
+      } catch (TimeoutException ex) {
+        LOG.error("worker timeout job={} tipo=IA", job.id());
+        fallar(job, new RuntimeException("Timeout 120s"));
+      } catch (ExecutionException ex) {
+        if (ex.getCause() instanceof JobTerminalHandled) {
+          return;
+        }
+        LOG.error("worker ERROR job={} tipo=IA", job.id(), ex.getCause());
+        fallar(job, toRuntime(ex.getCause()));
+      } catch (Exception ex) {
+        LOG.error("worker ERROR job={} tipo=IA", job.id(), ex);
+        fallar(job, toRuntime(ex));
+      }
     }
   }
 
@@ -52,16 +111,13 @@ public class IngestaJobWorker {
       payload = objectMapper.readValue(job.payload(), ProcesarDocumento.class);
     } catch (Exception ex) {
       jobs.error(job.id(), "payload ilegible: " + ex.getMessage());
-      return;
+      throw new JobTerminalHandled();
     }
     AuthContext.set(new AuthPrincipal(payload.userId(), null, payload.tenantId(), null));
     TenantContext.setTenantId(payload.tenantId());
     autenticar(payload.userId());
     try {
       ingesta.procesarDocumento(payload);
-      jobs.completar(job.id());
-    } catch (RuntimeException ex) {
-      fallar(job, ex);
     } finally {
       limpiarContexto();
     }
@@ -73,26 +129,32 @@ public class IngestaJobWorker {
       payload = objectMapper.readValue(job.payload(), ProcesarIaExpediente.class);
     } catch (Exception ex) {
       jobs.error(job.id(), "payload ilegible: " + ex.getMessage());
-      return;
+      throw new JobTerminalHandled();
     }
     AuthContext.set(new AuthPrincipal(payload.userId(), null, payload.tenantId(), null));
     TenantContext.setTenantId(payload.tenantId());
     autenticar(payload.userId());
     try {
-      ingesta.procesarIaExpediente(payload);
-      jobs.completar(job.id());
-    } catch (IllegalStateException ex) {
-      if ("Expediente bloqueado".equals(ex.getMessage())) {
-        jobs.error(job.id(), "Expediente bloqueado");
-        return;
+      try {
+        ingesta.procesarIaExpediente(payload);
+      } catch (IllegalStateException ex) {
+        if ("Expediente bloqueado".equals(ex.getMessage())) {
+          jobs.error(job.id(), "Expediente bloqueado");
+          throw new JobTerminalHandled();
+        }
+        throw ex;
       }
-      fallar(job, ex);
-    } catch (RuntimeException ex) {
-      fallar(job, ex);
     } finally {
       TenantContext.clear();
       limpiarContexto();
     }
+  }
+
+  private static RuntimeException toRuntime(Throwable ex) {
+    if (ex instanceof RuntimeException runtime) {
+      return runtime;
+    }
+    return new RuntimeException(ex);
   }
 
   private void fallar(JobRow job, RuntimeException ex) {
@@ -101,9 +163,10 @@ public class IngestaJobWorker {
     } else {
       jobs.devolverAPendiente(job.id());
     }
-    LOG.error("job {} intento {} falló", job.id(), job.intentos(), ex);
-    throw ex;
+    LOG.error("job fallar job={} intentos={}", job.id(), job.intentos(), ex);
   }
+
+  private static final class JobTerminalHandled extends RuntimeException {}
 
   private static void autenticar(UUID userId) {
     SecurityContextHolder.getContext()

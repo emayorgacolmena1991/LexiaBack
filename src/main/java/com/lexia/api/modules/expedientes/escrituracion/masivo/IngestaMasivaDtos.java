@@ -87,7 +87,21 @@ public final class IngestaMasivaDtos {
       int naranjas,
       int rojos,
       boolean cotejoHabilitado,
-      List<FilaStatus> filas) {}
+      List<FilaStatus> filas,
+      int iaEncolados) {
+    public LoteStatus(
+        UUID batchId,
+        String fase,
+        int total,
+        int listasOcr,
+        int verdes,
+        int naranjas,
+        int rojos,
+        boolean cotejoHabilitado,
+        List<FilaStatus> filas) {
+      this(batchId, fase, total, listasOcr, verdes, naranjas, rojos, cotejoHabilitado, filas, 0);
+    }
+  }
 
   public record ExpedienteEnLoteDto(
       String expedienteId,
