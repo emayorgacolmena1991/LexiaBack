@@ -246,7 +246,7 @@ public class CoactivaPdfTexto {
   private static List<Coincidencia> buscarEnIndice(JsonNode indice, String needle) {
     List<Coincidencia> hits = new ArrayList<>();
     for (JsonNode page : indice.path("pages")) {
-      JsonNode words = page.path("words");
+      JsonNode words = palabrasDePagina(page);
       if (!words.isArray() || words.isEmpty()) {
         continue;
       }
@@ -255,7 +255,7 @@ public class CoactivaPdfTexto {
       int[] fin = new int[words.size()];
       int usados = 0;
       for (JsonNode word : words) {
-        String t = word.path("t").asText("");
+        String t = textoPalabra(word);
         if (t.isEmpty()) {
           continue;
         }
@@ -281,15 +281,18 @@ public class CoactivaPdfTexto {
         List<Caja> cajas = new ArrayList<>();
         int cursor = 0;
         for (JsonNode word : words) {
-          if (word.path("t").asText("").isEmpty()) {
+          if (textoPalabra(word).isEmpty()) {
             continue;
           }
           if (cursor < usados && fin[cursor] > at && inicio[cursor] < matchEnd) {
-            cajas.add(cajaDe(page, word));
+            Caja caja = cajaDe(page, word);
+            if (!caja.polygon().isEmpty() && caja.pageWidth() > 0 && caja.pageHeight() > 0) {
+              cajas.add(caja);
+            }
           }
           cursor++;
         }
-        hits.add(new Coincidencia(page.path("n").asInt(), extracto(sb.toString(), at, needle.length()), cajas));
+        hits.add(new Coincidencia(numeroPagina(page), extracto(sb.toString(), at, needle.length()), cajas));
         from = matchEnd;
       }
       if (hits.size() >= 12) {
@@ -299,13 +302,47 @@ public class CoactivaPdfTexto {
     return hits;
   }
 
+  /** Índice compacto (`t`) o analyzeResult de Azure (`content`). */
+  private static String textoPalabra(JsonNode word) {
+    String t = word.path("t").asText("").replaceAll("\\s+", " ").trim();
+    if (!t.isEmpty()) {
+      return t;
+    }
+    return word.path("content").asText("").replaceAll("\\s+", " ").trim();
+  }
+
+  /** Compacto usa `words`; Azure crudo puede traer solo `lines` con polígono. */
+  private static JsonNode palabrasDePagina(JsonNode page) {
+    JsonNode words = page.path("words");
+    if (words.isArray() && !words.isEmpty()) {
+      return words;
+    }
+    JsonNode lines = page.path("lines");
+    return lines.isArray() ? lines : words;
+  }
+
+  private static int numeroPagina(JsonNode page) {
+    int n = page.path("n").asInt(0);
+    if (n > 0) {
+      return n;
+    }
+    return page.path("pageNumber").asInt(0);
+  }
+
   private static Caja cajaDe(JsonNode page, JsonNode word) {
-    return new Caja(
-        page.path("n").asInt(),
-        page.path("w").asDouble(),
-        page.path("h").asDouble(),
-        page.path("u").asText("inch"),
-        leerPoligono(word));
+    double width = page.path("w").asDouble(0);
+    double height = page.path("h").asDouble(0);
+    if (width <= 0) {
+      width = page.path("width").asDouble(0);
+    }
+    if (height <= 0) {
+      height = page.path("height").asDouble(0);
+    }
+    String unit = page.path("u").asText("");
+    if (unit.isBlank()) {
+      unit = page.path("unit").asText("inch");
+    }
+    return new Caja(numeroPagina(page), width, height, unit, leerPoligono(word));
   }
 
   /** Palabras con polígono; si no hay, las líneas. */
