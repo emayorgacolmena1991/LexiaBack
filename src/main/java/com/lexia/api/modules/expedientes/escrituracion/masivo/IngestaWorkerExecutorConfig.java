@@ -8,10 +8,12 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class IngestaWorkerExecutorConfig {
 
+  static final int HILOS = 5;
+
   @Bean(destroyMethod = "shutdown")
   public ExecutorService ingestaWorkerExecutor() {
     return Executors.newFixedThreadPool(
-        2,
+        HILOS,
         r -> {
           Thread t = new Thread(r, "ingesta-worker");
           t.setDaemon(true);

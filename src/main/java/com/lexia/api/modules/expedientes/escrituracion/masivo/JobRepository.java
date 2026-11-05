@@ -37,7 +37,9 @@ public class JobRepository {
         .query(
             """
             UPDATE app.jobs
-               SET estado = 'EN_PROCESO', intentos = intentos + 1
+               SET estado = 'EN_PROCESO',
+                   intentos = intentos + 1,
+                   locked_until = NOW() + INTERVAL '5 minutes'
              WHERE id = (
                SELECT id
                  FROM app.jobs
@@ -79,7 +81,7 @@ public class JobRepository {
                   WHERE estado = 'EN_PROCESO'
                     AND worker_id = ?
                     AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
-                    AND created_at < NOW() - INTERVAL '5 minutes')
+                    AND (locked_until IS NULL OR locked_until < NOW()))
            AND (detalle->>'ocrEstado') = 'PROCESANDO'
         """,
         workerId);
@@ -90,37 +92,9 @@ public class JobRepository {
          WHERE estado = 'EN_PROCESO'
            AND worker_id = ?
            AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
-           AND created_at < NOW() - INTERVAL '5 minutes'
+           AND (locked_until IS NULL OR locked_until < NOW())
         """,
         workerId);
-  }
-
-  public int pendientesDelExpediente(UUID expedienteId) {
-    Integer n =
-        jdbc.queryForObject(
-            """
-            SELECT count(*)::int FROM app.jobs
-            WHERE tipo = 'PROCESAR_DOCUMENTO'
-              AND estado = 'PENDIENTE'
-              AND payload->>'expedienteId' = ?
-            """,
-            Integer.class,
-            expedienteId.toString());
-    return n == null ? 0 : n;
-  }
-
-  public int enProcesoDelExpediente(UUID expedienteId) {
-    Integer n =
-        jdbc.queryForObject(
-            """
-            SELECT count(*)::int FROM app.jobs
-            WHERE tipo = 'PROCESAR_DOCUMENTO'
-              AND estado = 'EN_PROCESO'
-              AND payload->>'expedienteId' = ?
-            """,
-            Integer.class,
-            expedienteId.toString());
-    return n == null ? 0 : n;
   }
 
   /** app.jobs no tiene RLS: el tenant se filtra aquí. */
