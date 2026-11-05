@@ -9,11 +9,13 @@ import com.lexia.api.modules.tenancy.TenantContext;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -35,6 +37,9 @@ public class IngestaJobWorker {
   private final ObjectMapper objectMapper;
   private final ExecutorService executor;
 
+  /** Solo se reclama con hilo libre: un job en cola gastaría sus 120 s sin haber empezado. */
+  private final Semaphore capacidad = new Semaphore(IngestaWorkerExecutorConfig.HILOS);
+
   public IngestaJobWorker(
       JobRepository jobs,
       IngestaMasivaEscrituracionService ingesta,
@@ -50,6 +55,20 @@ public class IngestaJobWorker {
   public void poll() {
     LOG.info("ingesta poll tick");
     jobs.liberarJobsColgados(ingesta.workerId());
+    if (!capacidad.tryAcquire()) {
+      return;
+    }
+    boolean lanzado = false;
+    try {
+      lanzado = reclamarYLanzar();
+    } finally {
+      if (!lanzado) {
+        capacidad.release();
+      }
+    }
+  }
+
+  private boolean reclamarYLanzar() {
     Optional<JobRow> documento = jobs.reclamar("PROCESAR_DOCUMENTO", ingesta.workerId());
     Optional<JobRow> ia = Optional.empty();
     if (documento.isEmpty()) {
@@ -59,29 +78,41 @@ public class IngestaJobWorker {
     if (documento.isPresent()) {
       JobRow job = documento.get();
       ejecutarConTimeout(job, "DOCUMENTO", cancelado -> ejecutarDocumento(job, cancelado));
-      return;
+      return true;
     }
     if (ia.isPresent()) {
       JobRow job = ia.get();
       ejecutarConTimeout(job, "IA", cancelado -> ejecutarIa(job, cancelado));
+      return true;
     }
+    return false;
   }
 
   /**
-   * FutureTask y no CompletableFuture: cancel(true) solo interrumpe el hilo en FutureTask. La
-   * bandera cubre al código que ignora la interrupción o que limpia su flag.
+   * orTimeout no interrumpe la tarea: va dentro de un FutureTask, cuyo cancel(true) sí lo hace. La
+   * bandera cubre al código que ignora la interrupción. El cierre va al pool porque el timeout
+   * dispara en el hilo único del JDK, que no debe bloquearse con BD.
    */
   private void ejecutarConTimeout(JobRow job, String tipo, Consumer<BooleanSupplier> tarea) {
     AtomicBoolean cancelado = new AtomicBoolean();
-    FutureTask<Void> future = new FutureTask<>(() -> tarea.accept(cancelado::get), null);
+    FutureTask<Void> ejecucion = new FutureTask<>(() -> tarea.accept(cancelado::get), null);
+    CompletableFuture.runAsync(ejecucion, executor)
+        .orTimeout(120, TimeUnit.SECONDS)
+        .exceptionally(
+            ex -> {
+              cancelado.set(true);
+              ejecucion.cancel(true);
+              return null;
+            })
+        .thenRunAsync(() -> cerrarJob(job, tipo, ejecucion), executor);
+  }
+
+  private void cerrarJob(JobRow job, String tipo, FutureTask<Void> ejecucion) {
     try {
-      executor.execute(future);
-      future.get(120, TimeUnit.SECONDS);
+      ejecucion.get();
       jobs.completar(job.id());
-    } catch (TimeoutException ex) {
+    } catch (CancellationException ex) {
       LOG.error("worker timeout job={} tipo={}", job.id(), tipo);
-      cancelado.set(true);
-      future.cancel(true);
       fallar(job, new RuntimeException("Timeout 120s"));
     } catch (ExecutionException ex) {
       if (ex.getCause() instanceof JobTerminalHandled terminal) {
@@ -93,6 +124,8 @@ public class IngestaJobWorker {
     } catch (Exception ex) {
       LOG.error("worker ERROR job={} tipo={}", job.id(), tipo, ex);
       fallar(job, toRuntime(ex));
+    } finally {
+      capacidad.release();
     }
   }
 
