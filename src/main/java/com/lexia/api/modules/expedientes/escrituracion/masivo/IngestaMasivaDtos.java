@@ -61,7 +61,8 @@ public final class IngestaMasivaDtos {
       int completados,
       int enProceso,
       int fallidos,
-      long tiempoEstimadoRestanteSegundos) {}
+      long tiempoEstimadoRestanteSegundos,
+      LoteStatus lote) {}
 
   public record LoteListItemDto(
       UUID id,
@@ -89,20 +90,8 @@ public final class IngestaMasivaDtos {
       int rojos,
       boolean cotejoHabilitado,
       List<FilaStatus> filas,
-      int iaEncolados) {
-    public LoteStatus(
-        UUID batchId,
-        String fase,
-        int total,
-        int listasOcr,
-        int verdes,
-        int naranjas,
-        int rojos,
-        boolean cotejoHabilitado,
-        List<FilaStatus> filas) {
-      this(batchId, fase, total, listasOcr, verdes, naranjas, rojos, cotejoHabilitado, filas, 0);
-    }
-  }
+      int encolados,
+      int iaEncolados) {}
 
   public record ExpedienteEnLoteDto(
       String expedienteId,

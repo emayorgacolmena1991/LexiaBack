@@ -15,23 +15,24 @@ public class JobRepository {
     this.jdbc = jdbc;
   }
 
-  public UUID encolar(UUID tenantId, String tipo, String payloadJson) {
+  public UUID encolar(UUID tenantId, String tipo, String payloadJson, String workerId) {
     UUID id = UUID.randomUUID();
     jdbc.update(
         """
-        INSERT INTO app.jobs (id, tenant_id, tipo, payload, estado, prioridad, idempotency_key)
-        VALUES (?, ?, ?, ?::jsonb, 'PENDIENTE', 0, NULL)
+        INSERT INTO app.jobs (id, tenant_id, tipo, payload, estado, prioridad, idempotency_key, worker_id)
+        VALUES (?, ?, ?, ?::jsonb, 'PENDIENTE', 0, NULL, ?)
         """,
         id,
         tenantId,
         tipo,
-        payloadJson);
+        payloadJson,
+        workerId);
     return id;
   }
 
   /** Pasa una fila PENDIENTE a EN_PROCESO. El lock se suelta al cerrar la transacción. */
   @Transactional
-  public Optional<JobRow> reclamar(String tipo) {
+  public Optional<JobRow> reclamar(String tipo, String workerId) {
     return jdbc
         .query(
             """
@@ -42,6 +43,7 @@ public class JobRepository {
                  FROM app.jobs
                 WHERE estado = 'PENDIENTE'
                   AND tipo = ?
+                  AND worker_id = ?
                 ORDER BY prioridad DESC, created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -54,12 +56,13 @@ public class JobRepository {
                     rs.getObject("tenant_id", UUID.class),
                     rs.getString(3),
                     rs.getInt("intentos")),
-            tipo)
+            tipo,
+            workerId)
         .stream()
         .findFirst();
   }
 
-  public int liberarJobsColgados() {
+  public int liberarJobsColgados(String workerId) {
     jdbc.update(
         """
         UPDATE app.ingesta_item
@@ -74,16 +77,22 @@ public class JobRepository {
                  SELECT (payload->>'loteId')::uuid
                    FROM app.jobs
                   WHERE estado = 'EN_PROCESO'
+                    AND worker_id = ?
+                    AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
                     AND created_at < NOW() - INTERVAL '5 minutes')
            AND (detalle->>'ocrEstado') = 'PROCESANDO'
-        """);
+        """,
+        workerId);
     return jdbc.update(
         """
         UPDATE app.jobs
            SET estado = 'PENDIENTE', intentos = intentos + 1
          WHERE estado = 'EN_PROCESO'
+           AND worker_id = ?
+           AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
            AND created_at < NOW() - INTERVAL '5 minutes'
-        """);
+        """,
+        workerId);
   }
 
   public int pendientesDelExpediente(UUID expedienteId) {
@@ -114,6 +123,22 @@ public class JobRepository {
     return n == null ? 0 : n;
   }
 
+  /** app.jobs no tiene RLS: el tenant se filtra aquí. */
+  public JobsEnCola enColaDelLote(UUID tenantId, UUID loteId) {
+    return jdbc.queryForObject(
+        """
+        SELECT count(*) FILTER (WHERE tipo = 'PROCESAR_DOCUMENTO')::int,
+               count(*) FILTER (WHERE tipo = 'PROCESAR_IA_EXPEDIENTE')::int
+          FROM app.jobs
+         WHERE estado IN ('PENDIENTE', 'EN_PROCESO')
+           AND tenant_id = ?
+           AND payload->>'loteId' = ?
+        """,
+        (rs, row) -> new JobsEnCola(rs.getInt(1), rs.getInt(2)),
+        tenantId,
+        loteId.toString());
+  }
+
   public void devolverAPendiente(UUID id) {
     jdbc.update("UPDATE app.jobs SET estado = 'PENDIENTE' WHERE id = ?", id);
   }
@@ -131,4 +156,6 @@ public class JobRepository {
   }
 
   public record JobRow(UUID id, UUID tenantId, String payload, int intentos) {}
+
+  public record JobsEnCola(int encolados, int iaEncolados) {}
 }

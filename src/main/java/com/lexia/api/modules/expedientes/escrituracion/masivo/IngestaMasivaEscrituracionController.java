@@ -69,7 +69,7 @@ public class IngestaMasivaEscrituracionController {
   }
 
   @PostMapping(
-      value = {"/{batchId}/filas/{itemId}/reemplazar", "/{batchId}/items/{itemId}/reemplazar"},
+      value = "/{batchId}/items/{itemId}/reemplazar",
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public LoteStatus reemplazar(
       @PathVariable UUID batchId,
@@ -85,7 +85,7 @@ public class IngestaMasivaEscrituracionController {
     return ingesta.ejecutarOcr(batchId);
   }
 
-  @PostMapping({"/{batchId}/filas/{itemId}/reintentar", "/{batchId}/items/{itemId}/reintentar"})
+  @PostMapping("/{batchId}/items/{itemId}/reintentar")
   public LoteStatus reintentar(@PathVariable UUID batchId, @PathVariable String itemId) {
     return ingesta.reintentarItem(batchId, itemId);
   }
@@ -101,11 +101,6 @@ public class IngestaMasivaEscrituracionController {
       throw AuthException.unauthorized("Sesión no válida o vencida.");
     }
     return ingesta.stream(batchId);
-  }
-
-  @GetMapping("/{batchId}/status")
-  public LoteStatus status(@PathVariable UUID batchId) {
-    return ingesta.status(batchId);
   }
 
   @GetMapping("/{batchId}/expedientes")
