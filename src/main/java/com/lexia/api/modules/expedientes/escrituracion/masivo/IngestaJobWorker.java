@@ -53,7 +53,7 @@ public class IngestaJobWorker {
 
   @Scheduled(fixedDelay = 2000)
   public void poll() {
-    LOG.info("ingesta poll tick");
+    LOG.debug("ingesta poll tick");
     jobs.liberarJobsColgados(ingesta.workerId());
     if (!capacidad.tryAcquire()) {
       return;
@@ -74,7 +74,7 @@ public class IngestaJobWorker {
     if (documento.isEmpty()) {
       ia = jobs.reclamar("PROCESAR_IA_EXPEDIENTE", ingesta.workerId());
     }
-    LOG.info("ingesta poll documento={} ia={}", documento.isPresent(), ia.isPresent());
+    LOG.debug("ingesta poll documento={} ia={}", documento.isPresent(), ia.isPresent());
     if (documento.isPresent()) {
       JobRow job = documento.get();
       ejecutarConTimeout(job, "DOCUMENTO", cancelado -> ejecutarDocumento(job, cancelado));
