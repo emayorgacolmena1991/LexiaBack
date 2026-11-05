@@ -1001,13 +1001,16 @@ public class CoactivaExpedienteService {
     CoactivaArchivo archivo = requireArchivo(tenantId, archivoId);
     CoactivaArchivo servido = resolverArchivoServido(archivoId).orElse(null);
     if (servido == null) {
-      return new ArchivoContenido("expediente-no-disponible.pdf", "application/pdf", PDF_AUSENTE, null);
+      return new ArchivoContenido(
+          "expediente-no-disponible.pdf", "application/pdf", PDF_AUSENTE, null, true);
     }
     String mime = servido.getMimeType();
-    if (!servido.getId().equals(archivo.getId()) && mime == null) {
+    boolean faltante = !servido.getId().equals(archivo.getId());
+    if (faltante && mime == null) {
       mime = "application/pdf";
     }
-    return new ArchivoContenido(servido.getNombreOriginal(), mime, storage.read(servido), servido.getId());
+    return new ArchivoContenido(
+        servido.getNombreOriginal(), mime, storage.read(servido), servido.getId(), faltante);
   }
 
   /**
@@ -1422,5 +1425,9 @@ public class CoactivaExpedienteService {
       UUID actaId,
       String fuente) {}
 
-  public record ArchivoContenido(String nombre, String mimeType, byte[] bytes, UUID archivoIdReal) {}
+  /**
+   * {@code originalFaltante}: el id pedido no tiene binario en este disco (placeholder o hermano).
+   */
+  public record ArchivoContenido(
+      String nombre, String mimeType, byte[] bytes, UUID archivoIdReal, boolean originalFaltante) {}
 }

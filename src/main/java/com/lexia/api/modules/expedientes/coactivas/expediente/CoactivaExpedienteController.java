@@ -294,6 +294,9 @@ public class CoactivaExpedienteController {
     if (contenido.archivoIdReal() != null) {
       respuesta.header("X-Archivo-Id-Real", contenido.archivoIdReal().toString());
     }
+    if (contenido.originalFaltante()) {
+      respuesta.header("X-Archivo-Faltante", "true");
+    }
     return respuesta.body(contenido.bytes());
   }
 }

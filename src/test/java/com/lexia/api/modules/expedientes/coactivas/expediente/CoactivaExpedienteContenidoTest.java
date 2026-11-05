@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.coactivas.expediente;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -63,6 +64,7 @@ class CoactivaExpedienteContenidoTest {
 
     assertEquals("original.pdf", contenido.nombre());
     assertArrayEquals(new byte[] {1, 2, 3}, contenido.bytes());
+    assertFalse(contenido.originalFaltante());
     verify(archivos, never())
         .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(TENANT, EXPEDIENTE);
   }
@@ -83,6 +85,7 @@ class CoactivaExpedienteContenidoTest {
     assertEquals("unificado.pdf", contenido.nombre());
     assertEquals("application/pdf", contenido.mimeType());
     assertArrayEquals(new byte[] {'%', 'P', 'D', 'F'}, contenido.bytes());
+    assertTrue(contenido.originalFaltante());
     verify(storage, never()).read(original);
   }
 
@@ -99,6 +102,7 @@ class CoactivaExpedienteContenidoTest {
     String pdf = new String(contenido.bytes(), StandardCharsets.US_ASCII);
     assertEquals("expediente-no-disponible.pdf", contenido.nombre());
     assertEquals("application/pdf", contenido.mimeType());
+    assertTrue(contenido.originalFaltante());
     assertTrue(pdf.startsWith("%PDF-1.4\n"));
     assertTrue(pdf.contains("El archivo original no esta en el servidor."));
     assertTrue(pdf.contains("startxref\n"));
@@ -121,6 +125,7 @@ class CoactivaExpedienteContenidoTest {
 
     assertEquals("escaneado.pdf", contenido.nombre());
     assertEquals(escaneado.getId(), contenido.archivoIdReal());
+    assertTrue(contenido.originalFaltante());
     assertArrayEquals(new byte[] {'%', 'P', 'D', 'F', '-', 'E'}, contenido.bytes());
     verify(storage, never()).read(pedido);
   }

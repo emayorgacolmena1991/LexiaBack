@@ -81,6 +81,7 @@ public class DocumentoCacheStore {
     if (tenantId == null || sha256 == null) {
       return;
     }
+    // Texto y polígonos juntos: sin COALESCE por columna (evita extractos nuevos con cajas viejas).
     entityManager
         .createNativeQuery(
             """
@@ -88,8 +89,8 @@ public class DocumentoCacheStore {
               (id, tenant_id, sha256, version_prompt, modelo, texto_ocr, resultado_json)
             VALUES (:id, :tenantId, :sha, :version, :modelo, :texto, :json)
             ON CONFLICT (tenant_id, sha256, version_prompt, modelo) DO UPDATE SET
-              texto_ocr = COALESCE(EXCLUDED.texto_ocr, app.documento_cache.texto_ocr),
-              resultado_json = COALESCE(EXCLUDED.resultado_json, app.documento_cache.resultado_json)
+              texto_ocr = EXCLUDED.texto_ocr,
+              resultado_json = EXCLUDED.resultado_json
             """)
         .setParameter("id", UUID.randomUUID())
         .setParameter("tenantId", tenantId)
