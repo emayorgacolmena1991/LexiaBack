@@ -1010,18 +1010,29 @@ public class CoactivaExpedienteService {
     return new ArchivoContenido(servido.getNombreOriginal(), mime, storage.read(servido), servido.getId());
   }
 
-  /** Mismo juicio, tipo unificado, y el binario sí está bajo {@code data/coactivas}. */
+  /**
+   * Hermano del mismo juicio cuyo binario sí está bajo {@code data/coactivas}. Prefiere
+   * {@code EXPEDIENTE_UNIFICADO}; si no hay, {@code EXPEDIENTE_ESCANEADO}.
+   */
   private CoactivaArchivo unificadoEnDisco(UUID tenantId, CoactivaArchivo pedido) {
     if (pedido.getExpedienteId() == null) {
       return null;
     }
-    return archivos
-        .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId, pedido.getExpedienteId())
-        .stream()
+    List<CoactivaArchivo> hermanos =
+        archivos
+            .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                tenantId, pedido.getExpedienteId())
+            .stream()
+            .filter(a -> !a.getId().equals(pedido.getId()))
+            .filter(storage::disponible)
+            .toList();
+    return hermanos.stream()
         .filter(a -> CoactivaArchivo.EXPEDIENTE_UNIFICADO.equals(a.getTipo()))
-        .filter(a -> !a.getId().equals(pedido.getId()))
-        .filter(storage::disponible)
         .findFirst()
+        .or(() ->
+            hermanos.stream()
+                .filter(a -> CoactivaArchivo.EXPEDIENTE_ESCANEADO.equals(a.getTipo()))
+                .findFirst())
         .orElse(null);
   }
 

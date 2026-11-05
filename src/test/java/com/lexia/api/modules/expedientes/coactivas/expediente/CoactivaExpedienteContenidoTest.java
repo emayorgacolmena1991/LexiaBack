@@ -105,6 +105,26 @@ class CoactivaExpedienteContenidoTest {
     verify(storage, never()).read(original);
   }
 
+  /** P1 #3: sin UNIFICADO en disco, el hermano ESCANEADO debe servir el PDF (no el aviso). */
+  @Test
+  void sinUnificadoDevuelveEscaneadoEnDisco() {
+    CoactivaArchivo pedido = archivo(CoactivaArchivo.EXPEDIENTE_UNIFICADO, "unificado.pdf");
+    CoactivaArchivo escaneado = archivo(CoactivaArchivo.EXPEDIENTE_ESCANEADO, "escaneado.pdf");
+    when(archivos.findByIdAndTenantIdAndDeletedAtIsNull(pedido.getId(), TENANT)).thenReturn(Optional.of(pedido));
+    when(storage.disponible(pedido)).thenReturn(false);
+    when(archivos.findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(TENANT, EXPEDIENTE))
+        .thenReturn(List.of(escaneado));
+    when(storage.disponible(escaneado)).thenReturn(true);
+    when(storage.read(escaneado)).thenReturn(new byte[] {'%', 'P', 'D', 'F', '-', 'E'});
+
+    ArchivoContenido contenido = service.contenido(pedido.getId());
+
+    assertEquals("escaneado.pdf", contenido.nombre());
+    assertEquals(escaneado.getId(), contenido.archivoIdReal());
+    assertArrayEquals(new byte[] {'%', 'P', 'D', 'F', '-', 'E'}, contenido.bytes());
+    verify(storage, never()).read(pedido);
+  }
+
   private static CoactivaArchivo archivo(String tipo, String nombre) {
     CoactivaArchivo a =
         CoactivaArchivo.create(
