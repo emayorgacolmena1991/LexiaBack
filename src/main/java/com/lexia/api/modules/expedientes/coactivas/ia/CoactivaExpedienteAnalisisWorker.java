@@ -134,9 +134,16 @@ public class CoactivaExpedienteAnalisisWorker {
     this.tx = new TransactionTemplate(txManager);
   }
 
-  /** Inserta en {@code app.jobs} dentro de la transacciÃ³n del llamador. Lo corre {@code CoactivaJobWorker}. */
+  /**
+   * Un diagnóstico vivo por expediente: si ya hay PENDIENTE, {@code encolarSiActivo} reescribe el
+   * payload y no inserta otra fila. Lo corre {@code CoactivaJobWorker}.
+   */
   public void encolar(UUID tenantId, UUID expedienteId, UUID archivoId) {
-    jobs.encolar(tenantId, "COACTIVA_DIAGNOSTICO", payload(expedienteId, archivoId));
+    jobs.encolarSiActivo(
+        tenantId,
+        "COACTIVA_DIAGNOSTICO",
+        expedienteId == null ? null : expedienteId.toString(),
+        payload(expedienteId, archivoId));
     anunciar(expedienteId);
   }
 
@@ -219,18 +226,21 @@ public class CoactivaExpedienteAnalisisWorker {
               }
               archivo.registrarResultadoIa(CoactivaArchivo.IA_ERROR, msg, null, null);
               if (archivo.getExpedienteId() != null && CoactivaArchivo.esExpedienteUnificado(archivo.getTipo())) {
-                analisisRepo.save(
-                    CoactivaAnalisis.error(
-                        tenantId,
-                        archivo.getExpedienteId(),
-                        archivoId,
-                        null,
-                        archivo.getEtapaIa() == null ? "*" : archivo.getEtapaIa(),
-                        msg));
                 expedientes
                     .bloquear(archivo.getExpedienteId(), tenantId)
                     .filter(e -> archivoId.equals(e.getAnalisisArchivoId()))
-                    .ifPresent(CoactivaExpediente::marcarErrorAnalisis);
+                    .ifPresent(
+                        e -> {
+                          analisisRepo.save(
+                              CoactivaAnalisis.error(
+                                  tenantId,
+                                  archivo.getExpedienteId(),
+                                  archivoId,
+                                  null,
+                                  archivo.getEtapaIa() == null ? "*" : archivo.getEtapaIa(),
+                                  msg));
+                          e.marcarErrorAnalisis();
+                        });
               }
               return archivo.getExpedienteId();
             });
@@ -362,22 +372,22 @@ public class CoactivaExpedienteAnalisisWorker {
           boolean vigente =
               expediente != null && archivoId.equals(expediente.getAnalisisArchivoId());
           if (resultado.error() != null) {
-            analisisRepo.save(
-                CoactivaAnalisis.error(
-                    tenantId,
-                    archivo.getExpedienteId(),
-                    archivoId,
-                    resultado.promptId(),
-                    resultado.etapa(),
-                    resultado.error()));
-            archivo.registrarResultadoIa(CoactivaArchivo.IA_ERROR, truncate(resultado.error(), 600), null, null);
             if (vigente) {
+              analisisRepo.save(
+                  CoactivaAnalisis.error(
+                      tenantId,
+                      archivo.getExpedienteId(),
+                      archivoId,
+                      resultado.promptId(),
+                      resultado.etapa(),
+                      resultado.error()));
               if (resultado.calidad()) {
                 expediente.marcarErrorCalidad();
               } else {
                 expediente.marcarErrorAnalisis();
               }
             }
+            archivo.registrarResultadoIa(CoactivaArchivo.IA_ERROR, truncate(resultado.error(), 600), null, null);
             return;
           }
           CoactivaDiagnostico diag = resultado.diagnostico();
@@ -402,19 +412,19 @@ public class CoactivaExpedienteAnalisisWorker {
                       archivo.getTipo(),
                       CoactivaArchivo.IA_APROBADO,
                       checklist(diag.documentos()));
-          CoactivaAnalisis guardado =
-              analisisRepo.save(
-                  CoactivaAnalisis.consolidado(
-                      tenantId,
-                      archivo.getExpedienteId(),
-                      archivoId,
-                      resultado.promptId(),
-                      resultado.etapa(),
-                      fusion.json(),
-                      fusion.porcentaje(),
-                      vigente && diag.etapaNormalizada() != null ? diag.etapaNormalizada() : fusion.etapa(),
-                      previo == null ? null : previo.id()));
           if (vigente) {
+            CoactivaAnalisis guardado =
+                analisisRepo.save(
+                    CoactivaAnalisis.consolidado(
+                        tenantId,
+                        archivo.getExpedienteId(),
+                        archivoId,
+                        resultado.promptId(),
+                        resultado.etapa(),
+                        fusion.json(),
+                        fusion.porcentaje(),
+                        diag.etapaNormalizada() != null ? diag.etapaNormalizada() : fusion.etapa(),
+                        previo == null ? null : previo.id()));
             poblarTareas(tenantId, archivo.getExpedienteId(), guardado.getId(), fusion.json());
           }
           archivo.registrarResultadoIa(

@@ -3,9 +3,11 @@ package com.lexia.api.modules.expedientes.documentos;
 import com.lexia.api.common.api.ApiException;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.UUID;
@@ -45,12 +47,9 @@ public class ExpedienteDocumentoStorage {
   }
 
   public byte[] read(String storageKey) {
-    if (storageKey == null || storageKey.isBlank()) {
-      throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
-    }
-    Path path = Path.of(storageKey).toAbsolutePath().normalize();
-    if (!Files.exists(path)) {
-      LOG.warn("Storage.read FALLO path={} NO EXISTE", path);
+    Path path = ubicar(storageKey);
+    if (path == null) {
+      LOG.warn("Storage.read FALLO key={} NO EXISTE", storageKey);
       throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
     }
     try {
@@ -62,11 +61,8 @@ public class ExpedienteDocumentoStorage {
   }
 
   public long size(String storageKey) {
-    if (storageKey == null || storageKey.isBlank()) {
-      return 0;
-    }
-    Path path = Path.of(storageKey).toAbsolutePath().normalize();
-    if (!path.startsWith(root) || !Files.exists(path)) {
+    Path path = ubicar(storageKey);
+    if (path == null) {
       return 0;
     }
     try {
@@ -74,6 +70,39 @@ public class ExpedienteDocumentoStorage {
     } catch (IOException ex) {
       return 0;
     }
+  }
+
+  /**
+   * {@code storage_key} es la ruta absoluta del equipo que subió el archivo. Si la raíz de este
+   * proceso es otra (otro equipo, otro cwd o {@code LEXIA_EXPEDIENTES_DIR}), se busca el mismo
+   * tramo {@code <tenant>/<case>/<archivo>} bajo {@link #root}.
+   */
+  Path ubicar(String storageKey) {
+    if (storageKey == null || storageKey.isBlank()) {
+      return null;
+    }
+    try {
+      Path directa = Path.of(storageKey).toAbsolutePath().normalize();
+      if (directa.startsWith(root) && Files.isRegularFile(directa)) {
+        return directa;
+      }
+    } catch (InvalidPathException ignored) {
+      // Ruta de otro sistema operativo: se reubica abajo.
+    }
+    String[] partes = storageKey.replace('\\', '/').split("/");
+    for (int i = 0; i < partes.length; i++) {
+      try {
+        UUID.fromString(partes[i]);
+      } catch (IllegalArgumentException ex) {
+        continue;
+      }
+      Path reubicada =
+          root.resolve(String.join("/", Arrays.copyOfRange(partes, i, partes.length))).normalize();
+      if (reubicada.startsWith(root) && Files.isRegularFile(reubicada)) {
+        return reubicada;
+      }
+    }
+    return null;
   }
 
   private static String safeName(String fileName) {

@@ -908,11 +908,66 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaExpediente expediente = require(tenantId, id);
-    DocumentoCacheStore.Hit hit = ocrCache(tenantId, expediente.getAnalisisArchivoId());
+    UUID pedido = archivoPedidoPorVisor(tenantId, expediente);
+    CoactivaArchivo servido = pedido == null ? null : resolverArchivoServido(pedido).orElse(null);
+    DocumentoCacheStore.Hit hit = ocrCache(tenantId, servido == null ? null : servido.getId());
     if (hit == null || hit.textoOcr() == null) {
       return List.of();
     }
     return CoactivaPdfTexto.buscar(hit.textoOcr(), hit.resultadoJson(), q);
+  }
+
+  /**
+   * Mismo id que pide el visor: el archivo del análisis visible, o el unificado más nuevo si todavía
+   * no hay diagnóstico. No es {@code analisisArchivoId} cuando ese puntero ya quedó en otro PDF.
+   */
+  private UUID archivoPedidoPorVisor(UUID tenantId, CoactivaExpediente expediente) {
+    CoactivaAnalisis ultimo =
+        analisisRepo
+            .findFirstByTenantIdAndExpedienteIdOrderByCreatedAtDesc(tenantId, expediente.getId())
+            .orElse(null);
+    boolean enCurso =
+        CoactivaExpediente.ANALISIS_ANALIZANDO.equals(expediente.getEstadoAnalisis())
+            && (ultimo == null
+                || expediente.getAnalisisArchivoId() == null
+                || !ultimo.getArchivoId().equals(expediente.getAnalisisArchivoId()));
+    if (enCurso) {
+      return expediente.getAnalisisArchivoId();
+    }
+    if (ultimo != null) {
+      if (CoactivaAnalisis.ERROR.equals(ultimo.getEstado())) {
+        return analisisRepo
+            .findFirstByTenantIdAndExpedienteIdAndEstadoOrderByCreatedAtDesc(
+                tenantId, expediente.getId(), CoactivaAnalisis.ANALIZADO)
+            .map(CoactivaAnalisis::getArchivoId)
+            .orElse(ultimo.getArchivoId());
+      }
+      return ultimo.getArchivoId();
+    }
+    return archivos
+        .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId, expediente.getId())
+        .stream()
+        .filter(a -> CoactivaArchivo.EXPEDIENTE_UNIFICADO.equals(a.getTipo()))
+        .map(CoactivaArchivo::getId)
+        .findFirst()
+        .orElse(expediente.getAnalisisArchivoId());
+  }
+
+  /**
+   * Archivo cuyo binario sirve {@link #contenido}. El id es {@code getId()}. Vacío si el visor
+   * recibe el PDF de aviso: no hay un tercer estado.
+   */
+  private Optional<CoactivaArchivo> resolverArchivoServido(UUID archivoIdPedido) {
+    UUID tenantId = AuthContext.require().tenantId();
+    CoactivaArchivo pedido =
+        archivos.findByIdAndTenantIdAndDeletedAtIsNull(archivoIdPedido, tenantId).orElse(null);
+    if (pedido == null) {
+      return Optional.empty();
+    }
+    if (storage.disponible(pedido)) {
+      return Optional.of(pedido);
+    }
+    return Optional.ofNullable(unificadoEnDisco(tenantId, pedido));
   }
 
   private DocumentoCacheStore.Hit ocrCache(UUID tenantId, UUID archivoId) {
@@ -944,15 +999,15 @@ public class CoactivaExpedienteService {
     authorization.requirePermission(CoactivaPermisos.LEER);
     UUID tenantId = AuthContext.require().tenantId();
     CoactivaArchivo archivo = requireArchivo(tenantId, archivoId);
-    if (storage.disponible(archivo)) {
-      return new ArchivoContenido(archivo.getNombreOriginal(), archivo.getMimeType(), storage.read(archivo));
+    CoactivaArchivo servido = resolverArchivoServido(archivoId).orElse(null);
+    if (servido == null) {
+      return new ArchivoContenido("expediente-no-disponible.pdf", "application/pdf", PDF_AUSENTE, null);
     }
-    CoactivaArchivo unificado = unificadoEnDisco(tenantId, archivo);
-    if (unificado != null) {
-      String mime = unificado.getMimeType() == null ? "application/pdf" : unificado.getMimeType();
-      return new ArchivoContenido(unificado.getNombreOriginal(), mime, storage.read(unificado));
+    String mime = servido.getMimeType();
+    if (!servido.getId().equals(archivo.getId()) && mime == null) {
+      mime = "application/pdf";
     }
-    return new ArchivoContenido("expediente-no-disponible.pdf", "application/pdf", PDF_AUSENTE);
+    return new ArchivoContenido(servido.getNombreOriginal(), mime, storage.read(servido), servido.getId());
   }
 
   /** Mismo juicio, tipo unificado, y el binario sí está bajo {@code data/coactivas}. */
@@ -1356,5 +1411,5 @@ public class CoactivaExpedienteService {
       UUID actaId,
       String fuente) {}
 
-  public record ArchivoContenido(String nombre, String mimeType, byte[] bytes) {}
+  public record ArchivoContenido(String nombre, String mimeType, byte[] bytes, UUID archivoIdReal) {}
 }

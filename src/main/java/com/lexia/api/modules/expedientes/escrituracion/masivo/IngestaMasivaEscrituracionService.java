@@ -365,16 +365,44 @@ public class IngestaMasivaEscrituracionService {
     String sesion = exigirExpediente(fila);
     String tipo = tipoDe(fila, tipoDocumento);
     carga.borrarOcr(sesion, "consolidado");
-    DocumentoCargadoDTO doc = carga.subir(sesion, file);
-    if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
-      carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
+
+    // Misma fila / físico: sobreescribir versión. No lee el binario viejo (puede faltar en disco).
+    String targetId = StringUtils.hasText(fileId) ? fileId.trim() : null;
+    if (!StringUtils.hasText(targetId)
+        && IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
+      synchronized (fila) {
+        for (Archivo archivo : fila.archivos) {
+          if (!esFalloSubida(archivo) && StringUtils.hasText(archivo.fileId)) {
+            targetId = archivo.fileId;
+            break;
+          }
+        }
+      }
     }
+
+    final String docId;
+    final String nombre;
+    if (StringUtils.hasText(targetId)) {
+      carga.borrarOcr(sesion, targetId);
+      StoredDoc replaced = carga.reemplazarArchivoOcr(sesion, targetId, file, tipo);
+      docId = replaced.idDocumento();
+      nombre = replaced.nombreOriginal();
+    } else {
+      DocumentoCargadoDTO doc = carga.subir(sesion, file);
+      if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
+        carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
+      }
+      docId = doc.idDocumento();
+      nombre = doc.nombreOriginal();
+    }
+
     synchronized (fila) {
       fila.archivos.removeIf(archivo -> esFalloSubida(archivo));
-      if (StringUtils.hasText(fileId)) {
-        fila.archivos.removeIf(archivo -> fileId.equals(archivo.fileId));
+      if (StringUtils.hasText(targetId)) {
+        String id = targetId;
+        fila.archivos.removeIf(archivo -> id.equals(archivo.fileId));
       }
-      fila.archivos.add(Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo));
+      fila.archivos.add(Archivo.nuevo(docId, nombre, tipo));
       fila.ocrEstado = "PROCESANDO";
       fila.semaforo = "GRIS";
       fila.iaEstado = "PENDIENTE";

@@ -61,7 +61,9 @@ class CoactivaJobPayloadTest {
             null, null, null, null, null, null, null, null, null, null, null, productor, sse, null, null, false)
         .encolar(tenant, expediente, archivo);
     ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-    verify(productor).encolar(eq(tenant), eq("COACTIVA_DIAGNOSTICO"), payload.capture());
+    verify(productor)
+        .encolarSiActivo(
+            eq(tenant), eq("COACTIVA_DIAGNOSTICO"), eq(expediente.toString()), payload.capture());
 
     reclamar("COACTIVA_DIAGNOSTICO", comoJsonb(payload.getValue()), 1);
     worker().tick();
