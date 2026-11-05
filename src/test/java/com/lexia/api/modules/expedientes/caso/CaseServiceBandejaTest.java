@@ -110,4 +110,21 @@ class CaseServiceBandejaTest {
     assertTrue(page.content().stream().noneMatch(row -> row.clienteOperacion().contains("Demo")));
     verify(authorization).requirePermission("expedientes:caso:leer");
   }
+
+  @Test
+  void filtroEstadoIdaYVueltaCoincideConLaEtiquetaDeLaFila() {
+    for (String etiqueta :
+        List.of(
+            "En trámite",
+            "En revisión",
+            "Con observación",
+            "Pendiente",
+            "Con excepción",
+            "Cerrado")) {
+      assertEquals(etiqueta, CaseService.mapStatusLabel(CaseService.normalizeStatusFilter(etiqueta)));
+    }
+    assertEquals("CLOSED", CaseService.normalizeStatusFilter("Resuelto"));
+    assertEquals("IN_REVIEW", CaseService.normalizeStatusFilter("en revision"));
+    assertEquals(null, CaseService.normalizeStatusFilter(" "));
+  }
 }

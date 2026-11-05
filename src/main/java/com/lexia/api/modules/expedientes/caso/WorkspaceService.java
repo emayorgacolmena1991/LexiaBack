@@ -492,6 +492,10 @@ public class WorkspaceService {
   private static String mapStatusLabel(String status) {
     return switch (status) {
       case "DRAFT" -> "En trámite";
+      case "IN_REVIEW" -> "En revisión";
+      case "WITH_OBSERVATION" -> "Con observación";
+      case "PENDING" -> "Pendiente";
+      case "EXCEPTION" -> "Con excepción";
       case "CLOSED" -> "Cerrado";
       default -> status;
     };

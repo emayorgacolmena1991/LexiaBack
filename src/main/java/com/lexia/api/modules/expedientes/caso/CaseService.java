@@ -237,13 +237,17 @@ public class CaseService {
     return mapPriorityLabel(legalCase.getPriority());
   }
 
-  private static String normalizeStatusFilter(String estado) {
+  static String normalizeStatusFilter(String estado) {
     if (estado == null || estado.isBlank()) {
       return null;
     }
     return switch (estado.trim().toLowerCase(Locale.ROOT)) {
       case "en trámite", "en tramite", "draft" -> "DRAFT";
-      case "cerrado", "closed" -> "CLOSED";
+      case "en revisión", "en revision" -> "IN_REVIEW";
+      case "con observación", "con observacion" -> "WITH_OBSERVATION";
+      case "pendiente" -> "PENDING";
+      case "con excepción", "con excepcion" -> "EXCEPTION";
+      case "cerrado", "resuelto", "closed" -> "CLOSED";
       default -> estado.trim().toUpperCase(Locale.ROOT);
     };
   }
@@ -406,9 +410,14 @@ public class CaseService {
     };
   }
 
-  private static String mapStatusLabel(String status) {
+  /** Inverso de normalizeStatusFilter: el frontend vuelve a filtrar las filas por esta etiqueta. */
+  static String mapStatusLabel(String status) {
     return switch (status) {
       case "DRAFT" -> "En trámite";
+      case "IN_REVIEW" -> "En revisión";
+      case "WITH_OBSERVATION" -> "Con observación";
+      case "PENDING" -> "Pendiente";
+      case "EXCEPTION" -> "Con excepción";
       case "CLOSED" -> "Cerrado";
       default -> status;
     };
