@@ -207,12 +207,7 @@ public class MinutaGenerationService {
 
     byte[] docx =
         renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft, data);
-    draft.setDatosExtraidos(json(base));
-    draft.setOverrides(variablesService.escribirOverrides(overrides));
-    draft.markGenerated(stored.toString());
-    minutaDrafts.save(draft);
+    guardarRender(draft, descriptor, docx, base, data, overrides);
 
     VariablesConsolidadas consolidadas = variablesService.consolidar(descriptor, data);
     byte[] pdfBytes = pdf.toPdf(docx);
@@ -236,6 +231,22 @@ public class MinutaGenerationService {
   }
 
   public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
+
+  /** El payload del borrador es el dato renderizado; {@code base} y overrides conservan sus capas. */
+  private void guardarRender(
+      MinutaDraft draft,
+      MinutaTemplateDescriptor descriptor,
+      byte[] docx,
+      MinutaViviendaData base,
+      MinutaViviendaData data,
+      Map<String, String> overrides) {
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.setDatosExtraidos(json(base));
+    draft.setOverrides(variablesService.escribirOverrides(overrides));
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+  }
 
   /**
    * Render desde la plantilla con el JSON final; si el DOCX trae ediciones manuales (flujo
@@ -383,7 +394,7 @@ public class MinutaGenerationService {
     }
 
     MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
-    MinutaViviendaData data =
+    MinutaViviendaData base =
         datosBase(
             tenantId,
             caseId,
@@ -391,15 +402,18 @@ public class MinutaGenerationService {
             request == null ? null : request.sessionId(),
             product,
             kind);
+    MinutaDraft anterior = ultimoDraft(file, tenantId, kind);
+    Map<String, String> overrides =
+        variablesService.leerOverrides(anterior == null ? null : anterior.getOverrides());
+    MinutaViviendaData data =
+        variablesService.fusionar(base, datosBiess.cargar(caseId, tenantId), overrides);
     validarCriticos(descriptor, data, caseId);
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft, data);
-    draft.markGenerated(stored.toString());
-    minutaDrafts.save(draft);
-    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(data));
+    guardarRender(draft, descriptor, docx, base, data, overrides);
+    // Los overrides no entran a la tienda BIESS: solo guarda la captura.
+    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(base));
 
     List<String> pendientes = pendientes(descriptor, data);
     LOG.info(
