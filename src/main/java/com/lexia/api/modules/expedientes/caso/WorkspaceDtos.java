@@ -38,7 +38,8 @@ public final class WorkspaceDtos {
       List<NoteItem> notes,
       List<GateItem> gates,
       List<StageConnectorItem> stageConnectors,
-      StageTransitionOptions stageTransition) {}
+      StageTransitionOptions stageTransition,
+      int wizardStep) {}
 
   public record StageConnectorItem(
       String code, String name, boolean enabled, String lastCallStatus) {}
@@ -53,12 +54,15 @@ public final class WorkspaceDtos {
       String previousStageCode,
       String previousStageLabel) {}
 
-  public record AttentionItem(String headline, String detail, String nextAction, String responsible) {}
+  /** code != null marca un pendiente real; vacío si la validación no tiene definición (IA). */
+  public record AttentionItem(
+      String headline, String detail, String nextAction, String responsible, String code) {}
 
   public record StageItem(
       String id, String label, String shortLabel, String title, String status) {}
 
-  public record ParticipantItem(String name, String role, String kind, boolean demo) {}
+  public record ParticipantItem(
+      String name, String role, String kind, String initials, boolean demo) {}
 
   public record DocumentItem(
       UUID id,
@@ -69,6 +73,8 @@ public final class WorkspaceDtos {
       String origin,
       String processing,
       String updated,
+      String size,
+      String mime,
       boolean demo) {}
 
   public record DataItem(
@@ -95,6 +101,7 @@ public final class WorkspaceDtos {
       String evidence,
       String ruleVersion,
       String review,
+      String code,
       boolean demo) {}
 
   public record ValidationSummary(int completed, int pending, int observation) {}

@@ -212,7 +212,7 @@ public class ExpedienteSeguimientoService {
     for (DocumentoOcrResultadoDTO row : ocr) {
       String result = resultadoIa(row.estado());
       String label = cortar(texto(row.tipoDocumento(), row.nombreOriginal(), "Documento"), 200);
-      String evidence = cortar(texto(row.motivo(), row.analisisJson(), row.estado()), 2000);
+      String evidence = cortar(evidenciaIa(row), 2000);
       CaseValidation validation =
           CaseValidation.create(tenantId, caseId, null, label, KIND_IA, result, "ocr");
       validation.applyEvaluation(result, evidence, "ocr");
@@ -290,6 +290,20 @@ public class ExpedienteSeguimientoService {
       return "Sistema";
     }
     return users.findById(userId).map(AppUser::getDisplayName).orElse("Sistema");
+  }
+
+  /** Nunca el JSON crudo del análisis: lo lee un abogado. */
+  static String evidenciaIa(DocumentoOcrResultadoDTO row) {
+    String documento = "'" + texto(row.nombreOriginal(), row.tipoDocumento(), "Documento") + "'";
+    String confianza = row.confianza() == null ? "" : " (confianza " + row.confianza() + " %)";
+    if (StringUtils.hasText(row.motivo())) {
+      return "La IA indica sobre " + documento + confianza + ": " + row.motivo().trim();
+    }
+    return switch (resultadoIa(row.estado())) {
+      case "PASS" -> "La IA leyó " + documento + " sin observaciones" + confianza + ".";
+      case "FAIL" -> "La IA no pudo leer " + documento + confianza + "; revise el archivo.";
+      default -> "La IA tiene dudas sobre " + documento + confianza + "; revíselo manualmente.";
+    };
   }
 
   private static String resultadoIa(String estado) {

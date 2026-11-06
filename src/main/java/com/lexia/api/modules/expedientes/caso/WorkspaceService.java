@@ -41,6 +41,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersion;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersionRepository;
+import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
+import com.lexia.api.modules.expedientes.escrituracion.secuencial.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.ejd.EjdCaseExceptionSyncService;
 import com.lexia.api.modules.expedientes.ejd.EjdGateEvaluationService;
 import com.lexia.api.modules.expedientes.ejd.EjdIntegrationService;
@@ -52,10 +54,15 @@ import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import com.lexia.api.modules.expedientes.documentos.LegalDocumentRepository;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
+import com.lexia.api.modules.expedientes.proceso.ValidationDef;
+import com.lexia.api.modules.expedientes.proceso.ValidationDefRepository;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
 public class WorkspaceService {
+
+  private static final String KIND_IA = "Asistencia IA";
+  private static final String CODIGO_EVALUACION_JURIDICA = "V6";
 
   private static final DateTimeFormatter GRID_DATE =
       DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.forLanguageTag("es-CO"))
@@ -85,6 +92,9 @@ public class WorkspaceService {
   private final ExtractedDataRepository extractedData;
   private final EjdCaseExceptionSyncService exceptionSync;
   private final CaseExceptionRepository caseExceptions;
+  private final ValidationDefRepository validationDefs;
+  private final ExpedienteDocumentoStorage documentStorage;
+  private final ExpedienteEstadoService expedienteEstado;
 
   public WorkspaceService(
       LegalCaseRepository legalCases,
@@ -107,7 +117,10 @@ public class WorkspaceService {
       EjdGateEvaluationService gateEvaluation,
       ExtractedDataRepository extractedData,
       EjdCaseExceptionSyncService exceptionSync,
-      CaseExceptionRepository caseExceptions) {
+      CaseExceptionRepository caseExceptions,
+      ValidationDefRepository validationDefs,
+      ExpedienteDocumentoStorage documentStorage,
+      ExpedienteEstadoService expedienteEstado) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.memberships = memberships;
@@ -129,6 +142,9 @@ public class WorkspaceService {
     this.extractedData = extractedData;
     this.exceptionSync = exceptionSync;
     this.caseExceptions = caseExceptions;
+    this.validationDefs = validationDefs;
+    this.documentStorage = documentStorage;
+    this.expedienteEstado = expedienteEstado;
   }
 
   @Transactional
@@ -162,7 +178,8 @@ public class WorkspaceService {
         .orElse("—");
 
     List<DocumentItem> documentItems = buildDocuments(caseId, tenantId);
-    List<ValidationItem> validations = buildValidations(caseId, tenantId);
+    List<ValidationItem> validations =
+        buildValidations(legalCase.getProcessDefinitionId(), caseId, tenantId);
     ValidationSummary validationSummary = summarizeValidations(validations);
     List<GateItem> gates = buildGates(legalCase.getProcessDefinitionId(), caseId, tenantId);
     List<NoteItem> notes = buildNotes(caseId, tenantId);
@@ -170,7 +187,7 @@ public class WorkspaceService {
     List<TimelineItem> recentActivity = buildRecentActivity(notes, actions, validations);
 
     String statusLabel = mapStatusLabel(legalCase.getStatus());
-    AttentionItem attention = buildAttention(validations, currentStage, responsible);
+    AttentionItem attention = buildAttention(validations, gates, currentStage, responsible);
     String currentStageCode =
         stages.stream()
             .filter(stage -> "current".equals(stage.status()))
@@ -188,6 +205,8 @@ public class WorkspaceService {
             : List.of();
     WorkspaceDtos.StageTransitionOptions stageTransition =
         stageTransitions.preview(caseId, tenantId);
+    int wizardStep =
+        "EJD".equals(legalCase.getCaseType()) ? expedienteEstado.estadoFlujo(caseId).wizardStep() : 0;
 
     return new WorkspaceResponse(
         legalCase.getId(),
@@ -220,7 +239,8 @@ public class WorkspaceService {
         notes,
         gates,
         stageConnectors,
-        stageTransition);
+        stageTransition,
+        wizardStep);
   }
 
   private Map<UUID, ProcessStageDef> loadStageDefinitions(UUID processDefinitionId, UUID tenantId) {
@@ -275,6 +295,7 @@ public class WorkspaceService {
                     party.getDisplayName(),
                     party.getRoleLabel() != null ? party.getRoleLabel() : "Participante",
                     mapPartyKind(party.getKind()),
+                    initials(party.getDisplayName()),
                     false))
         .toList();
   }
@@ -300,21 +321,61 @@ public class WorkspaceService {
         version != null ? mapDocumentOrigin(version.getOrigin()) : "—",
         version != null ? mapDocumentProcessing(version.getStatus()) : "—",
         GRID_DATE.format(document.getUpdatedAt()),
+        version != null ? formatSize(documentStorage.size(version.getStorageKey())) : null,
+        version != null ? mimeLabel(version.getMimeType()) : null,
         false);
   }
 
-  private List<ValidationItem> buildValidations(UUID caseId, UUID tenantId) {
+  /** null si el archivo no está en este disco: mostrar un peso inventado sería peor que omitirlo. */
+  static String formatSize(long bytes) {
+    if (bytes <= 0) {
+      return null;
+    }
+    if (bytes < 1024) {
+      return bytes + " B";
+    }
+    if (bytes < 1024 * 1024) {
+      return Math.round(bytes / 1024.0) + " KB";
+    }
+    return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
+  }
+
+  static String mimeLabel(String mime) {
+    if (mime == null) {
+      return null;
+    }
+    return switch (mime.toLowerCase(Locale.ROOT)) {
+      case "application/pdf" -> "PDF";
+      case "image/jpeg", "image/jpg" -> "JPG";
+      case "image/png" -> "PNG";
+      case "image/tiff" -> "TIFF";
+      default -> null;
+    };
+  }
+
+  private List<ValidationItem> buildValidations(UUID processDefinitionId, UUID caseId, UUID tenantId) {
+    Map<UUID, String> codes = new HashMap<>();
+    if (processDefinitionId != null) {
+      for (ValidationDef definition :
+          validationDefs.findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
+              processDefinitionId, tenantId)) {
+        codes.put(definition.getId(), definition.getCode());
+      }
+    }
     return caseValidations.findByCaseIdAndTenantIdOrderByCreatedAtAsc(caseId, tenantId).stream()
         .map(
             validation ->
                 new ValidationItem(
                     validation.getId(),
                     validation.getLabel(),
-                    validation.getKind(),
+                    CODIGO_EVALUACION_JURIDICA.equals(codes.get(validation.getValidationDefId()))
+                        ? KIND_IA
+                        : validation.getKind(),
                     mapValidationResult(validation.getResult()),
                     validation.getEvidence() != null ? validation.getEvidence() : "—",
                     validation.getRuleVersion() != null ? validation.getRuleVersion() : "—",
                     mapValidationReview(validation.getResult()),
+                    codes.getOrDefault(validation.getValidationDefId(), ""),
                     false))
         .toList();
   }
@@ -448,11 +509,14 @@ public class WorkspaceService {
     return items.stream().limit(8).toList();
   }
 
-  private AttentionItem buildAttention(
-      List<ValidationItem> validations, String currentStage, String responsible) {
+  static AttentionItem buildAttention(
+      List<ValidationItem> validations,
+      List<GateItem> gates,
+      String currentStage,
+      String responsible) {
     ValidationItem pending =
         validations.stream()
-            .filter(item -> "Revisión requerida".equals(item.result()) || "No ejecutada".equals(item.result()))
+            .filter(item -> !"Cumple".equals(item.result()) && !"No aplica".equals(item.result()))
             .findFirst()
             .orElse(null);
     if (pending != null) {
@@ -460,13 +524,27 @@ public class WorkspaceService {
           "Requiere atención",
           pending.label(),
           "Revisar validación",
-          responsible);
+          responsible,
+          pending.code());
+    }
+    GateItem gate =
+        gates.stream()
+            .filter(
+                item ->
+                    "REVIEW_REQUIRED".equals(item.resultCode())
+                        || "NOT_EVALUATED".equals(item.resultCode()))
+            .findFirst()
+            .orElse(null);
+    if (gate != null) {
+      return new AttentionItem(
+          "Requiere atención", gate.question(), "Resolver gate", responsible, gate.code());
     }
     return new AttentionItem(
         "En curso",
         "Etapa actual: " + currentStage,
         "Continuar expediente",
-        responsible);
+        responsible,
+        null);
   }
 
   private String resolveResponsible(UUID membershipId) {
@@ -506,7 +584,7 @@ public class WorkspaceService {
       case "PASS" -> "Cumple";
       case "FAIL" -> "No cumple";
       case "PENDING" -> "Pendiente";
-      case "OBSERVATION" -> "Observación";
+      case "OBSERVATION" -> "Revisión requerida";
       case "REVIEW_REQUIRED" -> "Revisión requerida";
       case "NOT_APPLICABLE" -> "No aplica";
       default -> "No ejecutada";
@@ -515,8 +593,7 @@ public class WorkspaceService {
 
   private static String mapValidationReview(String result) {
     return switch (result) {
-      case "PASS", "FAIL", "NOT_APPLICABLE", "OBSERVATION" -> "Automática";
-      case "REVIEW_REQUIRED", "PENDING" -> "Pendiente";
+      case "PASS", "FAIL", "NOT_APPLICABLE" -> "Automática";
       default -> "Pendiente";
     };
   }
