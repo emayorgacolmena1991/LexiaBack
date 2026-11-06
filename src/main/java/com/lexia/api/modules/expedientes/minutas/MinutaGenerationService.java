@@ -732,8 +732,8 @@ public class MinutaGenerationService {
   }
 
   /**
-   * Solo los críticos del descriptor bloquean (422); el resto de tags vacíos se genera como nodata y
-   * se devuelve en camposPendientes.
+   * Criticos del descriptor: por ahora solo se registran; no bloquean la generación (quedan como
+   * nodata / camposPendientes en la respuesta).
    */
   private static void validarCriticos(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data, UUID caseId) {
@@ -742,18 +742,14 @@ public class MinutaGenerationService {
         descriptor.requiredFields().stream()
             .filter(campo -> MinutaViviendaData.isMissing(map.get(campo)))
             .toList();
+    // ponytail: techo = permite DOCX con huecos; volver a 422 MINUTA_DATOS_FALTANTES cuando el flujo
+    // de captura BIESS/OCR esté estable.
     if (!faltantes.isEmpty()) {
       LOG.warn(
-          "Minuta case={} kind={} no generada, faltan críticos: {}",
+          "Minuta case={} kind={} generada con críticos faltantes: {}",
           caseId,
           descriptor.templateKind(),
           faltantes);
-      throw new ApiException(
-          HttpStatus.UNPROCESSABLE_ENTITY,
-          "MINUTA_DATOS_FALTANTES",
-          "No se generó el documento: faltan datos obligatorios en el expediente: "
-              + String.join("; ", faltantes.stream().map(MinutaViviendaData::etiqueta).toList())
-              + ".");
     }
   }
 
