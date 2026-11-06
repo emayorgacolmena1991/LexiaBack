@@ -92,6 +92,10 @@ public class DocumentVersion implements Persistable<UUID> {
     return tenantId;
   }
 
+  public String getContentHash() {
+    return contentHash;
+  }
+
   public String getStorageKey() {
     return storageKey;
   }

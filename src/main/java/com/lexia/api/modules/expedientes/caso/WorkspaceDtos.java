@@ -75,6 +75,7 @@ public final class WorkspaceDtos {
       String updated,
       String size,
       String mime,
+      String hash,
       boolean demo) {}
 
   public record DataItem(

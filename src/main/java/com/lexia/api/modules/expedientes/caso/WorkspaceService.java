@@ -41,6 +41,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersion;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersionRepository;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
+import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
 import com.lexia.api.modules.expedientes.escrituracion.secuencial.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.ejd.EjdCaseExceptionSyncService;
@@ -95,6 +97,7 @@ public class WorkspaceService {
   private final ValidationDefRepository validationDefs;
   private final ExpedienteDocumentoStorage documentStorage;
   private final ExpedienteEstadoService expedienteEstado;
+  private final DocumentoTextoOcrRepository documentoTextoOcr;
 
   public WorkspaceService(
       LegalCaseRepository legalCases,
@@ -120,7 +123,8 @@ public class WorkspaceService {
       CaseExceptionRepository caseExceptions,
       ValidationDefRepository validationDefs,
       ExpedienteDocumentoStorage documentStorage,
-      ExpedienteEstadoService expedienteEstado) {
+      ExpedienteEstadoService expedienteEstado,
+      DocumentoTextoOcrRepository documentoTextoOcr) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.memberships = memberships;
@@ -145,6 +149,7 @@ public class WorkspaceService {
     this.validationDefs = validationDefs;
     this.documentStorage = documentStorage;
     this.expedienteEstado = expedienteEstado;
+    this.documentoTextoOcr = documentoTextoOcr;
   }
 
   @Transactional
@@ -301,13 +306,19 @@ public class WorkspaceService {
   }
 
   private List<DocumentItem> buildDocuments(UUID caseId, UUID tenantId) {
+    Map<String, String> estadosOcr = new HashMap<>();
+    for (DocumentoTextoOcr row : documentoTextoOcr.findByIdExpedienteOrderByCreatedAtAsc(caseId.toString())) {
+      if (tenantId.equals(row.getTenantId())) {
+        estadosOcr.put(row.getIdDocumento(), row.getEstadoDoc());
+      }
+    }
     return documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(caseId, tenantId)
         .stream()
-        .map(document -> toDocumentItem(document, tenantId))
+        .map(document -> toDocumentItem(document, tenantId, estadosOcr.get(document.getId().toString())))
         .toList();
   }
 
-  private DocumentItem toDocumentItem(LegalDocument document, UUID tenantId) {
+  private DocumentItem toDocumentItem(LegalDocument document, UUID tenantId, String estadoOcr) {
     DocumentVersion version =
         documentVersions
             .findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(document.getId(), tenantId)
@@ -319,10 +330,13 @@ public class WorkspaceService {
         version != null ? "v" + version.getVersionNo() : "—",
         version != null ? mapDocumentStatus(version.getStatus()) : "Sin versión",
         version != null ? mapDocumentOrigin(version.getOrigin()) : "—",
-        version != null ? mapDocumentProcessing(version.getStatus()) : "—",
+        version != null
+            ? mapDocumentProcessing(estadoProcesamiento(version.getStatus(), estadoOcr))
+            : "—",
         GRID_DATE.format(document.getUpdatedAt()),
         version != null ? formatSize(documentStorage.size(version.getStorageKey())) : null,
         version != null ? mimeLabel(version.getMimeType()) : null,
+        version != null ? version.getContentHash() : null,
         false);
   }
 
@@ -625,8 +639,26 @@ public class WorkspaceService {
     };
   }
 
-  private static String mapDocumentProcessing(String status) {
-    return "PROCESSED".equals(status) ? "Completo" : "Pendiente";
+  /** Nada actualiza document_version.status tras la carga: el OCR real vive en documento_texto_ocr. */
+  static String estadoProcesamiento(String versionStatus, String estadoOcr) {
+    if (estadoOcr == null || estadoOcr.isBlank()) {
+      return versionStatus;
+    }
+    return switch (estadoOcr.trim().toUpperCase(Locale.ROOT)) {
+      case "LEGIBLE" -> "PROCESSED";
+      case "EN_PROCESO" -> "PROCESSING";
+      default -> "REVIEW_REQUIRED";
+    };
+  }
+
+  static String mapDocumentProcessing(String status) {
+    return switch (status) {
+      case "PROCESSED" -> "Procesado (OCR)";
+      case "PROCESSING" -> "Procesando...";
+      case "STORED" -> "En cola OCR";
+      case "REVIEW_REQUIRED" -> "Pendiente revisión";
+      default -> "Pendiente";
+    };
   }
 
   private static String initials(String name) {

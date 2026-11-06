@@ -38,6 +38,20 @@ class WorkspaceServiceFormatoTest {
   }
 
   @Test
+  void procesamientoUsaElEstadoRealDelOcr() {
+    assertEquals("En cola OCR", procesamiento(null));
+    assertEquals("Procesado (OCR)", procesamiento("LEGIBLE"));
+    assertEquals("Procesando...", procesamiento("EN_PROCESO"));
+    assertEquals("Pendiente revisión", procesamiento("REVISAR"));
+    assertEquals("Pendiente revisión", procesamiento("ERROR"));
+  }
+
+  private static String procesamiento(String estadoOcr) {
+    return WorkspaceService.mapDocumentProcessing(
+        WorkspaceService.estadoProcesamiento("STORED", estadoOcr));
+  }
+
+  @Test
   void atencionPriorizaValidacionPendienteConSuCodigo() {
     AttentionItem item =
         WorkspaceService.buildAttention(
