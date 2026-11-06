@@ -147,6 +147,9 @@ public class CaseDocumentoStore {
     ocrRows
         .findByIdExpedienteAndIdDocumento(ctx.caseId().toString(), doc.getId().toString())
         .ifPresent(ocrRows::delete);
+    seguimiento.ifAvailable(
+        service ->
+            service.documentoEliminado(ctx.caseId(), ctx.tenantId(), doc.getId(), doc.getName()));
   }
 
   @Transactional(readOnly = true)

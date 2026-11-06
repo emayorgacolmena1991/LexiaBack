@@ -119,6 +119,21 @@ public class ExpedienteSeguimientoService {
         AuditEvent.of(tenantId, userId, "DOCUMENTO_SUBIDO", OBJETO, caseId, "OK", null, null));
   }
 
+  /** El evento lleva el ID del documento: audit_event solo tiene un object_id, y es el expediente. */
+  @Transactional
+  public void documentoEliminado(UUID caseId, UUID tenantId, UUID documentId, String nombre) {
+    String titulo =
+        "Eliminación de documento" + (StringUtils.hasText(nombre) ? ": " + cortar(nombre, 180) : "");
+    AuthPrincipal auth = AuthContext.get();
+    UUID userId = auth == null ? null : auth.userId();
+    actions.save(
+        CaseAction.create(
+            tenantId, caseId, titulo, "DOCUMENTO_ELIMINADO", "COMPLETED", userId, Instant.now()));
+    auditEvents.save(
+        AuditEvent.of(
+            tenantId, userId, "DOCUMENTO_ELIMINADO:" + documentId, OBJETO, caseId, "OK", null, null));
+  }
+
   @Transactional
   public void registrarAnalisisSiExpediente(String rawId) {
     CaseFileContext ctx = caseDocs.context(rawId);

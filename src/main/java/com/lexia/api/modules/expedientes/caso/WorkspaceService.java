@@ -655,7 +655,7 @@ public class WorkspaceService {
     return switch (status) {
       case "PROCESSED" -> "Procesado (OCR)";
       case "PROCESSING" -> "Procesando...";
-      case "STORED" -> "En cola OCR";
+      case "STORED" -> "Sin procesar";
       case "REVIEW_REQUIRED" -> "Pendiente revisión";
       default -> "Pendiente";
     };

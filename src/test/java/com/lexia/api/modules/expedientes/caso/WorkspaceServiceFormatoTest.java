@@ -39,7 +39,7 @@ class WorkspaceServiceFormatoTest {
 
   @Test
   void procesamientoUsaElEstadoRealDelOcr() {
-    assertEquals("En cola OCR", procesamiento(null));
+    assertEquals("Sin procesar", procesamiento(null));
     assertEquals("Procesado (OCR)", procesamiento("LEGIBLE"));
     assertEquals("Procesando...", procesamiento("EN_PROCESO"));
     assertEquals("Pendiente revisión", procesamiento("REVISAR"));
