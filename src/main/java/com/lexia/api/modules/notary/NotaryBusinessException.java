@@ -1,25 +1,26 @@
 package com.lexia.api.modules.notary;
 
+import com.lexia.api.common.api.ApiException;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
+/** Errores de dominio notarial con cuerpo JSON `{code,message}` vía ApiExceptionHandler. */
 public final class NotaryBusinessException {
 
   private NotaryBusinessException() {}
 
-  public static ResponseStatusException badRequest(String message) {
-    return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+  public static ApiException badRequest(String message) {
+    return ApiException.badRequest(message);
   }
 
-  public static ResponseStatusException notFound(String message) {
-    return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+  public static ApiException notFound(String message) {
+    return ApiException.notFound(message);
   }
 
-  public static ResponseStatusException conflict(String message) {
-    return new ResponseStatusException(HttpStatus.CONFLICT, message);
+  public static ApiException conflict(String message) {
+    return ApiException.conflict(message);
   }
 
-  public static ResponseStatusException forbidden(String message) {
-    return new ResponseStatusException(HttpStatus.FORBIDDEN, message);
+  public static ApiException forbidden(String message) {
+    return new ApiException(HttpStatus.FORBIDDEN, "FORBIDDEN", message);
   }
 }

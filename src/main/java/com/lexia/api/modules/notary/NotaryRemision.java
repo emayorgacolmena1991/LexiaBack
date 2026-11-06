@@ -3,16 +3,23 @@ package com.lexia.api.modules.notary;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.data.domain.Persistable;
 
 @Entity
 @Table(schema = "control", name = "notary_remision")
-public class NotaryRemision {
+public class NotaryRemision implements Persistable<UUID> {
 
   @Id private UUID id;
+
+  /** UUID en memoria: sin isNew, save() hace merge/UPDATE y dispara 409. */
+  @Transient private boolean isNew = true;
 
   @Column(name = "firm_tenant_id", nullable = false)
   private UUID firmTenantId;
@@ -100,8 +107,24 @@ public class NotaryRemision {
     r.observacionesBufete = observacionesBufete;
     r.createdAt = now;
     r.updatedAt = now;
-    r.rowVersion = 1L;
+    r.isNew = true;
     return r;
+  }
+
+  @Override
+  public UUID getId() {
+    return id;
+  }
+
+  @Override
+  public boolean isNew() {
+    return isNew;
+  }
+
+  @PostLoad
+  @PostPersist
+  void markNotNew() {
+    this.isNew = false;
   }
 
   public void acknowledgeReceipt() {
@@ -135,10 +158,6 @@ public class NotaryRemision {
 
   private void touch() {
     updatedAt = Instant.now();
-  }
-
-  public UUID getId() {
-    return id;
   }
 
   public UUID getFirmTenantId() {
