@@ -661,7 +661,11 @@ public class MinutaGenerationService {
         toItem(draft, pendientes), draft.isEditedManually(), contenido.leer(docx));
   }
 
-  private byte[] leerDocx(MinutaDraft draft) {
+  /** Bytes del .docx. Solo sirve borradores del tenant de la sesión. */
+  public byte[] leerDocx(MinutaDraft draft) {
+    if (draft == null || !AuthContext.require().tenantId().equals(draft.getTenantId())) {
+      throw ApiException.notFound("Minuta no encontrada.");
+    }
     if (!StringUtils.hasText(draft.getStoragePath())) {
       throw ApiException.badRequest("La minuta aún no tiene archivo generado.");
     }

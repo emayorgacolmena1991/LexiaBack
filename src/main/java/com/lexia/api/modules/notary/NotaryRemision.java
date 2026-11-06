@@ -156,6 +156,24 @@ public class NotaryRemision implements Persistable<UUID> {
     touch();
   }
 
+  /** Nueva versión del bufete: la notaría retoma el trámite desde el inicio. */
+  public void reenviar(String observaciones) {
+    estado = NotaryRemisionEstado.ENVIADO_A_NOTARIA.name();
+    pasoNotarial = 0;
+    recibidoEn = null;
+    if (observaciones != null && !observaciones.isBlank()) {
+      observacionesBufete = observaciones.trim();
+    }
+    touch();
+  }
+
+  /** Datos que dependen del expediente al momento de crear cada versión. */
+  public void vincularEnvio(UUID writingFileId, int documentos, String acta) {
+    firmWritingFileId = writingFileId;
+    documentosCount = documentos;
+    actaLabel = acta;
+  }
+
   private void touch() {
     updatedAt = Instant.now();
   }
@@ -214,6 +232,10 @@ public class NotaryRemision implements Persistable<UUID> {
 
   public Instant getRecibidoEn() {
     return recibidoEn;
+  }
+
+  public Instant getUpdatedAt() {
+    return updatedAt;
   }
 
   public String getObservacionesBufete() {

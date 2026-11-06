@@ -31,8 +31,14 @@ public class ExpedienteDocumentoStorage {
   }
 
   public Stored write(UUID tenantId, UUID caseId, UUID documentId, String fileName, byte[] bytes) {
+    return writeEnCarpeta(tenantId, caseId.toString(), documentId, fileName, bytes);
+  }
+
+  /** Archivo del tenant que no pertenece a un expediente, como el logo de una notaría. */
+  public Stored writeEnCarpeta(
+      UUID tenantId, String carpeta, UUID documentId, String fileName, byte[] bytes) {
     String safe = safeName(fileName);
-    Path dir = root.resolve(tenantId.toString()).resolve(caseId.toString());
+    Path dir = root.resolve(tenantId.toString()).resolve(carpeta);
     Path target = dir.resolve(documentId + "_" + safe);
     try {
       Files.createDirectories(dir);
@@ -57,6 +63,19 @@ public class ExpedienteDocumentoStorage {
     } catch (IOException ex) {
       throw new ApiException(
           HttpStatus.INTERNAL_SERVER_ERROR, "DOC_STORAGE_ERROR", "No se pudo leer el archivo.");
+    }
+  }
+
+  /** Limpieza tras un rollback: un fallo aquí no puede cambiar el resultado de la operación. */
+  public void delete(String storageKey) {
+    Path path = ubicar(storageKey);
+    if (path == null) {
+      return;
+    }
+    try {
+      Files.deleteIfExists(path);
+    } catch (IOException ex) {
+      LOG.warn("Storage.delete FALLO key={}: {}", storageKey, ex.getMessage());
     }
   }
 

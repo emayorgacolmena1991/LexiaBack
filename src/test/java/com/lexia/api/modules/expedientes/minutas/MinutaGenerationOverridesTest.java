@@ -1,7 +1,9 @@
 package com.lexia.api.modules.expedientes.minutas;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -12,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
@@ -148,6 +151,24 @@ class MinutaGenerationOverridesTest {
         XWPFWordExtractor extractor = new XWPFWordExtractor(doc)) {
       return extractor.getText();
     }
+  }
+
+  private MinutaDraft draftConArchivo(UUID tenant) throws Exception {
+    Path docx = Files.write(storage.resolve(UUID.randomUUID() + ".docx"), new byte[] {7, 8});
+    MinutaDraft draft = MinutaDraft.create(tenant, UUID.randomUUID(), PRODUCTO, TIPO);
+    draft.markGenerated(docx.toString());
+    return draft;
+  }
+
+  @Test
+  void leerDocxSirveBorradoresDelTenantDeSesion() throws Exception {
+    assertArrayEquals(new byte[] {7, 8}, service.leerDocx(draftConArchivo(TENANT)));
+  }
+
+  @Test
+  void leerDocxRechazaBorradorDeOtroTenant() throws Exception {
+    MinutaDraft ajeno = draftConArchivo(UUID.randomUUID());
+    assertThrows(ApiException.class, () -> service.leerDocx(ajeno));
   }
 
   @Test
