@@ -30,7 +30,9 @@ import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -54,6 +56,9 @@ public class IaAnalysisService {
   private static final Set<String> GRUPOS = Set.of("comprador", "vendedor", "inmueble");
   private static final Pattern OBS =
       Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$");
+  /** Líneas que la IA debe emitir en resumen para dar de baja una obs en regularización. */
+  private static final Pattern RESUELTA_LINE =
+      Pattern.compile("(?im)^\\s*\\[RESUELTA]\\s*([^:\\n]+?)\\s*(?::\\s*(.*))?$");
 
   private final LegalCaseRepository legalCases;
   private final ExpedienteBorradorStore borradores;
@@ -125,7 +130,10 @@ public class IaAnalysisService {
       throw ApiException.badRequest("El expediente no tiene un producto asignado.");
     }
 
-    if (writingFile != null && writingFile.isFlagBloqueoReenvio()) {
+    boolean force = request != null && Boolean.TRUE.equals(request.forceReanalysis());
+    boolean enRegularizacion = writingFile != null && writingFile.isFlagBloqueoReenvio();
+    // Bloqueo solo sin force: en regularización se permite reanalizar a mano tras re-cargar docs.
+    if (enRegularizacion && !force) {
       ProcesarExpedienteCompletoResult cached =
           loadCached(expedienteId, tenantId, writingFile, productCode);
       if (cached != null) {
@@ -134,10 +142,9 @@ public class IaAnalysisService {
       throw new ApiException(
           org.springframework.http.HttpStatus.CONFLICT,
           "REGULARIZACION_BLOQUEADA",
-          "El expediente está en regularización. El reanálisis queda detenido hasta marcarlo regularizado.");
+          "El expediente está en regularización. Usa reanálisis forzado tras re-cargar documentos.");
     }
 
-    boolean force = request != null && Boolean.TRUE.equals(request.forceReanalysis());
     if (!force && borrador != null) {
       ProcesarExpedienteCompletoResult cachedDraft = readDraftStudy(borrador);
       if (cachedDraft != null) {
@@ -153,11 +160,19 @@ public class IaAnalysisService {
     }
 
     String canton = legalCase != null ? resolveCanton(writingFile) : cantonOf(borrador);
+    List<ObservacionesCotejo.Entrada> pendientesPrevias =
+        enRegularizacion && force
+            ? pendientesDeWriting(writingFile, tenantId)
+            : List.of();
     String ocrText =
         force
-            ? ocrConsolidado(expedienteId)
+            ? ocrParaReanalisis(
+                expedienteId, legalCase == null ? null : legalCase.getCode(), request)
             : loadOcrMarcado(
                 expedienteId, legalCase == null ? null : legalCase.getCode(), request);
+    if (!pendientesPrevias.isEmpty()) {
+      ocrText = ocrText + contextoRegularizacion(pendientesPrevias);
+    }
     Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
@@ -175,6 +190,10 @@ public class IaAnalysisService {
         legalCase == null
             ? documentos.proyectar(extraidosLlm, cabeceras)
             : documentos.guardar(tenantId, expedienteId, extraidosLlm, cabeceras);
+    Dictamen dictamen = ext.payload().dictamen();
+    if (!pendientesPrevias.isEmpty()) {
+      dictamen = fusionarDictamenRegularizacion(pendientesPrevias, dictamen);
+    }
     ProcesarExpedienteCompletoResult response =
         new ProcesarExpedienteCompletoResult(
             expedienteId,
@@ -182,7 +201,7 @@ public class IaAnalysisService {
             ejecucion.promptKey(),
             documentosExtraidos,
             ext.payload().datosExtraidos(),
-            ext.payload().dictamen());
+            dictamen);
 
     if (legalCase != null) {
       persistExtracted(tenantId, expedienteId, response.datosExtraidos());
@@ -339,6 +358,15 @@ public class IaAnalysisService {
     ObservacionesCotejo.reemplazar(titleObservations, tenantId, study.getId(), entradas);
   }
 
+  /** Reanálisis: OCR por archivo/sesión si existe; si no, consolidado del worker. */
+  private String ocrParaReanalisis(UUID expedienteId, String caseCode, AnalysisRequestDTO request) {
+    try {
+      return loadOcrMarcado(expedienteId, caseCode, request);
+    } catch (ApiException ignored) {
+      return ocrConsolidado(expedienteId);
+    }
+  }
+
   /** Reanálisis: solo el consolidado ya guardado por el worker. */
   private String ocrConsolidado(UUID expedienteId) {
     String texto =
@@ -351,6 +379,128 @@ public class IaAnalysisService {
     }
     LOG.info("analizar-ia OCR consolidado caseId={} chars={}", expedienteId, texto.length());
     return OcrExpedienteTexto.envolverPlano(texto);
+  }
+
+  private List<ObservacionesCotejo.Entrada> pendientesDeWriting(WritingFile writingFile, UUID tenantId) {
+    return titleStudies
+        .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(writingFile.getId(), tenantId)
+        .map(study -> ObservacionesCotejo.pendientes(titleObservations, tenantId, study.getId()))
+        .orElse(List.of())
+        .stream()
+        .map(item -> new ObservacionesCotejo.Entrada(item.code(), item.severidad(), item.mensaje()))
+        .toList();
+  }
+
+  /**
+   * Inyecta las observaciones abiertas para que el LLM las evalúe una a una. Subir un PDF no
+   * implica resolución: debe confirmar con {@code [RESUELTA] codigo} en el resumen.
+   */
+  private static String contextoRegularizacion(List<ObservacionesCotejo.Entrada> pendientes) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("\n\n<regularizacion_pendiente>\n");
+    sb.append(
+        """
+        El expediente está en regularización. Evalúa CADA observación abierta con la evidencia OCR.
+        Reglas:
+        - Si SIGUE abierta: inclúyela en dictamen.observaciones con el MISMO codigo.
+        - Si la evidencia la RESUELVE: NO la listes en observaciones y añade en dictamen.resumen una línea:
+          [RESUELTA] CODIGO: motivo breve
+        - Subir un archivo NO implica que esté resuelta. Si el documento no aporta a esa observación, manténla.
+        Ítems abiertos:
+        """);
+    int i = 1;
+    for (ObservacionesCotejo.Entrada e : pendientes) {
+      String code = StringUtils.hasText(e.code()) ? e.code().trim() : "OBS";
+      String sev = StringUtils.hasText(e.severidad()) ? e.severidad().trim() : "MEDIUM";
+      sb.append(i++)
+          .append(". [")
+          .append(sev)
+          .append("] ")
+          .append(code)
+          .append(": ")
+          .append(e.mensaje() == null ? "" : e.mensaje().trim())
+          .append('\n');
+    }
+    sb.append("</regularizacion_pendiente>\n");
+    return sb.toString();
+  }
+
+  /**
+   * Conserva observaciones previas si la IA las omitió sin marcar {@code [RESUELTA]}. Evita que un
+   * APPROVED vacío (o un PDF irrelevante) borre la lista abierta.
+   */
+  private static Dictamen fusionarDictamenRegularizacion(
+      List<ObservacionesCotejo.Entrada> previas, Dictamen dictamen) {
+    List<Observacion> fromIa =
+        dictamen == null || dictamen.observaciones() == null
+            ? List.of()
+            : dictamen.observaciones();
+    Set<String> resueltas = parseResueltas(dictamen == null ? null : dictamen.resumen());
+    Set<String> keysIa = new LinkedHashSet<>();
+    Set<String> codesIa = new LinkedHashSet<>();
+    List<Observacion> merged = new ArrayList<>();
+    for (Observacion item : fromIa) {
+      if (item == null || !StringUtils.hasText(item.mensaje())) {
+        continue;
+      }
+      String code = StringUtils.hasText(item.codigo()) ? item.codigo().trim() : "OBS";
+      keysIa.add(ObservacionesCotejo.clave(code, item.mensaje()));
+      codesIa.add(code.toUpperCase(Locale.ROOT));
+      merged.add(item);
+    }
+    for (ObservacionesCotejo.Entrada prev : previas) {
+      if (prev == null || !StringUtils.hasText(prev.mensaje())) {
+        continue;
+      }
+      String code = StringUtils.hasText(prev.code()) ? prev.code().trim() : "OBS";
+      String key = ObservacionesCotejo.clave(code, prev.mensaje());
+      String codeUp = code.toUpperCase(Locale.ROOT);
+      if (keysIa.contains(key) || codesIa.contains(codeUp)) {
+        continue;
+      }
+      if (resueltas.contains(codeUp) || resueltas.contains(key)) {
+        continue;
+      }
+      // Sin confirmación explícita: sigue pendiente.
+      merged.add(new Observacion(code, prev.severidad(), prev.mensaje()));
+    }
+    String estado =
+        dictamen == null || !StringUtils.hasText(dictamen.estado())
+            ? "WITH_OBSERVATIONS"
+            : dictamen.estado().trim();
+    if (!merged.isEmpty() && "APPROVED".equalsIgnoreCase(estado)) {
+      estado = "WITH_OBSERVATIONS";
+    }
+    if (merged.isEmpty() && resueltas.isEmpty() && !previas.isEmpty()) {
+      // APPROVED vacío sin [RESUELTA]: no confiar — reponer todas.
+      for (ObservacionesCotejo.Entrada prev : previas) {
+        if (prev != null && StringUtils.hasText(prev.mensaje())) {
+          merged.add(
+              new Observacion(
+                  StringUtils.hasText(prev.code()) ? prev.code() : "OBS",
+                  prev.severidad(),
+                  prev.mensaje()));
+        }
+      }
+      estado = "WITH_OBSERVATIONS";
+    }
+    String resumen = dictamen == null ? "" : dictamen.resumen();
+    return new Dictamen(estado, resumen, List.copyOf(merged));
+  }
+
+  private static Set<String> parseResueltas(String resumen) {
+    Set<String> out = new LinkedHashSet<>();
+    if (!StringUtils.hasText(resumen)) {
+      return out;
+    }
+    Matcher m = RESUELTA_LINE.matcher(resumen);
+    while (m.find()) {
+      String code = m.group(1) == null ? "" : m.group(1).trim();
+      if (StringUtils.hasText(code)) {
+        out.add(code.toUpperCase(Locale.ROOT));
+      }
+    }
+    return out;
   }
 
   /**
