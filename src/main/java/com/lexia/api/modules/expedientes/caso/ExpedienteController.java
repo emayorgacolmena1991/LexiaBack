@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.caso;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ActuacionItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.AuditoriaItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ExcepcionItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ValidacionItem;
@@ -109,7 +110,10 @@ public class ExpedienteController {
       @RequestParam(defaultValue = "20") int size,
       @RequestParam(required = false) String search,
       @RequestParam(required = false) String estado) {
-    return listCases(page, size, search, estado);
+    if (caseService == null) {
+      return EscrituracionBandejaPage.empty(page, size);
+    }
+    return caseService.bandeja(search, estado, page, size);
   }
 
   @GetMapping("/{id}/validaciones")
@@ -132,16 +136,24 @@ public class ExpedienteController {
     return seguimiento == null ? List.of() : seguimiento.auditoria(id);
   }
 
+  /** Bandeja unificada del tenant (todas las verticales). Paginado opcional vía query. */
   @GetMapping
-  public EscrituracionBandejaPage listCases(
-      @RequestParam(defaultValue = "0") int page,
-      @RequestParam(defaultValue = "20") int size,
+  public Object listCases(
+      @RequestParam(required = false) Integer page,
+      @RequestParam(required = false) Integer size,
       @RequestParam(required = false) String search,
       @RequestParam(required = false) String estado) {
     if (caseService == null) {
-      return EscrituracionBandejaPage.empty(page, size);
+      return page == null && size == null
+          ? List.<CaseSummaryItem>of()
+          : EscrituracionBandejaPage.empty(page == null ? 0 : page, size == null ? 20 : size);
     }
-    return caseService.bandeja(search, estado, page, size);
+    if (search != null || estado != null || page != null || size != null) {
+      int safePage = page == null ? 0 : page;
+      int safeSize = size == null ? 20 : size;
+      return caseService.bandeja(search, estado, safePage, safeSize);
+    }
+    return caseService.listCases();
   }
 
   @GetMapping("/{id}")
