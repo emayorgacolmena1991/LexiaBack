@@ -51,7 +51,6 @@ public class NotaryCrossTenantService {
   private static final int PRIMERA_VERSION = 1;
 
   private final AuthorizationService authorization;
-  private final NotaryAccessGuard accessGuard;
   private final TenantRepository tenants;
   private final NotaryTenantProfileRepository profiles;
   private final TenantNotaryPartnershipRepository partnerships;
@@ -74,7 +73,6 @@ public class NotaryCrossTenantService {
 
   public NotaryCrossTenantService(
       AuthorizationService authorization,
-      NotaryAccessGuard accessGuard,
       TenantRepository tenants,
       NotaryTenantProfileRepository profiles,
       TenantNotaryPartnershipRepository partnerships,
@@ -95,7 +93,6 @@ public class NotaryCrossTenantService {
       AppUserRepository users,
       BrevoProperties brevoProperties) {
     this.authorization = authorization;
-    this.accessGuard = accessGuard;
     this.tenants = tenants;
     this.profiles = profiles;
     this.partnerships = partnerships;
@@ -123,7 +120,6 @@ public class NotaryCrossTenantService {
       authorization.requirePermission("escrituracion:notaria:enviar");
     }
     UUID firmId = AuthContext.require().tenantId();
-    accessGuard.requireFirmContext(firmId);
     Set<UUID> assigned =
         assignments.findByTenantIdAndActiveTrueOrderByCreatedAtAsc(firmId).stream()
             .map(NotaryFirmAssignment::getNotaryTenantId)
@@ -184,7 +180,6 @@ public class NotaryCrossTenantService {
         partnerships
             .findById(partnershipId)
             .orElseThrow(() -> NotaryBusinessException.notFound("Vínculo no encontrado."));
-    accessGuard.requireNotaryContext(partnership.getNotaryTenantId());
     if (!partnership.getNotaryTenantId().equals(notaryId)) {
       throw NotaryBusinessException.forbidden("Solo la notaría destino puede aprobar el vínculo.");
     }
@@ -280,8 +275,10 @@ public class NotaryCrossTenantService {
   public NotaryDtos.RemisionDto getRemisionAndAcknowledge(UUID id) {
     NotaryRemision remision = remisionDeLaNotaria(id);
     authorization.requirePermission("notaria:remision:actuar");
-    remision.acknowledgeReceipt();
-    remisiones.save(remision);
+    if (remision.acknowledgeReceipt()) {
+      remisiones.save(remision);
+      audit(AuthContext.require().tenantId(), "NOTARY_REMISION_RECIBIDA", id);
+    }
     return toRemisionDto(remision);
   }
 
@@ -425,22 +422,12 @@ public class NotaryCrossTenantService {
   @Transactional(readOnly = true)
   public Optional<NotaryDtos.RemisionDto> ultimaRemisionForCase(UUID legalCaseId) {
     UUID firmId = AuthContext.require().tenantId();
-    accessGuard.requireFirmContext(firmId);
     legalCases
         .findByIdAndTenantIdAndDeletedAtIsNull(legalCaseId, firmId)
         .orElseThrow(() -> NotaryBusinessException.notFound("Expediente no encontrado."));
     exigirLecturaDelBufete();
     return remisiones
         .findFirstByFirmTenantIdAndFirmLegalCaseIdOrderByEmitidoEnDesc(firmId, legalCaseId)
-        .map(this::toRemisionDto);
-  }
-
-  @Transactional(readOnly = true)
-  public Optional<NotaryDtos.RemisionDto> remisionAbiertaForCase(UUID legalCaseId) {
-    UUID firmId = AuthContext.require().tenantId();
-    return remisiones
-        .findFirstByFirmTenantIdAndFirmLegalCaseIdAndEstadoNotInOrderByEmitidoEnDesc(
-            firmId, legalCaseId, TERMINAL_ESTADOS)
         .map(this::toRemisionDto);
   }
 
@@ -526,8 +513,9 @@ public class NotaryCrossTenantService {
     byte[] contratoDocx = contrato == null ? null : minutas.leerDocx(contrato);
     List<LegalDocument> docs =
         documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(caseId, firmId);
+    String acta = pickActaLabel(docs);
 
-    remision.vincularEnvio(writing.getId(), docs.size(), pickActaLabel(docs));
+    remision.vincularEnvio(writing.getId(), 0, acta);
     remisiones.saveAndFlush(remision);
 
     int versionNo =
@@ -547,7 +535,9 @@ public class NotaryCrossTenantService {
             observacionesBufete,
             AuthContext.require().userId(),
             minuta.getProductCode()));
-    saveDocumentSnapshots(remision, versionId, firmId, docs);
+    int snapshots = saveDocumentSnapshots(remision, versionId, firmId, docs);
+    remision.vincularEnvio(writing.getId(), snapshots, acta);
+    remisiones.save(remision);
   }
 
   /** Bufete dueño o notaría destino. Cualquier otro tenant no debe saber que existe: 404. */
@@ -662,7 +652,7 @@ public class NotaryCrossTenantService {
     documentStorage.borrarSiHayRollback(ruta);
   }
 
-  private void saveDocumentSnapshots(
+  private int saveDocumentSnapshots(
       NotaryRemision remision, UUID versionId, UUID firmId, List<LegalDocument> docs) {
     int order = 0;
     for (LegalDocument doc : docs) {
@@ -684,6 +674,7 @@ public class NotaryCrossTenantService {
               size > 0 ? size : null,
               status));
     }
+    return order;
   }
 
   private static String guessMime(String fileName) {

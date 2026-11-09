@@ -127,12 +127,15 @@ public class NotaryRemision implements Persistable<UUID> {
     this.isNew = false;
   }
 
-  public void acknowledgeReceipt() {
-    if (NotaryRemisionEstado.ENVIADO_A_NOTARIA.name().equals(estado)) {
-      estado = NotaryRemisionEstado.RECIBIDO.name();
-      recibidoEn = Instant.now();
-      touch();
+  /** @return true solo cuando el estado pasa de enviado a recibido. */
+  public boolean acknowledgeReceipt() {
+    if (!NotaryRemisionEstado.ENVIADO_A_NOTARIA.name().equals(estado)) {
+      return false;
     }
+    estado = NotaryRemisionEstado.RECIBIDO.name();
+    recibidoEn = Instant.now();
+    touch();
+    return true;
   }
 
   public void advanceStep() {
@@ -188,10 +191,6 @@ public class NotaryRemision implements Persistable<UUID> {
 
   public UUID getFirmLegalCaseId() {
     return firmLegalCaseId;
-  }
-
-  public UUID getFirmWritingFileId() {
-    return firmWritingFileId;
   }
 
   public String getExpedienteCodigo() {

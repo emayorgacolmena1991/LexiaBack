@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -13,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
 import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
@@ -322,6 +324,30 @@ class NotaryEscrituraServiceTest {
             id, new NotaryDtos.GenerarEscrituraBody(Map.of("fecha_otorgamiento", "   ")));
 
     assertThat(escritura.camposVacios()).contains("fecha_otorgamiento");
+  }
+
+  @Test
+  void generarSinActuarResponde403() {
+    UUID id = remisionCompleta();
+    doThrow(new AuthException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Sin permiso"))
+        .when(authorization)
+        .requirePermission("notaria:remision:actuar");
+
+    AuthException error =
+        assertThrows(AuthException.class, () -> service.generar(id, new NotaryDtos.GenerarEscrituraBody(Map.of())));
+
+    assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
+    verify(escrituras, never()).save(any());
+  }
+
+  @Test
+  void payloadIlegibleResponde409() {
+    UUID id = remision("{", PRODUCTO);
+
+    ApiException error = assertThrows(ApiException.class, () -> service.formulario(id));
+
+    assertEquals(HttpStatus.CONFLICT, error.getStatus());
+    assertEquals("Los datos de la minuta de esta versión no se pueden leer.", error.getMessage());
   }
 
   @Test

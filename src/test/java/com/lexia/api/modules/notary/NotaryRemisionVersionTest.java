@@ -5,10 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,6 +35,7 @@ import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepositor
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.identity.AppUser;
 import com.lexia.api.modules.identity.AppUserRepository;
+import com.lexia.api.modules.identity.AuditEvent;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import com.lexia.api.modules.notifications.BrevoProperties;
@@ -88,12 +91,14 @@ class NotaryRemisionVersionTest {
   private final List<NotaryRemisionDocument> documentosGuardados = new ArrayList<>();
   private final Map<UUID, NotaryRemision> remisionesGuardadas = new HashMap<>();
   private ExpedienteDocumentoStorage storage;
+  private AuditEventRepository auditoria;
   private NotaryCrossTenantService service;
 
   @BeforeEach
   void setUp() {
     AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), FIRMA, UUID.randomUUID()));
     storage = new ExpedienteDocumentoStorage(almacenamiento.toString());
+    auditoria = mock(AuditEventRepository.class);
 
     TenantNotaryPartnership vinculo = mock(TenantNotaryPartnership.class);
     when(vinculo.isActive()).thenReturn(true);
@@ -178,7 +183,6 @@ class NotaryRemisionVersionTest {
     service =
         new NotaryCrossTenantService(
             authorization,
-            mock(NotaryAccessGuard.class),
             tenants,
             perfiles,
             vinculos,
@@ -194,7 +198,7 @@ class NotaryRemisionVersionTest {
             documentosCaso,
             versionesDocumento,
             storage,
-            mock(AuditEventRepository.class),
+            auditoria,
             mock(EmailNotificationService.class),
             usuarios,
             mock(BrevoProperties.class));
@@ -608,6 +612,22 @@ class NotaryRemisionVersionTest {
     assertEquals(NotaryRemisionEstado.RECIBIDO.name(), remision.estado());
     assertThat(remision.recibidoEn()).isNotNull();
     verify(authorization).requirePermission("notaria:remision:actuar");
+  }
+
+  @Test
+  void recibirDosVecesSoloAuditaLaPrimera() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+
+    service.getRemisionAndAcknowledge(id);
+    service.getRemisionAndAcknowledge(id);
+
+    verify(auditoria, times(1)).save(argThat(this::esRecepcion));
+    assertEquals(NotaryRemisionEstado.RECIBIDO.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  private boolean esRecepcion(AuditEvent evento) {
+    return "NOTARY_REMISION_RECIBIDA".equals(evento.getEvent());
   }
 
   @Test

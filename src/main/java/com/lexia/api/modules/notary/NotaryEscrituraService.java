@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
@@ -285,7 +286,7 @@ public class NotaryEscrituraService {
     try {
       payload = mapper.readTree(version.getPayload() == null ? "" : version.getPayload());
     } catch (JsonProcessingException ex) {
-      throw new IllegalStateException("Payload ilegible en la versión " + version.getId(), ex);
+      throw payloadIlegible();
     }
     if (payload == null || !payload.isObject() || payload.isEmpty()) {
       throw NotaryBusinessException.conflict(VERSION_MIGRADA);
@@ -294,7 +295,7 @@ public class NotaryEscrituraService {
     try {
       data = mapper.treeToValue(payload, MinutaViviendaData.class);
     } catch (JsonProcessingException ex) {
-      throw new IllegalStateException("Payload ilegible en la versión " + version.getId(), ex);
+      throw payloadIlegible();
     }
     Map<String, Object> base = new LinkedHashMap<>();
     data.toTemplateMap()
@@ -323,6 +324,11 @@ public class NotaryEscrituraService {
 
   private static String textoOVacio(String valor) {
     return valor == null ? "" : valor.trim();
+  }
+
+  private static ApiException payloadIlegible() {
+    return NotaryBusinessException.conflict(
+        "Los datos de la minuta de esta versión no se pueden leer.");
   }
 
   /** La notaría solo llena lo que falta: corregir al bufete es devolver la remisión. */

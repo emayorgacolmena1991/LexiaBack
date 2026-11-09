@@ -3,6 +3,7 @@ package com.lexia.api.modules.notary;
 import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ContentDisposition;
@@ -201,6 +202,7 @@ public class NotaryController {
     return notary.leerPayloadVersion(id, numero);
   }
 
+<<<<<<< HEAD
   private ResponseEntity<byte[]> pdfPreview(
       NotaryDtos.RemisionDocumentContent content, String fileName) {
     byte[] bytes = pdf.toPdf(content.bytes());
@@ -211,6 +213,11 @@ public class NotaryController {
         .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
         .body(bytes);
   }
+=======
+  private static final MediaType DOCX =
+      MediaType.parseMediaType(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+>>>>>>> 28a3b99 (Chore: endspoints)
 
   private static ResponseEntity<byte[]> archivo(NotaryDtos.RemisionDocumentContent content) {
     MediaType mediaType;
@@ -219,16 +226,26 @@ public class NotaryController {
     } catch (Exception ex) {
       mediaType = MediaType.APPLICATION_OCTET_STREAM;
     }
+    String nombre = content.fileName() == null || content.fileName().isBlank()
+        ? "archivo"
+        : content.fileName();
     ContentDisposition disposition =
-        ContentDisposition.inline()
-            .filename(content.fileName(), StandardCharsets.UTF_8)
+        (esDocx(nombre, mediaType) ? ContentDisposition.attachment() : ContentDisposition.inline())
+            .filename(nombre, StandardCharsets.UTF_8)
             .build();
     return ResponseEntity.ok()
         .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+        .header(HttpHeaders.CACHE_CONTROL, "no-store")
         .contentType(mediaType)
         .body(content.bytes());
   }
 
+<<<<<<< HEAD
+=======
+  private static boolean esDocx(String fileName, MediaType mediaType) {
+    return fileName.toLowerCase(Locale.ROOT).endsWith(".docx") || DOCX.isCompatibleWith(mediaType);
+  }
+>>>>>>> 28a3b99 (Chore: endspoints)
 
   @PostMapping("/remisiones/{id}/recibir")
   public NotaryDtos.RemisionDto recibir(@PathVariable UUID id) {
