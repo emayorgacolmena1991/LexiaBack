@@ -36,6 +36,8 @@ class NotaryRemisionVersionMigrationIT {
   private static final String NOTARIA = "b1000000-0000-7000-8000-000000000002";
   private static final UUID CON_DOCUMENTOS = UUID.randomUUID();
   private static final UUID SIN_DOCUMENTOS = UUID.randomUUID();
+  /** Remisión enviada con la fase 1 ya aplicada: su versión apunta a un borrador real. */
+  private static final UUID CON_BORRADOR = UUID.randomUUID();
 
   private EmbeddedPostgres postgres;
   private String url;
@@ -64,6 +66,58 @@ class NotaryRemisionVersionMigrationIT {
       sembrarDocumento(db, CON_DOCUMENTOS, 1);
     }
     flyway(NUEVA).migrate();
+    try (Connection db = conectar()) {
+      sembrarVersionConBorrador(db);
+    }
+    flyway("latest").migrate();
+  }
+
+  /** Expediente, ficha y borrador del bufete; luego una versión que lo referencia. */
+  private static void sembrarVersionConBorrador(Connection db) throws SQLException {
+    UUID caso = UUID.randomUUID();
+    UUID ficha = UUID.randomUUID();
+    UUID borrador = UUID.randomUUID();
+    ejecutar(
+        db,
+        """
+        INSERT INTO app.legal_case (id, tenant_id, code, case_type, vertical, subject)
+        VALUES (?, ?::uuid, 'LEX-IT-V96', 'EJD', 'ESCRITURACION', 'Compraventa')
+        """,
+        caso,
+        BUFETE);
+    ejecutar(
+        db,
+        "INSERT INTO app.writing_file (id, tenant_id, case_id) VALUES (?, ?::uuid, ?)",
+        ficha,
+        BUFETE,
+        caso);
+    ejecutar(
+        db,
+        """
+        INSERT INTO app.minuta_draft (id, tenant_id, writing_file_id, status, template_kind, product_code)
+        VALUES (?, ?::uuid, ?, 'DRAFT_GENERATED', 'MINUTA_COMPRAVENTA', 'VIV_HIPOTECADA_BIESS')
+        """,
+        borrador,
+        BUFETE,
+        ficha);
+    sembrarRemision(db, CON_BORRADOR);
+    ejecutar(
+        db,
+        """
+        INSERT INTO control.notary_remision_version (remision_id, version_no, payload, minuta_draft_id)
+        VALUES (?, 1, '{"nombre_vendedor":"ACME"}'::jsonb, ?)
+        """,
+        CON_BORRADOR,
+        borrador);
+  }
+
+  private static void ejecutar(Connection db, String sql, Object... parametros) throws SQLException {
+    try (PreparedStatement ps = db.prepareStatement(sql)) {
+      for (int i = 0; i < parametros.length; i++) {
+        ps.setObject(i + 1, parametros[i]);
+      }
+      ps.executeUpdate();
+    }
   }
 
   @AfterAll
@@ -163,9 +217,80 @@ class NotaryRemisionVersionMigrationIT {
 
   @Test
   void aplicoLaMigracionNueva() throws Exception {
-    try (Connection db = conectar()) {
-      assertEquals(NUEVA, versionAplicada(db));
+    assertEquals(
+        1,
+        contar(
+            "SELECT count(*) FROM public.flyway_schema_history WHERE version = ? AND success",
+            NUEVA));
+  }
+
+  @Test
+  void v96CopiaElProductoDelBorradorDeLaVersion() throws Exception {
+    assertEquals(
+        1,
+        contar(
+            """
+            SELECT count(*) FROM control.notary_remision_version
+            WHERE remision_id = ? AND product_code = 'VIV_HIPOTECADA_BIESS'
+            """,
+            CON_BORRADOR));
+  }
+
+  @Test
+  void v96DejaSinProductoLaVersionMigradaSinBorrador() throws Exception {
+    assertEquals(
+        2,
+        contar(
+            """
+            SELECT count(*) FROM control.notary_remision_version
+            WHERE remision_id IN (?, ?) AND minuta_draft_id IS NULL AND product_code IS NULL
+            """,
+            CON_DOCUMENTOS,
+            SIN_DOCUMENTOS));
+  }
+
+  @Test
+  void escrituraSoloAdmiteSelectEInsert() throws Exception {
+    try (Connection db = conectar();
+        PreparedStatement ps =
+            db.prepareStatement("SELECT has_table_privilege(?, 'control.notary_escritura', ?)")) {
+      for (String[] caso :
+          new String[][] {
+            {"lexia_app", "SELECT", "true"},
+            {"lexia_app", "INSERT", "true"},
+            {"lexia_app", "UPDATE", "false"},
+            {"lexia_app", "DELETE", "false"},
+            {"lexia_readonly", "SELECT", "true"},
+            {"lexia_readonly", "INSERT", "false"}
+          }) {
+        ps.setString(1, caso[0]);
+        ps.setString(2, caso[1]);
+        try (ResultSet rs = ps.executeQuery()) {
+          rs.next();
+          assertEquals(Boolean.parseBoolean(caso[2]), rs.getBoolean(1), caso[0] + " " + caso[1]);
+        }
+      }
     }
+  }
+
+  @Test
+  void escrituraExigeUnaVersionExistente() {
+    SQLException error =
+        assertThrows(
+            SQLException.class,
+            () -> {
+              try (Connection db = conectar()) {
+                ejecutar(
+                    db,
+                    """
+                    INSERT INTO control.notary_escritura
+                        (remision_id, version_no, datos_formulario, campos_vacios, storage_ref, file_name)
+                    VALUES (?, 9, '{}'::jsonb, '[]'::jsonb, '/x.docx', 'x.docx')
+                    """,
+                    CON_DOCUMENTOS);
+              }
+            });
+    assertEquals("23503", error.getSQLState());
   }
 
   @Test
@@ -268,6 +393,7 @@ class NotaryRemisionVersionMigrationIT {
         .addAnnotatedClass(NotaryRemision.class)
         .addAnnotatedClass(NotaryRemisionVersion.class)
         .addAnnotatedClass(NotaryRemisionDocument.class)
+        .addAnnotatedClass(NotaryEscritura.class)
         .buildMetadata()
         .buildSessionFactory();
   }
@@ -324,7 +450,8 @@ class NotaryRemisionVersionMigrationIT {
                       new NotaryRemisionVersion.Archivo(UUID.randomUUID(), "/ruta/m.docx", "m.docx"),
                       null,
                       null,
-                      null)));
+                      null,
+                      "VIV_HIPOTECADA_BIESS")));
     }
     assertEquals(
         1,

@@ -86,4 +86,18 @@ public final class NotaryDtos {
   public record AdvanceRemisionBody(String observacionesNotaria) {}
 
   public record DevolverRemisionBody(String observacionesNotaria) {}
+
+  public record CampoFormularioDto(String clave, String etiqueta, String valor, String origen) {}
+
+  public record EscrituraFormularioDto(int versionNo, List<CampoFormularioDto> campos) {}
+
+  public record GenerarEscrituraBody(java.util.Map<String, String> valores) {}
+
+  public record EscrituraDto(
+      UUID id,
+      int versionNo,
+      String fileName,
+      Instant generatedAt,
+      String generatedBy,
+      List<String> camposVacios) {}
 }

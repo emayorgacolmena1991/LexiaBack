@@ -36,8 +36,6 @@ import java.util.stream.Collectors;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -547,7 +545,8 @@ public class NotaryCrossTenantService {
             copiarDocx(firmId, caseId, versionId, minuta, minutaDocx),
             contrato == null ? null : copiarDocx(firmId, caseId, versionId, contrato, contratoDocx),
             observacionesBufete,
-            AuthContext.require().userId()));
+            AuthContext.require().userId(),
+            minuta.getProductCode()));
     saveDocumentSnapshots(remision, versionId, firmId, docs);
   }
 
@@ -576,15 +575,11 @@ public class NotaryCrossTenantService {
 
   /** Solo la notaría destino: para cualquier otro tenant, incluido el bufete, no existe. */
   private NotaryRemision remisionDeLaNotaria(UUID id) {
-    UUID tenantId = AuthContext.require().tenantId();
-    return remisionVisible(id, remision -> tenantId.equals(remision.getNotaryTenantId()));
+    return RemisionesVisibles.deLaNotaria(remisiones, id);
   }
 
   private NotaryRemision remisionVisible(UUID id, Predicate<NotaryRemision> visible) {
-    return remisiones
-        .findById(id)
-        .filter(visible)
-        .orElseThrow(() -> NotaryBusinessException.notFound("Remisión no encontrada."));
+    return RemisionesVisibles.visible(remisiones, id, visible);
   }
 
   private NotaryRemisionVersion versionLegible(UUID id, int numero) {
@@ -664,18 +659,7 @@ public class NotaryCrossTenantService {
   }
 
   private void borrarSiHayRollback(String ruta) {
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      return;
-    }
-    TransactionSynchronizationManager.registerSynchronization(
-        new TransactionSynchronization() {
-          @Override
-          public void afterCompletion(int status) {
-            if (status == STATUS_ROLLED_BACK) {
-              documentStorage.delete(ruta);
-            }
-          }
-        });
+    documentStorage.borrarSiHayRollback(ruta);
   }
 
   private void saveDocumentSnapshots(

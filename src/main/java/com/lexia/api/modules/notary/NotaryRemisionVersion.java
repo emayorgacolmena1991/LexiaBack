@@ -49,6 +49,9 @@ public class NotaryRemisionVersion {
   @Column(name = "contrato_file_name", length = 500)
   private String contratoFileName;
 
+  @Column(name = "product_code", length = 64)
+  private String productCode;
+
   @Column(name = "observaciones_bufete")
   private String observacionesBufete;
 
@@ -72,7 +75,8 @@ public class NotaryRemisionVersion {
       Archivo minuta,
       Archivo contrato,
       String observacionesBufete,
-      UUID createdBy) {
+      UUID createdBy,
+      String productCode) {
     NotaryRemisionVersion v = new NotaryRemisionVersion();
     v.id = id;
     v.remisionId = remisionId;
@@ -88,6 +92,7 @@ public class NotaryRemisionVersion {
     }
     v.observacionesBufete = observacionesBufete;
     v.createdBy = createdBy;
+    v.productCode = productCode;
     v.createdAt = Instant.now();
     return v;
   }
@@ -130,6 +135,11 @@ public class NotaryRemisionVersion {
 
   public String getContratoFileName() {
     return contratoFileName;
+  }
+
+  /** Producto del borrador al enviar: la notaría no puede leer las tablas del bufete. */
+  public String getProductCode() {
+    return productCode;
   }
 
   public String getObservacionesBufete() {

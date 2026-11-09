@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Bytes de escrituración en disco. La fila vive en {@code document_version.storage_key}. */
 @Component
@@ -64,6 +66,22 @@ public class ExpedienteDocumentoStorage {
       throw new ApiException(
           HttpStatus.INTERNAL_SERVER_ERROR, "DOC_STORAGE_ERROR", "No se pudo leer el archivo.");
     }
+  }
+
+  /** Borra el archivo si la transacción en curso hace rollback; sin transacción no hace nada. */
+  public void borrarSiHayRollback(String storageKey) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCompletion(int status) {
+            if (status == STATUS_ROLLED_BACK) {
+              delete(storageKey);
+            }
+          }
+        });
   }
 
   /** Limpieza tras un rollback: un fallo aquí no puede cambiar el resultado de la operación. */

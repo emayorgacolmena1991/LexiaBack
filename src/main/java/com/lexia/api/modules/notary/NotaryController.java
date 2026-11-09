@@ -28,10 +28,35 @@ public class NotaryController {
 
   private final NotaryCrossTenantService notary;
   private final NotaryLogoService logos;
+  private final NotaryEscrituraService escrituras;
 
-  public NotaryController(NotaryCrossTenantService notary, NotaryLogoService logos) {
+  public NotaryController(
+      NotaryCrossTenantService notary, NotaryLogoService logos, NotaryEscrituraService escrituras) {
     this.notary = notary;
     this.logos = logos;
+    this.escrituras = escrituras;
+  }
+
+  @GetMapping("/remisiones/{id}/escritura/formulario")
+  public NotaryDtos.EscrituraFormularioDto formularioEscritura(@PathVariable UUID id) {
+    return escrituras.formulario(id);
+  }
+
+  @PostMapping("/remisiones/{id}/escritura")
+  public NotaryDtos.EscrituraDto generarEscritura(
+      @PathVariable UUID id, @RequestBody(required = false) NotaryDtos.GenerarEscrituraBody body) {
+    return escrituras.generar(id, body);
+  }
+
+  @GetMapping("/remisiones/{id}/escrituras")
+  public List<NotaryDtos.EscrituraDto> historialEscrituras(@PathVariable UUID id) {
+    return escrituras.historial(id);
+  }
+
+  @GetMapping("/remisiones/{id}/escrituras/{escrituraId}/archivo")
+  public ResponseEntity<byte[]> archivoEscritura(
+      @PathVariable UUID id, @PathVariable UUID escrituraId) {
+    return archivo(escrituras.archivo(id, escrituraId));
   }
 
   @PutMapping(value = "/perfil/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

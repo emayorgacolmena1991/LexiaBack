@@ -724,6 +724,7 @@ class NotaryRemisionVersionTest {
             new NotaryRemisionVersion.Archivo(null, null, null),
             null,
             null,
+            null,
             null));
 
     assertEstado(
