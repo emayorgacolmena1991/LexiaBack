@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.coactivas.expediente;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -63,6 +64,7 @@ class CoactivaExpedienteContenidoTest {
 
     assertEquals("original.pdf", contenido.nombre());
     assertArrayEquals(new byte[] {1, 2, 3}, contenido.bytes());
+    assertFalse(contenido.originalFaltante());
     verify(archivos, never())
         .findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(TENANT, EXPEDIENTE);
   }
@@ -83,6 +85,7 @@ class CoactivaExpedienteContenidoTest {
     assertEquals("unificado.pdf", contenido.nombre());
     assertEquals("application/pdf", contenido.mimeType());
     assertArrayEquals(new byte[] {'%', 'P', 'D', 'F'}, contenido.bytes());
+    assertTrue(contenido.originalFaltante());
     verify(storage, never()).read(original);
   }
 
@@ -99,10 +102,32 @@ class CoactivaExpedienteContenidoTest {
     String pdf = new String(contenido.bytes(), StandardCharsets.US_ASCII);
     assertEquals("expediente-no-disponible.pdf", contenido.nombre());
     assertEquals("application/pdf", contenido.mimeType());
+    assertTrue(contenido.originalFaltante());
     assertTrue(pdf.startsWith("%PDF-1.4\n"));
     assertTrue(pdf.contains("El archivo original no esta en el servidor."));
     assertTrue(pdf.contains("startxref\n"));
     verify(storage, never()).read(original);
+  }
+
+  /** P1 #3: sin UNIFICADO en disco, el hermano ESCANEADO debe servir el PDF (no el aviso). */
+  @Test
+  void sinUnificadoDevuelveEscaneadoEnDisco() {
+    CoactivaArchivo pedido = archivo(CoactivaArchivo.EXPEDIENTE_UNIFICADO, "unificado.pdf");
+    CoactivaArchivo escaneado = archivo(CoactivaArchivo.EXPEDIENTE_ESCANEADO, "escaneado.pdf");
+    when(archivos.findByIdAndTenantIdAndDeletedAtIsNull(pedido.getId(), TENANT)).thenReturn(Optional.of(pedido));
+    when(storage.disponible(pedido)).thenReturn(false);
+    when(archivos.findByTenantIdAndExpedienteIdAndDeletedAtIsNullOrderByCreatedAtDesc(TENANT, EXPEDIENTE))
+        .thenReturn(List.of(escaneado));
+    when(storage.disponible(escaneado)).thenReturn(true);
+    when(storage.read(escaneado)).thenReturn(new byte[] {'%', 'P', 'D', 'F', '-', 'E'});
+
+    ArchivoContenido contenido = service.contenido(pedido.getId());
+
+    assertEquals("escaneado.pdf", contenido.nombre());
+    assertEquals(escaneado.getId(), contenido.archivoIdReal());
+    assertTrue(contenido.originalFaltante());
+    assertArrayEquals(new byte[] {'%', 'P', 'D', 'F', '-', 'E'}, contenido.bytes());
+    verify(storage, never()).read(pedido);
   }
 
   private static CoactivaArchivo archivo(String tipo, String nombre) {

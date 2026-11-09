@@ -170,6 +170,9 @@ public class ExpedienteEstadoService {
               .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(file.getId(), tenantId)
               .isPresent();
     }
+    boolean hasProducto =
+        StringUtils.hasText(legalCase.getProductCode())
+            || (file != null && StringUtils.hasText(file.getProductCode()));
     DatosBiessMinuta biess = datosBiess.cargar(caseId, tenantId);
     if (biess == null) {
       biess = DatosBiessMinuta.empty();
@@ -181,7 +184,7 @@ public class ExpedienteEstadoService {
         etapa,
         etapaCodigo,
         etapaIndex,
-        wizardStep(etapaCodigo, etapaIndex, hasDraft, hasEstudio, hasDatos),
+        wizardStep(etapaCodigo, etapaIndex, hasDraft, hasEstudio, hasDatos, hasProducto),
         escrituracionId,
         biess,
         hasDraft,
@@ -218,7 +221,12 @@ public class ExpedienteEstadoService {
   }
 
   static int wizardStep(
-      String stageCode, int etapaIndex, boolean hasDraft, boolean hasEstudio, boolean hasDatos) {
+      String stageCode,
+      int etapaIndex,
+      boolean hasDraft,
+      boolean hasEstudio,
+      boolean hasDatos,
+      boolean hasProducto) {
     if (hasDraft || etapaIndex >= 4) {
       return 5;
     }
@@ -229,7 +237,7 @@ public class ExpedienteEstadoService {
     if (etapaIndex == 2 || "e2".equals(code)) {
       return 3;
     }
-    return 2;
+    return hasProducto ? 2 : 1;
   }
 
   private static boolean hasDatos(DatosExtraidos extraidos) {
@@ -249,6 +257,9 @@ public class ExpedienteEstadoService {
       case "DRAFT" -> "En trámite";
       case "CLOSED" -> "Cerrado";
       case "IN_REVIEW", "REVIEW" -> "En revisión";
+      case "WITH_OBSERVATION" -> "Con observación";
+      case "PENDING" -> "Pendiente";
+      case "EXCEPTION" -> "Con excepción";
       default -> status;
     };
   }

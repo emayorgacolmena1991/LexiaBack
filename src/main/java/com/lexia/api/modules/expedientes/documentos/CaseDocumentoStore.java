@@ -106,15 +106,19 @@ public class CaseDocumentoStore {
 
   @Transactional
   public DocumentoCargadoDTO subir(CaseFileContext ctx, String original, String mime, byte[] bytes) {
-    if (ctx.ingestionMode().isFisicoEscaneado()
-        && !documents
-            .findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
-                ctx.caseId(), ctx.tenantId())
-            .isEmpty()) {
-      throw ApiException.badRequest("En modo físico escaneado solo se admite un PDF.");
-    }
     String tipo =
         ctx.ingestionMode().isFisicoEscaneado() ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO : null;
+    // Físico = un solo PDF: si ya hay, reemplaza (regularización / re-carga).
+    if (ctx.ingestionMode().isFisicoEscaneado()) {
+      List<LegalDocument> existentes =
+          documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+              ctx.caseId(), ctx.tenantId());
+      if (!existentes.isEmpty()) {
+        return reemplazar(
+                ctx, existentes.get(0).getId().toString(), original, mime, bytes, tipo)
+            .toDto();
+      }
+    }
     LegalDocument doc = LegalDocument.create(ctx.tenantId(), ctx.caseId(), original, tipo);
     ExpedienteDocumentoStorage.Stored stored =
         storage.write(ctx.tenantId(), ctx.caseId(), doc.getId(), original, bytes);
@@ -147,6 +151,9 @@ public class CaseDocumentoStore {
     ocrRows
         .findByIdExpedienteAndIdDocumento(ctx.caseId().toString(), doc.getId().toString())
         .ifPresent(ocrRows::delete);
+    seguimiento.ifAvailable(
+        service ->
+            service.documentoEliminado(ctx.caseId(), ctx.tenantId(), doc.getId(), doc.getName()));
   }
 
   @Transactional(readOnly = true)

@@ -50,6 +50,12 @@ class EjdValidationEvaluationServiceTest {
   @Mock private ExtractedDataRepository extractedData;
   @Mock private EjdRuleBodyParser ruleBodyParser;
   @Mock private LexiaRulesEngine rulesEngine;
+  @Mock private com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository writingFiles;
+  @Mock private com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository titleStudies;
+
+  @Mock
+  private com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository
+      titleObservations;
 
   @InjectMocks private EjdValidationEvaluationService evaluationService;
 

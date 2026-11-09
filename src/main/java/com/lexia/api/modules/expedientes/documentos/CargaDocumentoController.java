@@ -10,8 +10,16 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Prevalida
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
+import com.lexia.api.modules.identity.AuthorizationService;
 import jakarta.validation.Valid;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,13 +43,24 @@ import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
 @RequestMapping("/api/v1/expedientes")
 public class CargaDocumentoController {
 
+  private static final String PERMISO_LECTURA = "expedientes:caso:leer";
+  private static final String PERMISO_ESCRITURA = "expedientes:caso:escribir";
+
+  /** El MIME lo declara el cliente: fuera de estos tipos no se sirve tal cual (evita HTML activo). */
+  private static final Set<String> TIPOS_VISIBLES =
+      Set.of("application/pdf", "image/jpeg", "image/png", "image/tiff");
+
   private final CargaDocumentoService cargaDocumentoService;
   private final ValidacionIaService validacionIaService;
+  private final ObjectProvider<AuthorizationService> authorization;
 
   public CargaDocumentoController(
-      CargaDocumentoService cargaDocumentoService, ValidacionIaService validacionIaService) {
+      CargaDocumentoService cargaDocumentoService,
+      ValidacionIaService validacionIaService,
+      ObjectProvider<AuthorizationService> authorization) {
     this.cargaDocumentoService = cargaDocumentoService;
     this.validacionIaService = validacionIaService;
+    this.authorization = authorization;
   }
 
   @PostMapping("/borrador")
@@ -65,8 +84,32 @@ public class CargaDocumentoController {
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public ResponseEntity<DocumentoCargadoDTO> subir(
       @PathVariable String idExpediente, @RequestParam("file") MultipartFile file) {
+    requirePermission(PERMISO_ESCRITURA);
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(cargaDocumentoService.subir(idExpediente, file));
+  }
+
+  /** Última versión del archivo; el tenant y el expediente se validan al resolver el documento. */
+  @GetMapping("/{idExpediente}/documentos/{idDocumento}/contenido")
+  public ResponseEntity<byte[]> contenido(
+      @PathVariable String idExpediente, @PathVariable String idDocumento) {
+    requirePermission(PERMISO_LECTURA);
+    StoredDoc doc = cargaDocumentoService.requireStoredDoc(idExpediente, idDocumento);
+    ContentDisposition disposition =
+        ContentDisposition.attachment()
+            .filename(doc.nombreOriginal(), StandardCharsets.UTF_8)
+            .build();
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+        .contentType(tipoSeguro(doc.mimeType()))
+        .body(doc.bytes());
+  }
+
+  static MediaType tipoSeguro(String mime) {
+    String normalizado = mime == null ? "" : mime.trim().toLowerCase(Locale.ROOT);
+    return TIPOS_VISIBLES.contains(normalizado)
+        ? MediaType.parseMediaType(normalizado)
+        : MediaType.APPLICATION_OCTET_STREAM;
   }
 
   @PatchMapping("/{idExpediente}/documentos/{idDocumento}/tipo")
@@ -74,13 +117,20 @@ public class CargaDocumentoController {
       @PathVariable String idExpediente,
       @PathVariable String idDocumento,
       @Valid @RequestBody ActualizarTipoRequest body) {
+    requirePermission(PERMISO_ESCRITURA);
     return cargaDocumentoService.actualizarTipo(idExpediente, idDocumento, body);
   }
 
   @DeleteMapping("/{idExpediente}/documentos/{idDocumento}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void eliminar(@PathVariable String idExpediente, @PathVariable String idDocumento) {
+    requirePermission(PERMISO_ESCRITURA);
     cargaDocumentoService.eliminar(idExpediente, idDocumento);
+  }
+
+  /** AuthorizationService solo existe con lexia.auth.enabled=true. */
+  private void requirePermission(String permiso) {
+    authorization.ifAvailable(service -> service.requirePermission(permiso));
   }
 
   @PostMapping("/{idExpediente}/iniciar-procesamiento")

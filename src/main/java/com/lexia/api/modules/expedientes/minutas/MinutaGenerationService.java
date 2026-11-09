@@ -207,12 +207,7 @@ public class MinutaGenerationService {
 
     byte[] docx =
         renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft, data);
-    draft.setDatosExtraidos(json(base));
-    draft.setOverrides(variablesService.escribirOverrides(overrides));
-    draft.markGenerated(stored.toString());
-    minutaDrafts.save(draft);
+    guardarRender(draft, descriptor, docx, base, data, overrides);
 
     VariablesConsolidadas consolidadas = variablesService.consolidar(descriptor, data);
     byte[] pdfBytes = pdf.toPdf(docx);
@@ -236,6 +231,22 @@ public class MinutaGenerationService {
   }
 
   public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
+
+  /** El payload del borrador es el dato renderizado; {@code base} y overrides conservan sus capas. */
+  private void guardarRender(
+      MinutaDraft draft,
+      MinutaTemplateDescriptor descriptor,
+      byte[] docx,
+      MinutaViviendaData base,
+      MinutaViviendaData data,
+      Map<String, String> overrides) {
+    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    persistData(draft, data);
+    draft.setDatosExtraidos(json(base));
+    draft.setOverrides(variablesService.escribirOverrides(overrides));
+    draft.markGenerated(stored.toString());
+    minutaDrafts.save(draft);
+  }
 
   /**
    * Render desde la plantilla con el JSON final; si el DOCX trae ediciones manuales (flujo
@@ -383,7 +394,7 @@ public class MinutaGenerationService {
     }
 
     MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
-    MinutaViviendaData data =
+    MinutaViviendaData base =
         datosBase(
             tenantId,
             caseId,
@@ -391,15 +402,18 @@ public class MinutaGenerationService {
             request == null ? null : request.sessionId(),
             product,
             kind);
+    MinutaDraft anterior = ultimoDraft(file, tenantId, kind);
+    Map<String, String> overrides =
+        variablesService.leerOverrides(anterior == null ? null : anterior.getOverrides());
+    MinutaViviendaData data =
+        variablesService.fusionar(base, datosBiess.cargar(caseId, tenantId), overrides);
     validarCriticos(descriptor, data, caseId);
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
-    persistData(draft, data);
-    draft.markGenerated(stored.toString());
-    minutaDrafts.save(draft);
-    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(data));
+    guardarRender(draft, descriptor, docx, base, data, overrides);
+    // Los overrides no entran a la tienda BIESS: solo guarda la captura.
+    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(base));
 
     List<String> pendientes = pendientes(descriptor, data);
     LOG.info(
@@ -647,7 +661,11 @@ public class MinutaGenerationService {
         toItem(draft, pendientes), draft.isEditedManually(), contenido.leer(docx));
   }
 
-  private byte[] leerDocx(MinutaDraft draft) {
+  /** Bytes del .docx. Solo sirve borradores del tenant de la sesión. */
+  public byte[] leerDocx(MinutaDraft draft) {
+    if (draft == null || !AuthContext.require().tenantId().equals(draft.getTenantId())) {
+      throw ApiException.notFound("Minuta no encontrada.");
+    }
     if (!StringUtils.hasText(draft.getStoragePath())) {
       throw ApiException.badRequest("La minuta aún no tiene archivo generado.");
     }
@@ -714,8 +732,8 @@ public class MinutaGenerationService {
   }
 
   /**
-   * Solo los críticos del descriptor bloquean (422); el resto de tags vacíos se genera como nodata y
-   * se devuelve en camposPendientes.
+   * Criticos del descriptor: por ahora solo se registran; no bloquean la generación (quedan como
+   * nodata / camposPendientes en la respuesta).
    */
   private static void validarCriticos(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data, UUID caseId) {
@@ -724,18 +742,14 @@ public class MinutaGenerationService {
         descriptor.requiredFields().stream()
             .filter(campo -> MinutaViviendaData.isMissing(map.get(campo)))
             .toList();
+    // ponytail: techo = permite DOCX con huecos; volver a 422 MINUTA_DATOS_FALTANTES cuando el flujo
+    // de captura BIESS/OCR esté estable.
     if (!faltantes.isEmpty()) {
       LOG.warn(
-          "Minuta case={} kind={} no generada, faltan críticos: {}",
+          "Minuta case={} kind={} generada con críticos faltantes: {}",
           caseId,
           descriptor.templateKind(),
           faltantes);
-      throw new ApiException(
-          HttpStatus.UNPROCESSABLE_ENTITY,
-          "MINUTA_DATOS_FALTANTES",
-          "No se generó el documento: faltan datos obligatorios en el expediente: "
-              + String.join("; ", faltantes.stream().map(MinutaViviendaData::etiqueta).toList())
-              + ".");
     }
   }
 

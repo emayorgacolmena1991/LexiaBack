@@ -24,6 +24,10 @@ import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.documentos.IngestionMode;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservation;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import com.lexia.api.modules.expedientes.documentos.LegalDocumentRepository;
 import com.lexia.api.modules.expedientes.reglas.LexiaRulesEngine;
@@ -54,6 +58,9 @@ public class EjdValidationEvaluationService {
   private final ExtractedDataRepository extractedData;
   private final EjdRuleBodyParser ruleBodyParser;
   private final LexiaRulesEngine rulesEngine;
+  private final WritingFileRepository writingFiles;
+  private final TitleStudyRepository titleStudies;
+  private final TitleObservationRepository titleObservations;
 
   public EjdValidationEvaluationService(
       ValidationDefRepository validationDefs,
@@ -66,7 +73,10 @@ public class EjdValidationEvaluationService {
       DocumentVersionRepository documentVersions,
       ExtractedDataRepository extractedData,
       EjdRuleBodyParser ruleBodyParser,
-      LexiaRulesEngine rulesEngine) {
+      LexiaRulesEngine rulesEngine,
+      WritingFileRepository writingFiles,
+      TitleStudyRepository titleStudies,
+      TitleObservationRepository titleObservations) {
     this.validationDefs = validationDefs;
     this.ruleDefs = ruleDefs;
     this.caseValidations = caseValidations;
@@ -78,6 +88,9 @@ public class EjdValidationEvaluationService {
     this.extractedData = extractedData;
     this.ruleBodyParser = ruleBodyParser;
     this.rulesEngine = rulesEngine;
+    this.writingFiles = writingFiles;
+    this.titleStudies = titleStudies;
+    this.titleObservations = titleObservations;
   }
 
   @Transactional
@@ -137,10 +150,34 @@ public class EjdValidationEvaluationService {
         case RULE_V5 ->
             applyOutcome(
                 validation, rule, rulesEngine.evaluateCrossDocument(extractedRows, rule, parsed));
-        case RULE_V6 -> applyOutcome(validation, rule, rulesEngine.evaluateHumanLegalReview(rule));
+        case RULE_V6 ->
+            applyOutcome(
+                validation,
+                rule,
+                rulesEngine.evaluateHumanLegalReview(rule, observacionesIa(legalCase)));
         default -> {}
       }
     }
+  }
+
+  /** null si aún no hay estudio de título. */
+  private List<String> observacionesIa(LegalCase legalCase) {
+    UUID tenantId = legalCase.getTenantId();
+    return writingFiles
+        .findByCaseIdAndTenantIdAndDeletedAtIsNull(legalCase.getId(), tenantId)
+        .flatMap(
+            file ->
+                titleStudies.findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(
+                    file.getId(), tenantId))
+        .map(
+            study ->
+                titleObservations
+                    .findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(study.getId(), tenantId)
+                    .stream()
+                    .filter(row -> "OPEN".equals(row.getStatus()))
+                    .map(TitleObservation::getDetail)
+                    .toList())
+        .orElse(null);
   }
 
   private void applyOutcome(
@@ -168,7 +205,7 @@ public class EjdValidationEvaluationService {
     if (scopeLabel == null || scopeLabel.isBlank()) {
       validation.applyEvaluation(
           "PENDING",
-          "Sin producto BIESS ni tipo de operación; no se puede evaluar presencia documental.",
+          "El expediente no tiene producto BIESS ni tipo de operación: no se sabe qué documentos exigir.",
           "v" + rule.getVersion());
       caseValidations.save(validation);
       return;
@@ -177,7 +214,7 @@ public class EjdValidationEvaluationService {
     if (required.isEmpty()) {
       validation.applyEvaluation(
           "OBSERVATION",
-          "No hay documentos requeridos configurados para " + scopeLabel + ".",
+          "No hay documentos requeridos configurados para " + scopeLabel + "; revise la parametrización.",
           "v" + rule.getVersion());
       caseValidations.save(validation);
       return;
@@ -200,15 +237,44 @@ public class EjdValidationEvaluationService {
     if (missing.isEmpty()) {
       validation.applyEvaluation(
           "PASS",
-          "Documentación requerida presente para " + scopeLabel + ".",
+          "Están cargados los " + required.size() + " documentos requeridos.",
           "v" + rule.getVersion());
     } else {
       validation.applyEvaluation(
           "FAIL",
-          "Faltan documentos para " + scopeLabel + ": " + String.join(", ", missing),
+          "Falta cargar: " + String.join(", ", nombresDocumento(legalCase, missing)) + ".",
           "v" + rule.getVersion());
     }
     caseValidations.save(validation);
+  }
+
+  /** Descripción del requisito del producto; si no existe, el código en texto legible. */
+  private List<String> nombresDocumento(LegalCase legalCase, List<String> codigos) {
+    Map<String, DocumentRequirement> requisitos = requisitosProducto(legalCase);
+    return codigos.stream()
+        .map(
+            codigo -> {
+              DocumentRequirement requisito = requisitos.get(codigo.trim().toUpperCase(Locale.ROOT));
+              return requisito != null && requisito.getDescription() != null
+                  ? requisito.getDescription()
+                  : LexiaRulesEngine.nombreLegible(codigo);
+            })
+        .toList();
+  }
+
+  private Map<String, DocumentRequirement> requisitosProducto(LegalCase legalCase) {
+    if (legalCase.getProductCode() == null || legalCase.getProductCode().isBlank()) {
+      return Map.of();
+    }
+    return documentRequirements
+        .findByTenantIdAndProductCodeOrderBySortOrderAsc(
+            legalCase.getTenantId(), legalCase.getProductCode().trim().toUpperCase(Locale.ROOT))
+        .stream()
+        .collect(
+            Collectors.toMap(
+                row -> row.getDocumentTypeCode().trim().toUpperCase(Locale.ROOT),
+                Function.identity(),
+                (primero, otro) -> primero));
   }
 
   private List<String> resolveRequiredDocumentCodes(LegalCase legalCase) {
@@ -262,35 +328,35 @@ public class EjdValidationEvaluationService {
             legalCase.getId(), legalCase.getTenantId());
     if (docs.isEmpty()) {
       validation.applyEvaluation(
-          "PENDING", "Sin documentos cargados para evaluar integridad.", "v" + rule.getVersion());
+          "PENDING", "Aún no hay documentos cargados para revisar su integridad.", "v" + rule.getVersion());
       caseValidations.save(validation);
       return;
     }
     List<String> problems = new java.util.ArrayList<>();
     for (LegalDocument document : docs) {
       if (document.getDocType() == null || document.getDocType().isBlank()) {
-        problems.add(document.getName() + " (sin tipo)");
+        problems.add("'" + document.getName() + "' no tiene tipo de documento asignado");
         continue;
       }
       var version =
           documentVersions.findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(
               document.getId(), legalCase.getTenantId());
       if (version.isEmpty()) {
-        problems.add(document.getDocType());
+        problems.add("'" + document.getName() + "' no tiene ninguna versión almacenada");
         continue;
       }
       String status = version.get().getStatus();
       if (!"PROCESSED".equals(status) && !"STORED".equals(status)) {
-        problems.add(document.getDocType() + " (" + status + ")");
+        problems.add("'" + document.getName() + "' sigue en estado " + status);
       }
     }
     if (problems.isEmpty()) {
       validation.applyEvaluation(
-          "PASS", "Documentos con versión almacenada o procesada.", "v" + rule.getVersion());
+          "PASS", docs.size() + " documento(s) con su archivo almacenado.", "v" + rule.getVersion());
     } else {
       validation.applyEvaluation(
           "FAIL",
-          "Integridad pendiente: " + String.join(", ", problems) + ".",
+          String.join("; ", problems) + ".",
           "v" + rule.getVersion());
     }
     caseValidations.save(validation);
@@ -320,30 +386,48 @@ public class EjdValidationEvaluationService {
     List<String> missing = required.stream().filter(code -> !present.contains(code)).toList();
     if (missing.isEmpty()) {
       validation.applyEvaluation(
-          "PASS", "Documentación requerida presente para coactivas.", "v" + rule.getVersion());
+          "PASS", "Están cargados los " + required.size() + " documentos requeridos.", "v" + rule.getVersion());
     } else {
       validation.applyEvaluation(
           "FAIL",
-          "Faltan tipos documentales: " + String.join(", ", missing) + ".",
+          "Falta cargar: "
+              + String.join(", ", missing.stream().map(LexiaRulesEngine::nombreLegible).toList())
+              + ".",
           "v" + rule.getVersion());
     }
     caseValidations.save(validation);
   }
 
   private void evaluateDocumentVigency(LegalCase legalCase, CaseValidation validation, RuleDef rule) {
-    long typedDocs =
+    List<LegalDocument> typedDocs =
         documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
                 legalCase.getId(), legalCase.getTenantId())
             .stream()
             .filter(doc -> doc.getDocType() != null && !doc.getDocType().isBlank())
-            .count();
-    if (typedDocs == 0) {
+            .toList();
+    if (typedDocs.isEmpty()) {
       validation.applyEvaluation(
-          "PENDING", "Sin documentos tipados para evaluar vigencia.", "v" + rule.getVersion());
+          "PENDING",
+          "Aún no hay documentos clasificados para revisar su vigencia.",
+          "v" + rule.getVersion());
     } else {
+      Map<String, DocumentRequirement> requisitos = requisitosProducto(legalCase);
+      List<String> revisar =
+          typedDocs.stream()
+              .map(
+                  doc -> {
+                    DocumentRequirement requisito =
+                        requisitos.get(doc.getDocType().trim().toUpperCase(Locale.ROOT));
+                    return requisito == null
+                        ? "'" + doc.getName() + "'"
+                        : "'" + doc.getName() + "' (máx. " + requisito.getMaxValidityDays() + " días)";
+                  })
+              .toList();
       validation.applyEvaluation(
           "OBSERVATION",
-          "Vigencia normativa requiere metadatos de fecha (Document AI); revisión manual recomendada.",
+          "LEXIA aún no lee la fecha de emisión: verifique manualmente la vigencia de "
+              + String.join(", ", revisar)
+              + ".",
           "v" + rule.getVersion());
     }
     caseValidations.save(validation);

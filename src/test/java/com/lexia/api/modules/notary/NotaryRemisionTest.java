@@ -8,6 +8,13 @@ import org.junit.jupiter.api.Test;
 class NotaryRemisionTest {
 
   @Test
+  void createMarcaPersistableNewSinVersionPrevia() {
+    NotaryRemision remision = sample();
+    assertThat(remision.isNew()).isTrue();
+    assertThat(remision.getId()).isNotNull();
+  }
+
+  @Test
   void avanzaPasosHastaCompletado() {
     NotaryRemision remision = sample();
     remision.advanceStep();

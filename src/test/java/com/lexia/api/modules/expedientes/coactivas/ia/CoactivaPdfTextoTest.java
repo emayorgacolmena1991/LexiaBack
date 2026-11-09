@@ -143,6 +143,23 @@ class CoactivaPdfTextoTest {
   }
 
   @Test
+  void buscaSobreAnalyzeResultCrudoDeAzure() throws Exception {
+    // Caché antigua guardó el JSON completo (content/width), no el índice compacto (t/w).
+    String azure =
+        """
+        {"pages":[{"pageNumber":2,"width":8.5,"height":11,"unit":"inch","words":[
+          {"content":"PEDERNALES","polygon":[1.2,3.0,2.8,3.0,2.8,3.3,1.2,3.3]}
+        ]}]}
+        """;
+    List<Coincidencia> hits = CoactivaPdfTexto.buscar("", azure, "pedernales");
+    assertEquals(1, hits.size());
+    assertEquals(2, hits.get(0).foja());
+    assertEquals(1, hits.get(0).cajas().size());
+    assertEquals(8.5, hits.get(0).cajas().get(0).pageWidth(), 0.001);
+    assertEquals(1.2, hits.get(0).cajas().get(0).polygon().get(0), 0.001);
+  }
+
+  @Test
   void calidadInsuficienteSiHayFojasYCasiNadaDeTexto() throws Exception {
     TextoOcr pobre =
         CoactivaPdfTexto.formatear(

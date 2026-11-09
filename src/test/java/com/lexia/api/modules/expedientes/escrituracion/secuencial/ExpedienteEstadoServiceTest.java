@@ -116,9 +116,12 @@ class ExpedienteEstadoServiceTest {
 
   @Test
   void wizardStepRetomaEstudioOMinuta() {
-    assertEquals(2, ExpedienteEstadoService.wizardStep("e1", 1, false, false, false));
-    assertEquals(3, ExpedienteEstadoService.wizardStep("e2", 2, false, false, false));
-    assertEquals(4, ExpedienteEstadoService.wizardStep("e2", 2, false, true, true));
-    assertEquals(5, ExpedienteEstadoService.wizardStep("e4", 4, true, true, true));
+    assertEquals(1, ExpedienteEstadoService.wizardStep("e1", 1, false, false, false, false));
+    assertEquals(2, ExpedienteEstadoService.wizardStep("e1", 1, false, false, false, true));
+    assertEquals(3, ExpedienteEstadoService.wizardStep("e2", 2, false, false, false, true));
+    assertEquals(3, ExpedienteEstadoService.wizardStep("e2", 2, false, false, false, false));
+    assertEquals(4, ExpedienteEstadoService.wizardStep("e2", 2, false, true, true, true));
+    assertEquals(4, ExpedienteEstadoService.wizardStep("e1", 1, false, false, true, false));
+    assertEquals(5, ExpedienteEstadoService.wizardStep("e4", 4, true, true, true, true));
   }
 }

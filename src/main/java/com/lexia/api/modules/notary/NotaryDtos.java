@@ -54,14 +54,51 @@ public final class NotaryDtos {
       int pasoNotarial,
       String actaLabel,
       int documentosCount,
+      int versionActual,
       String notariaNombre,
       Instant emitidoEn,
       Instant recibidoEn,
+      Instant actualizadoEn,
       String observacionesBufete,
       String observacionesNotaria,
+      List<RemisionDocumentDto> documentos) {}
+
+  public record CrearVersionBody(String observacionesBufete) {}
+
+  public record RemisionVersionDto(
+      int versionNo,
+      Instant createdAt,
+      String createdBy,
+      String observacionesBufete,
+      String minutaFileName,
+      String contratoFileName,
+      long cantidadDocumentos) {}
+
+  public record RemisionVersionDetalleDto(
+      int versionNo,
+      Instant createdAt,
+      String createdBy,
+      String observacionesBufete,
+      String minutaFileName,
+      String contratoFileName,
       List<RemisionDocumentDto> documentos) {}
 
   public record AdvanceRemisionBody(String observacionesNotaria) {}
 
   public record DevolverRemisionBody(String observacionesNotaria) {}
+
+  public record CampoFormularioDto(String clave, String etiqueta, String valor, String origen) {}
+
+  public record EscrituraFormularioDto(int versionNo, List<CampoFormularioDto> campos) {}
+
+  public record GenerarEscrituraBody(java.util.Map<String, String> valores) {}
+
+  public record EscrituraDto(
+      UUID id,
+      int versionNo,
+      String fileName,
+      Instant generatedAt,
+      String generatedBy,
+      List<String> camposVacios,
+      java.util.Map<String, String> valores) {}
 }

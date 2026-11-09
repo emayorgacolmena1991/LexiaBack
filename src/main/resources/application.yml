@@ -50,6 +50,8 @@ lexia:
       zona-horaria: ${LEXIA_COACTIVAS_ZONA_HORARIA:America/Guayaquil}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
+  worker:
+    id: ${LEXIA_WORKER_ID:${HOSTNAME:${COMPUTERNAME:local-dev-worker}}}
   prompts:
     PROMPT_EXTRACCION_ACTO: |
       Eres un asistente legal experto en escrituración e hipotecas. Tu única función es

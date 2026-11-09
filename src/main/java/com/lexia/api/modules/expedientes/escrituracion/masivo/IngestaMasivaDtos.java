@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.escrituracion.masivo;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -60,7 +61,8 @@ public final class IngestaMasivaDtos {
       int completados,
       int enProceso,
       int fallidos,
-      long tiempoEstimadoRestanteSegundos) {}
+      long tiempoEstimadoRestanteSegundos,
+      LoteStatus lote) {}
 
   public record LoteListItemDto(
       UUID id,
@@ -87,7 +89,9 @@ public final class IngestaMasivaDtos {
       int naranjas,
       int rojos,
       boolean cotejoHabilitado,
-      List<FilaStatus> filas) {}
+      List<FilaStatus> filas,
+      int encolados,
+      int iaEncolados) {}
 
   public record ExpedienteEnLoteDto(
       String expedienteId,
@@ -104,4 +108,8 @@ public final class IngestaMasivaDtos {
       String estado,
       String iaEstado,
       OffsetDateTime ultimaActualizacion) {}
+
+  public record OverrideRequest(@JsonAlias("justificacion") String motivo) {}
+
+  public record ConfirmarLoteRequest(String confirmadoPor) {}
 }

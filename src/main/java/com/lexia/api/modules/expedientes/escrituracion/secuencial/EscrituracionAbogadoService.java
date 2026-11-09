@@ -160,6 +160,11 @@ public class EscrituracionAbogadoService {
           study.getId(),
           ObservacionesCotejo.desdeTextos(request.observaciones()));
     }
+    // Abogado aprueba a pesar de observaciones: libera regularización y deja pasar a minutas.
+    if ("APPROVED".equals(status) && file.isFlagBloqueoReenvio()) {
+      file.marcarRegularizado();
+      writingFiles.save(file);
+    }
     return toEstudio(study, tenantId);
   }
 

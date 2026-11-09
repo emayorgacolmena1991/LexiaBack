@@ -22,8 +22,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
@@ -59,6 +61,7 @@ public class CaseService {
   private final ProcessStageDefRepository stageDefs;
   private final CaseBootstrapService bootstrap;
   private final ExpedienteEstadoService expedienteEstado;
+  private final CaseGateRepository caseGates;
 
   public CaseService(
       LegalCaseRepository legalCases,
@@ -71,7 +74,8 @@ public class CaseService {
       CaseStageRepository caseStages,
       ProcessStageDefRepository stageDefs,
       CaseBootstrapService bootstrap,
-      ExpedienteEstadoService expedienteEstado) {
+      ExpedienteEstadoService expedienteEstado,
+      CaseGateRepository caseGates) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.tenantParameters = tenantParameters;
@@ -83,6 +87,7 @@ public class CaseService {
     this.stageDefs = stageDefs;
     this.bootstrap = bootstrap;
     this.expedienteEstado = expedienteEstado;
+    this.caseGates = caseGates;
   }
 
   @Transactional(readOnly = true)
@@ -127,8 +132,17 @@ public class CaseService {
     Page<LegalCase> result =
         legalCases.findAll(
             spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
+    List<LegalCase> rows = result.getContent();
+    Set<UUID> pendingGates =
+        rows.isEmpty()
+            ? Set.of()
+            : new HashSet<>(
+                caseGates.findCaseIdsWithPendingGates(
+                    tenantId, rows.stream().map(LegalCase::getId).toList()));
     List<EscrituracionBandejaItem> content =
-        result.getContent().stream().map(row -> toBandeja(row, tenantId)).toList();
+        rows.stream()
+            .map(row -> toBandeja(row, tenantId, pendingGates.contains(row.getId())))
+            .toList();
     return new EscrituracionBandejaPage(
         content, result.getTotalElements(), result.getTotalPages(), result.getNumber(), result.getSize());
   }
@@ -205,7 +219,8 @@ public class CaseService {
     }
   }
 
-  private EscrituracionBandejaItem toBandeja(LegalCase legalCase, UUID tenantId) {
+  private EscrituracionBandejaItem toBandeja(
+      LegalCase legalCase, UUID tenantId, boolean tieneGatesPendientes) {
     CaseParty client =
         caseParties
             .findFirstByCaseIdAndTenantIdAndKindAndDeletedAtIsNull(
@@ -226,7 +241,9 @@ public class CaseService {
         atencion(legalCase),
         responsible.name(),
         responsible.initials(),
-        legalCase.getSlaDueAt() == null ? "—" : GRID_DATE.format(legalCase.getSlaDueAt()));
+        legalCase.getSlaDueAt() == null ? "—" : GRID_DATE.format(legalCase.getSlaDueAt()),
+        legalCase.getCreatedAt() == null ? "" : GRID_DATE.format(legalCase.getCreatedAt()),
+        tieneGatesPendientes);
   }
 
   private static String atencion(LegalCase legalCase) {
@@ -237,13 +254,17 @@ public class CaseService {
     return mapPriorityLabel(legalCase.getPriority());
   }
 
-  private static String normalizeStatusFilter(String estado) {
+  static String normalizeStatusFilter(String estado) {
     if (estado == null || estado.isBlank()) {
       return null;
     }
     return switch (estado.trim().toLowerCase(Locale.ROOT)) {
       case "en trámite", "en tramite", "draft" -> "DRAFT";
-      case "cerrado", "closed" -> "CLOSED";
+      case "en revisión", "en revision" -> "IN_REVIEW";
+      case "con observación", "con observacion" -> "WITH_OBSERVATION";
+      case "pendiente" -> "PENDING";
+      case "con excepción", "con excepcion" -> "EXCEPTION";
+      case "cerrado", "resuelto", "closed" -> "CLOSED";
       default -> estado.trim().toUpperCase(Locale.ROOT);
     };
   }
@@ -406,9 +427,14 @@ public class CaseService {
     };
   }
 
-  private static String mapStatusLabel(String status) {
+  /** Inverso de normalizeStatusFilter: el frontend vuelve a filtrar las filas por esta etiqueta. */
+  static String mapStatusLabel(String status) {
     return switch (status) {
       case "DRAFT" -> "En trámite";
+      case "IN_REVIEW" -> "En revisión";
+      case "WITH_OBSERVATION" -> "Con observación";
+      case "PENDING" -> "Pendiente";
+      case "EXCEPTION" -> "Con excepción";
       case "CLOSED" -> "Cerrado";
       default -> status;
     };

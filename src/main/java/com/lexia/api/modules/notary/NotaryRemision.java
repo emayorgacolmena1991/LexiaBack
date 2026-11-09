@@ -3,16 +3,23 @@ package com.lexia.api.modules.notary;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.data.domain.Persistable;
 
 @Entity
 @Table(schema = "control", name = "notary_remision")
-public class NotaryRemision {
+public class NotaryRemision implements Persistable<UUID> {
 
   @Id private UUID id;
+
+  /** UUID en memoria: sin isNew, save() hace merge/UPDATE y dispara 409. */
+  @Transient private boolean isNew = true;
 
   @Column(name = "firm_tenant_id", nullable = false)
   private UUID firmTenantId;
@@ -100,8 +107,24 @@ public class NotaryRemision {
     r.observacionesBufete = observacionesBufete;
     r.createdAt = now;
     r.updatedAt = now;
-    r.rowVersion = 1L;
+    r.isNew = true;
     return r;
+  }
+
+  @Override
+  public UUID getId() {
+    return id;
+  }
+
+  @Override
+  public boolean isNew() {
+    return isNew;
+  }
+
+  @PostLoad
+  @PostPersist
+  void markNotNew() {
+    this.isNew = false;
   }
 
   public void acknowledgeReceipt() {
@@ -133,12 +156,26 @@ public class NotaryRemision {
     touch();
   }
 
-  private void touch() {
-    updatedAt = Instant.now();
+  /** Nueva versión del bufete: la notaría retoma el trámite desde el inicio. */
+  public void reenviar(String observaciones) {
+    estado = NotaryRemisionEstado.ENVIADO_A_NOTARIA.name();
+    pasoNotarial = 0;
+    recibidoEn = null;
+    if (observaciones != null && !observaciones.isBlank()) {
+      observacionesBufete = observaciones.trim();
+    }
+    touch();
   }
 
-  public UUID getId() {
-    return id;
+  /** Datos que dependen del expediente al momento de crear cada versión. */
+  public void vincularEnvio(UUID writingFileId, int documentos, String acta) {
+    firmWritingFileId = writingFileId;
+    documentosCount = documentos;
+    actaLabel = acta;
+  }
+
+  private void touch() {
+    updatedAt = Instant.now();
   }
 
   public UUID getFirmTenantId() {
@@ -195,6 +232,10 @@ public class NotaryRemision {
 
   public Instant getRecibidoEn() {
     return recibidoEn;
+  }
+
+  public Instant getUpdatedAt() {
+    return updatedAt;
   }
 
   public String getObservacionesBufete() {

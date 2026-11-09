@@ -65,7 +65,9 @@ public final class ExpedienteDtos {
       String atencion,
       String responsable,
       String iniciales,
-      String vencimiento) {}
+      String vencimiento,
+      String creado,
+      boolean tieneGatesPendientes) {}
 
   public record EscrituracionBandejaPage(
       List<EscrituracionBandejaItem> content,

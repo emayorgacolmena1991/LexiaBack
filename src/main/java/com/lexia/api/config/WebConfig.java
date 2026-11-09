@@ -15,6 +15,9 @@ public class WebConfig implements WebMvcConfigurer {
   private static final List<String> ORIGINS =
       List.of("http://localhost:4200", "http://127.0.0.1:4200");
 
+  private static final List<String> EXPOSED =
+      List.of("X-Archivo-Faltante", "X-Archivo-Id-Real", "Content-Disposition");
+
   @Override
   public void addCorsMappings(CorsRegistry registry) {
     registry
@@ -22,6 +25,7 @@ public class WebConfig implements WebMvcConfigurer {
         .allowedOrigins(ORIGINS.toArray(String[]::new))
         .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
         .allowedHeaders("*")
+        .exposedHeaders(EXPOSED.toArray(String[]::new))
         .allowCredentials(true);
   }
 
@@ -32,6 +36,7 @@ public class WebConfig implements WebMvcConfigurer {
     config.setAllowedOrigins(ORIGINS);
     config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
     config.setAllowedHeaders(List.of("*"));
+    config.setExposedHeaders(EXPOSED);
     config.setAllowCredentials(true);
     UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
     source.registerCorsConfiguration("/api/**", config);

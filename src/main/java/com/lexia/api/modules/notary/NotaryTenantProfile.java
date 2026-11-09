@@ -36,6 +36,15 @@ public class NotaryTenantProfile {
   @Column(nullable = false)
   private boolean listed;
 
+  @Column(name = "logo_storage_ref", length = 1024)
+  private String logoStorageRef;
+
+  @Column(name = "logo_content_type", length = 32)
+  private String logoContentType;
+
+  @Column(name = "logo_updated_at")
+  private Instant logoUpdatedAt;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -72,6 +81,32 @@ public class NotaryTenantProfile {
 
   public boolean isListed() {
     return listed;
+  }
+
+  public String getLogoStorageRef() {
+    return logoStorageRef;
+  }
+
+  public String getLogoContentType() {
+    return logoContentType;
+  }
+
+  public Instant getLogoUpdatedAt() {
+    return logoUpdatedAt;
+  }
+
+  public void asignarLogo(String storageRef, String contentType) {
+    logoStorageRef = storageRef;
+    logoContentType = contentType;
+    logoUpdatedAt = Instant.now();
+    updatedAt = logoUpdatedAt;
+  }
+
+  public void quitarLogo() {
+    logoStorageRef = null;
+    logoContentType = null;
+    logoUpdatedAt = Instant.now();
+    updatedAt = logoUpdatedAt;
   }
 
   public static NotaryTenantProfile create(

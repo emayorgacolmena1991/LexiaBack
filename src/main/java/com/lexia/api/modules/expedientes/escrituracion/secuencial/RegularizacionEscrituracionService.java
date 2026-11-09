@@ -106,15 +106,21 @@ public class RegularizacionEscrituracionService {
     UUID tenantId = AuthContext.require().tenantId();
     LegalCase legalCase = requireEjd(caseId, tenantId);
     WritingFile file = requireFile(tenantId, legalCase.getId());
+    // Idempotente: tras reanálisis IA las obs abiertas se recrean con otro UUID; cerrar un id
+    // fantasma no debe 404 — devolvemos el estado actual (lista ya limpia).
     TitleObservation obs =
-        titleObservations
-            .findByIdAndTenantId(observacionId, tenantId)
-            .orElseThrow(() -> ApiException.notFound("Observación no encontrada."));
+        titleObservations.findByIdAndTenantId(observacionId, tenantId).orElse(null);
+    if (obs == null) {
+      return respuesta(legalCase, file, tenantId);
+    }
     TitleStudy study =
         titleStudies
             .findById(obs.getTitleStudyId())
             .filter(s -> file.getId().equals(s.getWritingFileId()))
-            .orElseThrow(() -> ApiException.notFound("Observación no encontrada."));
+            .orElse(null);
+    if (study == null) {
+      return respuesta(legalCase, file, tenantId);
+    }
     if (!"RESOLVED".equals(obs.getStatus())) {
       obs.resolve();
     }

@@ -35,8 +35,12 @@ class CoactivaReemplazoDocumentoIntegrationTest {
 
     worker.encolar(tenant, expediente, archivo);
 
-    verify(jobs).encolar(eq(tenant), eq("COACTIVA_DIAGNOSTICO"), contains(expediente.toString()));
-    verify(jobs).encolar(eq(tenant), eq("COACTIVA_DIAGNOSTICO"), contains(archivo.toString()));
+    verify(jobs)
+        .encolarSiActivo(
+            eq(tenant), eq("COACTIVA_DIAGNOSTICO"), eq(expediente.toString()), contains(expediente.toString()));
+    verify(jobs)
+        .encolarSiActivo(
+            eq(tenant), eq("COACTIVA_DIAGNOSTICO"), eq(expediente.toString()), contains(archivo.toString()));
     verify(sse).publicar(eq(expediente), eq("ANALYSIS_STARTED"), any());
   }
 }

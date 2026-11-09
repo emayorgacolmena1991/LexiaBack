@@ -8,7 +8,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface NotaryRemisionDocumentRepository
     extends JpaRepository<NotaryRemisionDocument, UUID> {
 
-  List<NotaryRemisionDocument> findByRemisionIdOrderBySortOrderAsc(UUID remisionId);
+  List<NotaryRemisionDocument> findByVersionIdOrderBySortOrderAsc(UUID versionId);
+
+  long countByVersionId(UUID versionId);
 
   Optional<NotaryRemisionDocument> findByRemisionIdAndId(UUID remisionId, UUID id);
 }

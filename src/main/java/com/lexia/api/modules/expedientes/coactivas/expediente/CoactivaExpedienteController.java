@@ -286,10 +286,17 @@ public class CoactivaExpedienteController {
         (inline ? ContentDisposition.inline() : ContentDisposition.attachment())
             .filename(contenido.nombre(), StandardCharsets.UTF_8)
             .build();
-    return ResponseEntity.ok()
-        .contentType(mediaType)
-        .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-        .header("X-Content-Type-Options", "nosniff")
-        .body(contenido.bytes());
+    var respuesta =
+        ResponseEntity.ok()
+            .contentType(mediaType)
+            .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+            .header("X-Content-Type-Options", "nosniff");
+    if (contenido.archivoIdReal() != null) {
+      respuesta.header("X-Archivo-Id-Real", contenido.archivoIdReal().toString());
+    }
+    if (contenido.originalFaltante()) {
+      respuesta.header("X-Archivo-Faltante", "true");
+    }
+    return respuesta.body(contenido.bytes());
   }
 }

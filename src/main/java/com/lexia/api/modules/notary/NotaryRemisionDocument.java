@@ -16,6 +16,9 @@ public class NotaryRemisionDocument {
   @Column(name = "remision_id", nullable = false)
   private UUID remisionId;
 
+  @Column(name = "version_id", nullable = false)
+  private UUID versionId;
+
   @Column(name = "firm_tenant_id", nullable = false)
   private UUID firmTenantId;
 
@@ -41,6 +44,7 @@ public class NotaryRemisionDocument {
 
   public static NotaryRemisionDocument of(
       UUID remisionId,
+      UUID versionId,
       UUID firmTenantId,
       UUID firmDocumentVersionId,
       String displayName,
@@ -50,6 +54,7 @@ public class NotaryRemisionDocument {
     NotaryRemisionDocument d = new NotaryRemisionDocument();
     d.id = UUID.randomUUID();
     d.remisionId = remisionId;
+    d.versionId = versionId;
     d.firmTenantId = firmTenantId;
     d.firmDocumentVersionId = firmDocumentVersionId;
     d.displayName = displayName;
@@ -66,6 +71,10 @@ public class NotaryRemisionDocument {
 
   public UUID getRemisionId() {
     return remisionId;
+  }
+
+  public UUID getVersionId() {
+    return versionId;
   }
 
   public UUID getFirmTenantId() {

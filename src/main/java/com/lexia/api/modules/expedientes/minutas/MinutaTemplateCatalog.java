@@ -33,6 +33,10 @@ public class MinutaTemplateCatalog {
   static final String TEMPLATE_HIPOTECADA_MINUTA_COMPRAVENTA =
       DIR + "VIVIENDA HIPOTECADA BIESS/MINUTA_COMPRAVENTA_HIPOTECA.docx";
 
+  /** Escritura que genera la notaría: plantilla única para todas las notarías. */
+  static final String TEMPLATE_HIPOTECADA_ESCRITURA_NOTARIAL =
+      "templates/notaria/COMPRAVENTA_HIPOTECA_BIESS_TEMPLATE.docx";
+
   static final String TEMPLATE_HIPOTECADA_CONTRATO_MUTUO =
       DIR + "VIVIENDA HIPOTECADA BIESS/CONTRATO_MUTUO_VIVIENDA_HIPOTECADA.docx";
 
@@ -129,6 +133,12 @@ public class MinutaTemplateCatalog {
               TEMPLATE_HIPOTECADA_CONTRATO_MUTUO,
               "contrato_mutuo_vivienda_hipotecada.docx",
               CRITICOS_CONTRATO),
+          new MinutaTemplateDescriptor(
+              PRODUCT_VIV_HIPOTECADA_BIESS,
+              "ESCRITURA_NOTARIAL",
+              TEMPLATE_HIPOTECADA_ESCRITURA_NOTARIAL,
+              "escritura_compraventa_hipoteca_biess.docx",
+              List.of()),
           new MinutaTemplateDescriptor(
               PRODUCT_VIV_TERMINADA_IND,
               "MINUTA_COMPRAVENTA",

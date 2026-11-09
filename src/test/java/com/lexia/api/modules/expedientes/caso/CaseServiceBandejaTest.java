@@ -46,6 +46,7 @@ class CaseServiceBandejaTest {
   @Mock private ProcessStageDefRepository stageDefs;
   @Mock private CaseBootstrapService bootstrap;
   @Mock private ExpedienteEstadoService expedienteEstado;
+  @Mock private CaseGateRepository caseGates;
 
   @AfterEach
   void clearAuth() {
@@ -83,6 +84,8 @@ class CaseServiceBandejaTest {
     Membership membership = Membership.invited(userId, tenant);
     when(memberships.findById(membershipId)).thenReturn(Optional.of(membership));
     when(users.findById(userId)).thenReturn(Optional.of(AppUser.create("ana.ruiz@lexia.test", "Ana Ruiz")));
+    when(caseGates.findCaseIdsWithPendingGates(any(UUID.class), any()))
+        .thenReturn(List.of(legalCase.getId()));
 
     CaseService service =
         new CaseService(
@@ -96,7 +99,8 @@ class CaseServiceBandejaTest {
             caseStages,
             stageDefs,
             bootstrap,
-            expedienteEstado);
+            expedienteEstado,
+            caseGates);
 
     EscrituracionBandejaPage page = service.bandeja("ana", "En trámite", 0, 20);
 
@@ -107,7 +111,26 @@ class CaseServiceBandejaTest {
     assertEquals("En trámite", page.content().get(0).estado());
     assertEquals("Alta", page.content().get(0).atencion());
     assertEquals("Ana Ruiz", page.content().get(0).responsable());
+    assertTrue(page.content().get(0).creado().matches("\\d{2} \\p{L}{3}.* \\d{4}"));
+    assertTrue(page.content().get(0).tieneGatesPendientes());
     assertTrue(page.content().stream().noneMatch(row -> row.clienteOperacion().contains("Demo")));
     verify(authorization).requirePermission("expedientes:caso:leer");
+  }
+
+  @Test
+  void filtroEstadoIdaYVueltaCoincideConLaEtiquetaDeLaFila() {
+    for (String etiqueta :
+        List.of(
+            "En trámite",
+            "En revisión",
+            "Con observación",
+            "Pendiente",
+            "Con excepción",
+            "Cerrado")) {
+      assertEquals(etiqueta, CaseService.mapStatusLabel(CaseService.normalizeStatusFilter(etiqueta)));
+    }
+    assertEquals("CLOSED", CaseService.normalizeStatusFilter("Resuelto"));
+    assertEquals("IN_REVIEW", CaseService.normalizeStatusFilter("en revision"));
+    assertEquals(null, CaseService.normalizeStatusFilter(" "));
   }
 }
