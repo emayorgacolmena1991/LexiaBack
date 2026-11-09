@@ -11,6 +11,7 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
 import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
+import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.expedientes.minutas.MinutaTemplateCatalog;
 import com.lexia.api.modules.expedientes.minutas.MinutaTemplateDescriptor;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
@@ -83,6 +84,7 @@ public class NotaryEscrituraService {
   private final NotaryTenantProfileRepository perfiles;
   private final NotaryLogoService logos;
   private final DocxMinutaRenderer renderer;
+  private final DocxPdfConverter pdf;
   private final MinutaTemplateCatalog catalogo;
   private final ExpedienteDocumentoStorage storage;
   private final AppUserRepository usuarios;
@@ -97,6 +99,7 @@ public class NotaryEscrituraService {
       NotaryTenantProfileRepository perfiles,
       NotaryLogoService logos,
       DocxMinutaRenderer renderer,
+      DocxPdfConverter pdf,
       MinutaTemplateCatalog catalogo,
       ExpedienteDocumentoStorage storage,
       AppUserRepository usuarios,
@@ -109,6 +112,7 @@ public class NotaryEscrituraService {
     this.perfiles = perfiles;
     this.logos = logos;
     this.renderer = renderer;
+    this.pdf = pdf;
     this.catalogo = catalogo;
     this.storage = storage;
     this.usuarios = usuarios;
@@ -136,25 +140,14 @@ public class NotaryEscrituraService {
   @Transactional
   public NotaryDtos.EscrituraDto generar(UUID remisionId, NotaryDtos.GenerarEscrituraBody body) {
     Preparacion p = preparar(remisionId);
-    Map<String, String> enviados = validarFormulario(body, p.formulario());
-    Map<String, Object> datos = new LinkedHashMap<>(p.cubiertos());
-    datos.putAll(enviados);
-    List<String> vacios = new ArrayList<>();
-    for (String tag : p.tags()) {
-      Object valor = datos.get(tag);
-      if (valor == null || (valor instanceof String texto && texto.isBlank())) {
-        datos.put(tag, "");
-        vacios.add(tag);
-      }
-    }
-    byte[] docx = renderer.renderPlantilla(p.plantilla().classpathResource(), datos);
+    Render render = renderDocx(p, validarFormulario(body, p.formulario()));
 
     NotaryRemision remision = p.remision();
     UUID id = UUID.randomUUID();
     String nombre =
         "escritura_" + remision.getExpedienteCodigo() + "_v" + p.version().getVersionNo() + ".docx";
     String ruta =
-        storage.writeEnCarpeta(remision.getNotaryTenantId(), CARPETA, id, nombre, docx).path();
+        storage.writeEnCarpeta(remision.getNotaryTenantId(), CARPETA, id, nombre, render.docx()).path();
     storage.borrarSiHayRollback(ruta);
     AuthPrincipal principal = AuthContext.require();
     NotaryEscritura escritura =
@@ -163,8 +156,8 @@ public class NotaryEscrituraService {
                 id,
                 remision.getId(),
                 p.version().getVersionNo(),
-                json(enviados),
-                json(vacios),
+                json(render.enviados()),
+                json(render.vacios()),
                 ruta,
                 nombre,
                 principal.userId()));
@@ -179,6 +172,17 @@ public class NotaryEscrituraService {
             null,
             null));
     return toDto(escritura);
+  }
+
+  /**
+   * Re-render de la plantilla con los valores del panel, sin guardar. Misma UX que actualizar
+   * previsualización en Escrituración.
+   */
+  @Transactional(readOnly = true)
+  public byte[] previewConValores(UUID remisionId, NotaryDtos.GenerarEscrituraBody body) {
+    Preparacion p = preparar(remisionId);
+    Render render = renderDocx(p, validarFormulario(body, p.formulario()));
+    return pdf.toPdf(render.docx());
   }
 
   @Transactional(readOnly = true)
@@ -200,6 +204,12 @@ public class NotaryEscrituraService {
         escritura.getFileName(), MIME_DOCX, storage.read(escritura.getStorageRef()));
   }
 
+  /** PDF de una escritura ya generada (mismo .docx de descarga). */
+  @Transactional(readOnly = true)
+  public byte[] previewPdf(UUID remisionId, UUID escrituraId) {
+    return pdf.toPdf(archivo(remisionId, escrituraId).bytes());
+  }
+
   /** Datos que no vienen del formulario: base del bufete, derivados y perfil. */
   private record Preparacion(
       NotaryRemision remision,
@@ -209,6 +219,23 @@ public class NotaryEscrituraService {
       List<String> tags,
       Map<String, Object> cubiertos,
       List<String> formulario) {}
+
+  private record Render(byte[] docx, Map<String, String> enviados, List<String> vacios) {}
+
+  private Render renderDocx(Preparacion p, Map<String, String> enviados) {
+    Map<String, Object> datos = new LinkedHashMap<>(p.cubiertos());
+    datos.putAll(enviados);
+    List<String> vacios = new ArrayList<>();
+    for (String tag : p.tags()) {
+      Object valor = datos.get(tag);
+      if (valor == null || (valor instanceof String texto && texto.isBlank())) {
+        datos.put(tag, "");
+        vacios.add(tag);
+      }
+    }
+    byte[] docx = renderer.renderPlantilla(p.plantilla().classpathResource(), datos);
+    return new Render(docx, enviados, vacios);
+  }
 
   private Preparacion preparar(UUID remisionId) {
     NotaryRemision remision = RemisionesVisibles.deLaNotaria(remisiones, remisionId);
@@ -361,7 +388,8 @@ public class NotaryEscrituraService {
         escritura.getGeneratedBy() == null
             ? null
             : usuarios.findById(escritura.getGeneratedBy()).map(AppUser::getDisplayName).orElse(null),
-        leerLista(escritura.getCamposVacios()));
+        leerLista(escritura.getCamposVacios()),
+        leerMapa(escritura.getDatosFormulario()));
   }
 
   private List<String> leerLista(String json) {
@@ -369,6 +397,16 @@ public class NotaryEscrituraService {
       return json == null ? List.of() : mapper.readValue(json, LISTA);
     } catch (JsonProcessingException ex) {
       throw new IllegalStateException("campos_vacios ilegible", ex);
+    }
+  }
+
+  private Map<String, String> leerMapa(String json) {
+    try {
+      return json == null || json.isBlank()
+          ? Map.of()
+          : mapper.readValue(json, new TypeReference<Map<String, String>>() {});
+    } catch (JsonProcessingException ex) {
+      throw new IllegalStateException("datos_formulario ilegible", ex);
     }
   }
 

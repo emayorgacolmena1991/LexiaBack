@@ -16,6 +16,7 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
 import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
+import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.expedientes.minutas.MinutaTemplateCatalog;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.identity.AppUserRepository;
@@ -120,6 +121,7 @@ class NotaryEscrituraServiceTest {
             perfiles,
             logos,
             new DocxMinutaRenderer(),
+            new DocxPdfConverter("", "target/notary-escritura-test"),
             new MinutaTemplateCatalog(),
             storage,
             mock(AppUserRepository.class),

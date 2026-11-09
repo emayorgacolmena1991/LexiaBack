@@ -99,5 +99,6 @@ public final class NotaryDtos {
       String fileName,
       Instant generatedAt,
       String generatedBy,
-      List<String> camposVacios) {}
+      List<String> camposVacios,
+      java.util.Map<String, String> valores) {}
 }

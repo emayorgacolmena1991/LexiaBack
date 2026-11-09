@@ -1,5 +1,6 @@
 package com.lexia.api.modules.notary;
 
+import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
@@ -29,12 +30,17 @@ public class NotaryController {
   private final NotaryCrossTenantService notary;
   private final NotaryLogoService logos;
   private final NotaryEscrituraService escrituras;
+  private final DocxPdfConverter pdf;
 
   public NotaryController(
-      NotaryCrossTenantService notary, NotaryLogoService logos, NotaryEscrituraService escrituras) {
+      NotaryCrossTenantService notary,
+      NotaryLogoService logos,
+      NotaryEscrituraService escrituras,
+      DocxPdfConverter pdf) {
     this.notary = notary;
     this.logos = logos;
     this.escrituras = escrituras;
+    this.pdf = pdf;
   }
 
   @GetMapping("/remisiones/{id}/escritura/formulario")
@@ -48,6 +54,18 @@ public class NotaryController {
     return escrituras.generar(id, body);
   }
 
+  /** Actualizar previsualización: re-render PDF con los valores del panel, sin guardar. */
+  @PostMapping(
+      value = "/remisiones/{id}/escritura/preview",
+      produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> previewEscrituraConValores(
+      @PathVariable UUID id, @RequestBody(required = false) NotaryDtos.GenerarEscrituraBody body) {
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"escritura-preview.pdf\"")
+        .contentType(MediaType.APPLICATION_PDF)
+        .body(escrituras.previewConValores(id, body));
+  }
+
   @GetMapping("/remisiones/{id}/escrituras")
   public List<NotaryDtos.EscrituraDto> historialEscrituras(@PathVariable UUID id) {
     return escrituras.historial(id);
@@ -57,6 +75,18 @@ public class NotaryController {
   public ResponseEntity<byte[]> archivoEscritura(
       @PathVariable UUID id, @PathVariable UUID escrituraId) {
     return archivo(escrituras.archivo(id, escrituraId));
+  }
+
+  /** Vista previa PDF de una escritura ya generada (mismo .docx de descarga). */
+  @GetMapping(
+      value = "/remisiones/{id}/escrituras/{escrituraId}/preview",
+      produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> previewEscritura(
+      @PathVariable UUID id, @PathVariable UUID escrituraId) {
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"escritura-preview.pdf\"")
+        .contentType(MediaType.APPLICATION_PDF)
+        .body(escrituras.previewPdf(id, escrituraId));
   }
 
   @PutMapping(value = "/perfil/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -151,14 +181,35 @@ public class NotaryController {
     return archivo(notary.leerMinutaVersion(id, numero));
   }
 
+  @GetMapping("/remisiones/{id}/versiones/{numero}/minuta/preview")
+  public ResponseEntity<byte[]> previewMinuta(@PathVariable UUID id, @PathVariable int numero) {
+    return pdfPreview(notary.leerMinutaVersion(id, numero), "minuta-v" + numero + ".pdf");
+  }
+
   @GetMapping("/remisiones/{id}/versiones/{numero}/contrato")
   public ResponseEntity<byte[]> versionContrato(@PathVariable UUID id, @PathVariable int numero) {
     return archivo(notary.leerContratoVersion(id, numero));
   }
 
+  @GetMapping("/remisiones/{id}/versiones/{numero}/contrato/preview")
+  public ResponseEntity<byte[]> previewContrato(@PathVariable UUID id, @PathVariable int numero) {
+    return pdfPreview(notary.leerContratoVersion(id, numero), "contrato-v" + numero + ".pdf");
+  }
+
   @GetMapping(value = "/remisiones/{id}/versiones/{numero}/payload", produces = MediaType.APPLICATION_JSON_VALUE)
   public String versionPayload(@PathVariable UUID id, @PathVariable int numero) {
     return notary.leerPayloadVersion(id, numero);
+  }
+
+  private ResponseEntity<byte[]> pdfPreview(
+      NotaryDtos.RemisionDocumentContent content, String fileName) {
+    byte[] bytes = pdf.toPdf(content.bytes());
+    ContentDisposition disposition =
+        ContentDisposition.inline().filename(fileName, StandardCharsets.UTF_8).build();
+    return ResponseEntity.ok()
+        .contentType(MediaType.APPLICATION_PDF)
+        .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+        .body(bytes);
   }
 
   private static ResponseEntity<byte[]> archivo(NotaryDtos.RemisionDocumentContent content) {
@@ -177,6 +228,7 @@ public class NotaryController {
         .contentType(mediaType)
         .body(content.bytes());
   }
+
 
   @PostMapping("/remisiones/{id}/recibir")
   public NotaryDtos.RemisionDto recibir(@PathVariable UUID id) {
