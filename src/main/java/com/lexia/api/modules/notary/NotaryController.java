@@ -202,7 +202,10 @@ public class NotaryController {
     return notary.leerPayloadVersion(id, numero);
   }
 
-<<<<<<< HEAD
+  private static final MediaType DOCX =
+      MediaType.parseMediaType(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+
   private ResponseEntity<byte[]> pdfPreview(
       NotaryDtos.RemisionDocumentContent content, String fileName) {
     byte[] bytes = pdf.toPdf(content.bytes());
@@ -211,13 +214,9 @@ public class NotaryController {
     return ResponseEntity.ok()
         .contentType(MediaType.APPLICATION_PDF)
         .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+        .header(HttpHeaders.CACHE_CONTROL, "no-store")
         .body(bytes);
   }
-=======
-  private static final MediaType DOCX =
-      MediaType.parseMediaType(
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
->>>>>>> 28a3b99 (Chore: endspoints)
 
   private static ResponseEntity<byte[]> archivo(NotaryDtos.RemisionDocumentContent content) {
     MediaType mediaType;
@@ -240,12 +239,9 @@ public class NotaryController {
         .body(content.bytes());
   }
 
-<<<<<<< HEAD
-=======
   private static boolean esDocx(String fileName, MediaType mediaType) {
     return fileName.toLowerCase(Locale.ROOT).endsWith(".docx") || DOCX.isCompatibleWith(mediaType);
   }
->>>>>>> 28a3b99 (Chore: endspoints)
 
   @PostMapping("/remisiones/{id}/recibir")
   public NotaryDtos.RemisionDto recibir(@PathVariable UUID id) {
