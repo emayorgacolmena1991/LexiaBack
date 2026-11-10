@@ -136,10 +136,9 @@ public class OcrAzureBatchService {
         cargaDocumentoService.actualizarTipoDocumentoLibre(sessionId, fileId, tipo);
         stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
       }
+      // El tipo del cliente ya se validó contra el catálogo; si no correspondía, no viaja a la IA.
       String tipoFinal =
-          StringUtils.hasText(stored.codigoTipoDocumento())
-              ? stored.codigoTipoDocumento()
-              : (tipo == null ? "DOCUMENTO" : tipo);
+          StringUtils.hasText(stored.codigoTipoDocumento()) ? stored.codigoTipoDocumento() : "DOCUMENTO";
       return procesarArchivo(sessionId, stored, tipoFinal, Modo.ASIGNAR).item();
     } catch (ApiException e) {
       throw e;
@@ -191,10 +190,9 @@ public class OcrAzureBatchService {
       cargaDocumentoService.actualizarTipoDocumentoLibre(sessionId, fileId, tipo);
       stored = cargaDocumentoService.requireStoredDoc(sessionId, fileId);
     }
+    // El tipo del cliente ya se validó contra el catálogo; si no correspondía, no viaja a la IA.
     String tipoFinal =
-        StringUtils.hasText(stored.codigoTipoDocumento())
-            ? stored.codigoTipoDocumento()
-            : (tipo == null ? "DOCUMENTO" : tipo);
+        StringUtils.hasText(stored.codigoTipoDocumento()) ? stored.codigoTipoDocumento() : "DOCUMENTO";
 
     AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal, Modo.ASIGNAR).item();
     String estado = item.legible() ? "LEGIBLE" : "REVISAR";
@@ -250,7 +248,7 @@ public class OcrAzureBatchService {
     String tipo =
         StringUtils.hasText(replaced.codigoTipoDocumento())
             ? replaced.codigoTipoDocumento()
-            : (StringUtils.hasText(tipoDocumento) ? tipoDocumento.trim() : "DOCUMENTO");
+            : "DOCUMENTO";
     Integer versionNo = cargaDocumentoService.versionActual(sesion, replaced.idDocumento());
 
     // El documento conserva su tipo: el clasificador solo detecta y avisa si no coincide.

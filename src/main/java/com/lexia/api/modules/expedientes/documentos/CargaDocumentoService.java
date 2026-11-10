@@ -339,8 +339,12 @@ public class CargaDocumentoService {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
     if (official != null) {
       byte[] bytes = readBytes(file, official.ingestionMode());
+      String codigo =
+          official.ingestionMode().isFisicoEscaneado()
+              ? null
+              : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
       return caseDocs.reemplazar(
-          official, fileId, originalName(file), file.getContentType(), bytes, tipoDocumento);
+          official, fileId, originalName(file), file.getContentType(), bytes, codigo);
     }
     DraftExpediente draft = requireDraft(sessionId);
     StoredDoc existing = draft.documentos().get(fileId);
@@ -376,9 +380,8 @@ public class CargaDocumentoService {
       tipo = IngestionMode.EXPEDIENTE_FISICO_ESCANEADO;
     } else {
       tipo =
-          StringUtils.hasText(tipoDocumento)
-              ? tipoDocumento.trim()
-              : existing.codigoTipoDocumento();
+          tipoDelCliente(sessionId, fileId, tipoDocumento)
+              .orElse(existing.codigoTipoDocumento());
     }
     StoredDoc replaced =
         new StoredDoc(
@@ -397,15 +400,20 @@ public class CargaDocumentoService {
     return replaced;
   }
 
-  /** Actualiza tipo sin validar catálogo (payload batch OCR). */
+  /**
+   * Tipo que manda el cliente en analyze-single/batch. Se valida contra el catálogo del expediente:
+   * una etiqueta se guarda como su código y un texto que no es del catálogo no se asigna ni marca
+   * MANUAL.
+   */
   public void actualizarTipoDocumentoLibre(String sessionId, String fileId, String tipo) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
     if (official != null) {
-      String codigo =
-          official.ingestionMode().isFisicoEscaneado()
-              ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
-              : tipo.trim();
-      caseDocs.actualizarTipo(official, fileId, codigo);
+      if (official.ingestionMode().isFisicoEscaneado()) {
+        caseDocs.actualizarTipo(official, fileId, IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
+        return;
+      }
+      tipoDelCliente(sessionId, fileId, tipo)
+          .ifPresent(codigo -> caseDocs.actualizarTipo(official, fileId, codigo));
       return;
     }
     DraftExpediente draft = requireDraft(sessionId);
@@ -418,8 +426,53 @@ public class CargaDocumentoService {
       draft.documentos().put(fileId, doc.withTipo(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO));
       return;
     }
-    draft.documentos().put(fileId, doc.withTipo(tipo.trim()));
+    Optional<String> codigo = tipoDelCliente(sessionId, fileId, tipo);
+    if (codigo.isEmpty()) {
+      return;
+    }
+    draft.documentos().put(fileId, doc.withTipo(codigo.get()));
     draft.marcarManual(fileId);
+  }
+
+  /**
+   * Código del catálogo para lo que mandó el cliente: el código tal cual o su etiqueta (sin
+   * distinguir mayúsculas ni tildes). Vacío si no manda nada o no corresponde a ningún tipo. Sin
+   * catálogo (producto sin requisitos) se acepta tal cual, igual que en el PATCH.
+   */
+  Optional<String> tipoDelCliente(String idExpediente, String fileId, String tipo) {
+    if (!StringUtils.hasText(tipo)) {
+      return Optional.empty();
+    }
+    String valor = tipo.trim();
+    List<TipoPermitidoDTO> catalogo = tiposPermitidos(idExpediente);
+    if (catalogo.isEmpty()) {
+      return Optional.of(valor);
+    }
+    for (TipoPermitidoDTO permitido : catalogo) {
+      if (valor.equals(permitido.codigo())) {
+        return Optional.of(permitido.codigo());
+      }
+    }
+    String buscado = comparable(valor);
+    for (TipoPermitidoDTO permitido : catalogo) {
+      if (buscado.equals(comparable(permitido.codigo()))
+          || buscado.equals(comparable(permitido.nombre()))) {
+        return Optional.of(permitido.codigo());
+      }
+    }
+    // Sin el valor: es texto libre del cliente.
+    LOG.warn("Tipo documental del cliente fuera del catálogo doc={}; no se asigna", fileId);
+    return Optional.empty();
+  }
+
+  private static String comparable(String texto) {
+    if (texto == null) {
+      return "";
+    }
+    String sinTildes =
+        java.text.Normalizer.normalize(texto.trim(), java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "");
+    return sinTildes.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
   }
 
   public TipoActualizadoDTO actualizarTipo(
