@@ -2,8 +2,16 @@ package com.lexia.api.modules.expedientes.minutas;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Datos estructurados para plantillas de vivienda hipotecada BIESS (poi-tl + LLM tool use).
@@ -898,9 +906,9 @@ public class MinutaViviendaData {
   }
 
   /**
-   * Mapa listo para poi-tl (keys = tags del .docx). Valores vacíos → {@code nodata}. Las cifras y
-   * la tasa se limpian porque las plantillas ya traen "USD" y "%"; un plazo solo numérico se
-   * expresa en meses porque las plantillas no llevan la unidad.
+   * Mapa listo para poi-tl (keys = tags del .docx). Valores vacíos → {@code nodata}. Las cifras se
+   * escriben {@code 120.000,00} sin moneda y la tasa sin "%", porque las plantillas ya traen "USD" y
+   * "%"; un plazo solo numérico se expresa en meses porque las plantillas no llevan la unidad.
    */
   public Map<String, Object> toTemplateMap() {
     Map<String, Object> map = new LinkedHashMap<>();
@@ -932,11 +940,11 @@ public class MinutaViviendaData {
     map.put("subtotal_area", blankToNodata(subtotalArea));
     map.put("alicuota", blankToNodata(alicuota));
     map.put("estado_civil", blankToNodata(estadoCivil));
-    map.put("monto_prestamo", blankToNodata(cifra(montoPrestamo)));
+    map.put("monto_prestamo", blankToNodata(cifra("monto_prestamo", montoPrestamo)));
     map.put("monto_prestamo_letras", blankToNodata(montoPrestamoLetras));
     map.put("plazo_credito", blankToNodata(plazo(plazoCredito)));
     map.put("tasa_interes_inicial", blankToNodata(tasa(tasaInteresInicial)));
-    map.put("cuota_credito", blankToNodata(cifra(cuotaCredito)));
+    map.put("cuota_credito", blankToNodata(cifra("cuota_credito", cuotaCredito)));
     map.put("institucion_financiera_original", blankToNodata(institucionFinancieraOriginal));
     map.put("direccion_deudor", blankToNodata(direccionDeudor));
     map.put("telefono_deudor", blankToNodata(telefonoDeudor));
@@ -956,12 +964,12 @@ public class MinutaViviendaData {
     map.put("telefono_vendedor", blankToNodata(telefonoVendedor));
     map.put("correo_vendedor", blankToNodata(correoVendedor));
     map.put("clave_catastral", blankToNodata(claveCatastral));
-    map.put("avaluo_inmueble", blankToNodata(cifra(avaluoInmueble)));
-    map.put("precio_compraventa_numero", blankToNodata(cifra(precioCompraventaNumero)));
+    map.put("avaluo_inmueble", blankToNodata(cifra("avaluo_inmueble", avaluoInmueble)));
+    map.put("precio_compraventa_numero", blankToNodata(cifra("precio_compraventa_numero", precioCompraventaNumero)));
     map.put("precio_compraventa_letras", blankToNodata(precioCompraventaLetras));
-    map.put("valor_entrada_numero", blankToNodata(cifra(valorEntradaNumero)));
+    map.put("valor_entrada_numero", blankToNodata(cifra("valor_entrada_numero", valorEntradaNumero)));
     map.put("valor_entrada_letras", blankToNodata(valorEntradaLetras));
-    map.put("saldo_compraventa_numero", blankToNodata(cifra(saldoCompraventaNumero)));
+    map.put("saldo_compraventa_numero", blankToNodata(cifra("saldo_compraventa_numero", saldoCompraventaNumero)));
     map.put("saldo_compraventa_letras", blankToNodata(saldoCompraventaLetras));
     map.put("fecha_escritura_antecedente", blankToNodata(fechaEscrituraAntecedente));
     map.put("fecha_inscripcion_antecedente", blankToNodata(fechaInscripcionAntecedente));
@@ -1006,6 +1014,7 @@ public class MinutaViviendaData {
   }
 
   private static final String NODATA = "nodata";
+  private static final Logger LOG = LoggerFactory.getLogger(MinutaViviendaData.class);
 
   private static String nullToEmpty(String value) {
     return value == null ? "" : value.trim();
@@ -1022,8 +1031,33 @@ public class MinutaViviendaData {
     return t;
   }
 
-  private static String cifra(String value) {
-    return nullToEmpty(value).replaceFirst("(?i)^(USD|US\\$|\\$)\\s*(\\$\\s*)?", "").trim();
+  /**
+   * Monto con miles en punto y decimales en coma, siempre dos ({@code 120.000,00}), sin moneda. Se
+   * interpreta con {@link NumeroALetras#parsearMonto} para que la cifra y sus letras coincidan
+   * ("120.000" y "1.500" son miles). Si no se puede interpretar, va tal cual sin el prefijo de
+   * moneda y se avisa solo el campo: el valor puede ser un dato personal.
+   */
+  static String cifra(String campo, String value) {
+    String t = nullToEmpty(value);
+    if (NODATA.equals(blankToNodata(t))) {
+      return t;
+    }
+    Optional<BigDecimal> monto = NumeroALetras.parsearMonto(t);
+    if (monto.isEmpty()) {
+      LOG.warn("Monto no interpretable en el campo {}; se usa el texto tal cual", campo);
+      return t.replaceFirst("(?i)^(USD|US\\$|\\$)\\s*(\\$\\s*)?", "").trim();
+    }
+    return formatoMonto().format(monto.get());
+  }
+
+  /** DecimalFormat no es thread-safe: uno por llamada, con símbolos fijos y no los del servidor. */
+  private static DecimalFormat formatoMonto() {
+    DecimalFormatSymbols simbolos = new DecimalFormatSymbols(Locale.ROOT);
+    simbolos.setGroupingSeparator('.');
+    simbolos.setDecimalSeparator(',');
+    DecimalFormat formato = new DecimalFormat("#,##0.00", simbolos);
+    formato.setRoundingMode(RoundingMode.HALF_UP);
+    return formato;
   }
 
   private static String tasa(String value) {

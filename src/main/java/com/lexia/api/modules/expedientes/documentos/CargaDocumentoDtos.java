@@ -43,6 +43,23 @@ public final class CargaDocumentoDtos {
   public record DocumentoCargadoDTO(
       String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {}
 
+  /**
+   * Respuesta del upload. {@code ocrOk}: resultado del OCR síncrono en un expediente persistido;
+   * {@code null} en un borrador, donde el OCR lo dispara el wizard.
+   */
+  public record DocumentoSubidoDTO(
+      String idDocumento,
+      String nombreOriginal,
+      String tamano,
+      String codigoTipoDocumento,
+      Boolean ocrOk) {
+
+    public static DocumentoSubidoDTO de(DocumentoCargadoDTO doc, Boolean ocrOk) {
+      return new DocumentoSubidoDTO(
+          doc.idDocumento(), doc.nombreOriginal(), doc.tamano(), doc.codigoTipoDocumento(), ocrOk);
+    }
+  }
+
   public record ActualizarTipoRequest(@NotBlank @Size(max = 64) String codigoTipoDocumento) {}
 
   public record TipoActualizadoDTO(String idDocumento, String codigoTipoDocumento, String estado) {}

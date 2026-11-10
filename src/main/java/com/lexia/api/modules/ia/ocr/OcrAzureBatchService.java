@@ -38,6 +38,8 @@ import org.springframework.web.multipart.MultipartFile;
 public class OcrAzureBatchService {
 
   private static final Logger LOG = LoggerFactory.getLogger(OcrAzureBatchService.class);
+  static final String OCR_FALLIDO =
+      "No se pudo leer el archivo nuevo con OCR; se conserva el texto anterior.";
 
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
@@ -235,15 +237,21 @@ public class OcrAzureBatchService {
           "Azure Document Intelligence no configurado.");
     }
 
+    String sesion = sessionId.trim();
+    // En un expediente persistido es la versión N+1 del mismo LegalDocument; se conserva aunque el
+    // OCR falle después.
     StoredDoc replaced =
-        cargaDocumentoService.reemplazarArchivoOcr(
-            sessionId.trim(), fileId.trim(), file, tipoDocumento);
+        cargaDocumentoService.reemplazarArchivoOcr(sesion, fileId.trim(), file, tipoDocumento);
     String tipo =
         StringUtils.hasText(replaced.codigoTipoDocumento())
             ? replaced.codigoTipoDocumento()
             : (StringUtils.hasText(tipoDocumento) ? tipoDocumento.trim() : "DOCUMENTO");
+    Integer versionNo = cargaDocumentoService.versionActual(sesion, replaced.idDocumento());
 
-    AnalyzeBatchResultItem item = procesarArchivo(sessionId.trim(), replaced, tipo);
+    AnalyzeBatchResultItem item = ocrYConsolidar(sesion, replaced, tipo);
+    if (item == null) {
+      return reuploadSinOcr(sesion, replaced, tipo, versionNo);
+    }
     return new ReuploadResponse(
         item.fileId(),
         replaced.nombreOriginal(),
@@ -251,7 +259,73 @@ public class OcrAzureBatchService {
         item.legible(),
         item.scoreConfianza(),
         item.textoExtraido(),
-        item.motivo());
+        item.motivo(),
+        replaced.idDocumento(),
+        versionNo,
+        true);
+  }
+
+  /**
+   * OCR fallido: la caché y {@code documento_texto_ocr} siguen con el texto anterior, que es el que
+   * se devuelve para que la pantalla no muestre un texto que el sistema ya no tiene.
+   */
+  private ReuploadResponse reuploadSinOcr(
+      String sesion, StoredDoc replaced, String tipo, Integer versionNo) {
+    OcrFileResult anterior =
+        cache.listResults(sesion).stream()
+            .filter(r -> replaced.idDocumento().equals(r.fileId()))
+            .findFirst()
+            .orElse(null);
+    return new ReuploadResponse(
+        replaced.idDocumento(),
+        replaced.nombreOriginal(),
+        tipo,
+        anterior != null && anterior.legible(),
+        anterior == null ? 0.0 : anterior.scoreConfianza(),
+        anterior == null ? null : anterior.textoExtraido(),
+        OCR_FALLIDO,
+        replaced.idDocumento(),
+        versionNo,
+        false);
+  }
+
+  /**
+   * Upload a un expediente persistido: mismo pipeline que analyze-single (Azure + caché + fila OCR)
+   * y regenera {@code consolidado}. En un borrador devuelve {@code null}: ahí el OCR lo dispara el
+   * wizard. Un fallo de OCR no tumba el upload: el archivo ya quedó guardado.
+   */
+  public Boolean ocrTrasSubir(String idExpediente, String idDocumento) {
+    if (!StringUtils.hasText(idExpediente)
+        || !StringUtils.hasText(idDocumento)
+        || !cargaDocumentoService.esExpedientePersistido(idExpediente)) {
+      return null;
+    }
+    if (!layoutService.isConfigured()) {
+      LOG.warn("OCR al subir omitido expediente={} doc={}: Azure no configurado", idExpediente, idDocumento);
+      return false;
+    }
+    String sesion = idExpediente.trim();
+    StoredDoc stored = cargaDocumentoService.requireStoredDoc(sesion, idDocumento.trim());
+    String tipo =
+        StringUtils.hasText(stored.codigoTipoDocumento()) ? stored.codigoTipoDocumento() : "DOCUMENTO";
+    return ocrYConsolidar(sesion, stored, tipo) != null;
+  }
+
+  /** {@code null} si Azure falla: no se toca ni la caché ni la fila OCR anterior. */
+  private AnalyzeBatchResultItem ocrYConsolidar(String sesion, StoredDoc stored, String tipo) {
+    AnalyzeBatchResultItem item;
+    try {
+      item = procesarArchivo(sesion, stored, tipo);
+    } catch (RuntimeException e) {
+      LOG.warn(
+          "OCR falló sesion={} doc={}: {}; se conserva el texto anterior",
+          sesion,
+          stored.idDocumento(),
+          safe(e));
+      return null;
+    }
+    consolidate(new ConsolidateRequest(sesion, null));
+    return item;
   }
 
   public ConsolidateResponse consolidate(ConsolidateRequest request) {

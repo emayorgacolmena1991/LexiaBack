@@ -176,13 +176,12 @@ public class NotaryCrossTenantService {
   public NotaryDtos.PartnershipDto approvePartnership(UUID partnershipId) {
     authorization.requirePermission("notaria:partnership:gestionar");
     UUID notaryId = AuthContext.require().tenantId();
+    // Un vínculo de otra notaría no existe para quien no es su destino: 404, igual que uno inexistente.
     TenantNotaryPartnership partnership =
         partnerships
             .findById(partnershipId)
+            .filter(p -> p.getNotaryTenantId().equals(notaryId))
             .orElseThrow(() -> NotaryBusinessException.notFound("Vínculo no encontrado."));
-    if (!partnership.getNotaryTenantId().equals(notaryId)) {
-      throw NotaryBusinessException.forbidden("Solo la notaría destino puede aprobar el vínculo.");
-    }
     partnership.approve();
     partnerships.save(partnership);
     audit(notaryId, "NOTARY_PARTNERSHIP_APPROVED", partnershipId);
@@ -542,7 +541,7 @@ public class NotaryCrossTenantService {
 
   /** Bufete dueño o notaría destino. Cualquier otro tenant no debe saber que existe: 404. */
   private NotaryRemision remisionLegible(UUID id) {
-    UUID tenantId = AuthContext.require().tenantId();
+    UUID tenantId = RemisionesVisibles.tenantDeSesion();
     NotaryRemision remision =
         remisionVisible(
             id,

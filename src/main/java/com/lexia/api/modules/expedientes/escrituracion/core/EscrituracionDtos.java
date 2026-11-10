@@ -37,13 +37,23 @@ public final class EscrituracionDtos {
 
   public record EstudioTituloRequest(String status, String summary, List<String> observaciones) {}
 
+  /** @param documentoId {@code LegalDocument} que origina la observación; null = general. */
   public record ObservacionCotejoItem(
       UUID id,
       String code,
       String severidad,
       String mensaje,
       String estado,
-      Instant createdAt) {}
+      Instant createdAt,
+      UUID documentoId) {}
+
+  /** Observaciones abiertas de un documento, con la versión vigente que se está observando. */
+  public record ObservacionesDocumentoItem(
+      UUID documentId,
+      String nombre,
+      String tipoDocumento,
+      Integer versionNo,
+      List<ObservacionCotejoItem> observaciones) {}
 
   public record EstudioTituloResponse(
       UUID studyId,
@@ -194,7 +204,10 @@ public final class EscrituracionDtos {
       DatosBiessMinuta datosBiess,
       boolean hasDraft,
       String estadoRegularizacion,
-      boolean flagBloqueoReenvio) {}
+      boolean flagBloqueoReenvio,
+      List<ObservacionCotejoItem> observacionesAbiertas,
+      List<ObservacionesDocumentoItem> porDocumento,
+      List<ObservacionCotejoItem> generales) {}
 
   public record RegularizacionResponse(
       UUID expedienteId,
@@ -202,7 +215,9 @@ public final class EscrituracionDtos {
       String estadoRegularizacion,
       boolean flagBloqueoReenvio,
       boolean puedeMarcarRegularizado,
-      List<ObservacionCotejoItem> observacionesAbiertas) {}
+      List<ObservacionCotejoItem> observacionesAbiertas,
+      List<ObservacionesDocumentoItem> porDocumento,
+      List<ObservacionCotejoItem> generales) {}
 
   /** Estado consolidado en BD para hidratar el FE al abrir o refrescar. */
   public record EstadoMinutaBorrador(

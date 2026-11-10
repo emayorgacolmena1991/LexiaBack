@@ -225,7 +225,8 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("{{"), "Quedaron placeholders");
     assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
     assertFalse(text.matches("(?s).*[Xx]{4,}.*"), "Quedaron marcadores XXXX");
-    assertTrue(text.contains("USD $ 85,000.00"));
+    assertTrue(text.contains("USD 85.000,00"), "Monto en formato 120.000,00");
+    assertFalse(text.contains("USD $"), "La moneda va una sola vez");
     assertTrue(text.contains("5.99%"));
     assertFalse(text.contains("5.99%%"));
     assertTrue(text.contains("Plazo 300 meses,"));

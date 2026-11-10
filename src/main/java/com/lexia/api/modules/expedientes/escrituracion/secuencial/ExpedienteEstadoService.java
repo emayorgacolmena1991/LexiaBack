@@ -9,6 +9,7 @@ import com.lexia.api.modules.expedientes.caso.CaseStageRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoEscrituracion;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoMinutaBorrador;
 import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraftRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.ObservacionesPorDocumento;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservation;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
@@ -59,6 +60,7 @@ public class ExpedienteEstadoService {
   private final MinutaGenerationService minutas;
   private final CaseStageRepository caseStages;
   private final ProcessStageDefRepository stageDefs;
+  private final ObservacionesPorDocumento porDocumento;
 
   public ExpedienteEstadoService(
       AuthorizationService authorization,
@@ -72,7 +74,8 @@ public class ExpedienteEstadoService {
       DocumentosExtraidosStore documentos,
       MinutaGenerationService minutas,
       CaseStageRepository caseStages,
-      ProcessStageDefRepository stageDefs) {
+      ProcessStageDefRepository stageDefs,
+      ObservacionesPorDocumento porDocumento) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -85,6 +88,7 @@ public class ExpedienteEstadoService {
     this.minutas = minutas;
     this.caseStages = caseStages;
     this.stageDefs = stageDefs;
+    this.porDocumento = porDocumento;
   }
 
   /** Paso del wizard para retomar el flujo al salir y volver. */
@@ -177,6 +181,9 @@ public class ExpedienteEstadoService {
     if (biess == null) {
       biess = DatosBiessMinuta.empty();
     }
+    // Reapertura: la pantalla E3 se reconstruye con las observaciones abiertas y su agrupación.
+    ObservacionesPorDocumento.Agrupadas observaciones =
+        porDocumento.abiertas(caseId, file == null ? null : file.getId(), tenantId);
     return new EstadoEscrituracion(
         caseId,
         legalCase.getCode(),
@@ -189,7 +196,10 @@ public class ExpedienteEstadoService {
         biess,
         hasDraft,
         file == null ? "PROCESO_REGULAR" : file.getEstadoRegularizacion(),
-        file != null && file.isFlagBloqueoReenvio());
+        file != null && file.isFlagBloqueoReenvio(),
+        observaciones.abiertas(),
+        observaciones.porDocumento(),
+        observaciones.generales());
   }
 
   private ProcessStageDef resolveStage(
@@ -299,7 +309,15 @@ public class ExpedienteEstadoService {
               for (TitleObservation row :
                   titleObservations.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(
                       study.getId(), tenantId)) {
-                obs.add(parseObs(row.getDetail()));
+                Observacion parsed = parseObs(row.getDetail());
+                obs.add(
+                    new Observacion(
+                        parsed.codigo(),
+                        parsed.severidad(),
+                        parsed.mensaje(),
+                        row.getLegalDocumentId() == null
+                            ? null
+                            : row.getLegalDocumentId().toString()));
               }
               return new Dictamen(study.getStatus(), study.getSummary(), obs);
             })

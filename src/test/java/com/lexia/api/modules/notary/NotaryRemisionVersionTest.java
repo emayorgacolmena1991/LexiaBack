@@ -93,6 +93,7 @@ class NotaryRemisionVersionTest {
   private ExpedienteDocumentoStorage storage;
   private AuditEventRepository auditoria;
   private NotaryCrossTenantService service;
+  private TenantNotaryPartnershipRepository vinculos;
 
   @BeforeEach
   void setUp() {
@@ -102,7 +103,7 @@ class NotaryRemisionVersionTest {
 
     TenantNotaryPartnership vinculo = mock(TenantNotaryPartnership.class);
     when(vinculo.isActive()).thenReturn(true);
-    TenantNotaryPartnershipRepository vinculos = mock(TenantNotaryPartnershipRepository.class);
+    vinculos = mock(TenantNotaryPartnershipRepository.class);
     when(vinculos.findByFirmTenantIdAndNotaryTenantId(FIRMA, NOTARIA))
         .thenReturn(Optional.of(vinculo));
     NotaryFirmAssignment asignacion = mock(NotaryFirmAssignment.class);
@@ -286,6 +287,66 @@ class NotaryRemisionVersionTest {
 
   private static void assertEstado(HttpStatus esperado, ApiException error) {
     assertEquals(esperado, error.getStatus());
+  }
+
+  private static void sesionSinOrganizacion() {
+    AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), null, null));
+  }
+
+  @Test
+  void leerRemisionSinOrganizacionActivaResponde403() {
+    UUID id = enviada().id();
+    sesionSinOrganizacion();
+
+    ApiException error = assertThrows(ApiException.class, () -> service.getRemision(id));
+
+    assertEstado(HttpStatus.FORBIDDEN, error);
+    assertEquals(RemisionesVisibles.SIN_ORGANIZACION, error.getMessage());
+  }
+
+  @Test
+  void recibirSinOrganizacionActivaResponde403() {
+    UUID id = enviada().id();
+    sesionSinOrganizacion();
+
+    ApiException error =
+        assertThrows(ApiException.class, () -> service.getRemisionAndAcknowledge(id));
+
+    assertEstado(HttpStatus.FORBIDDEN, error);
+    assertEquals(RemisionesVisibles.SIN_ORGANIZACION, error.getMessage());
+    assertEquals(NotaryRemisionEstado.ENVIADO_A_NOTARIA.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void aprobarVinculoDeOtraNotariaResponde404ComoUnoInexistente() {
+    TenantNotaryPartnership deOtra = TenantNotaryPartnership.request(FIRMA, UUID.randomUUID(), null);
+    when(vinculos.findById(deOtra.getId())).thenReturn(Optional.of(deOtra));
+    UUID inexistente = UUID.randomUUID();
+    when(vinculos.findById(inexistente)).thenReturn(Optional.empty());
+    sesion(NOTARIA);
+
+    ApiException ajeno =
+        assertThrows(ApiException.class, () -> service.approvePartnership(deOtra.getId()));
+    ApiException noExiste =
+        assertThrows(ApiException.class, () -> service.approvePartnership(inexistente));
+
+    assertEstado(HttpStatus.NOT_FOUND, ajeno);
+    assertEquals(noExiste.getStatus(), ajeno.getStatus());
+    assertEquals(noExiste.getMessage(), ajeno.getMessage());
+    assertEquals(NotaryPartnershipStatus.PENDING.name(), deOtra.getStatus());
+    verify(vinculos, never()).save(any());
+  }
+
+  @Test
+  void laNotariaDestinoApruebaSuVinculo() {
+    TenantNotaryPartnership propio = TenantNotaryPartnership.request(FIRMA, NOTARIA, null);
+    when(vinculos.findById(propio.getId())).thenReturn(Optional.of(propio));
+    sesion(NOTARIA);
+
+    service.approvePartnership(propio.getId());
+
+    assertEquals(NotaryPartnershipStatus.ACTIVE.name(), propio.getStatus());
+    verify(vinculos).save(propio);
   }
 
   @Test

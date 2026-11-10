@@ -211,6 +211,17 @@ public class CargaDocumentoService {
     return stored.toDto();
   }
 
+  /** {@code true} si el id es un expediente persistido del tenant (no un borrador). */
+  public boolean esExpedientePersistido(String idExpediente) {
+    return caseDocs.isCase(idExpediente);
+  }
+
+  /** Versión vigente del documento en un expediente persistido; {@code null} en un borrador. */
+  public Integer versionActual(String sessionId, String fileId) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
+    return official == null ? null : caseDocs.versionActual(official, fileId);
+  }
+
   /** Lookup bytes del borrador (sessionId = idExpediente). */
   public StoredDoc requireStoredDoc(String sessionId, String fileId) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
@@ -506,36 +517,6 @@ public class CargaDocumentoService {
       return;
     }
     draft.ocrResultados().put(resultado.idDocumento(), resultado);
-  }
-
-  /**
-   * Vuelca OCR del borrador a {@code app.documento_texto_ocr}. Llamar al crear expediente definitivo.
-   */
-  public void persistirOcrAlCrearExpediente(String idExpediente, UUID tenantId) {
-    DraftExpediente draft = drafts.get(idExpediente);
-    if (draft == null) {
-      return;
-    }
-    for (DocumentoOcrResultadoDTO r : draft.ocrResultados().values()) {
-      try {
-        DocumentoTextoOcr row =
-            ocrRepository
-                .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
-                .orElseGet(DocumentoTextoOcr::new);
-        row.setTenantId(tenantId);
-        row.setIdExpediente(idExpediente);
-        row.setIdDocumento(r.idDocumento());
-        row.setTipoDocumento(r.tipoDocumento());
-        row.setTextoOcr(r.textoOcr());
-        row.setAnalisisJson(r.analisisJson());
-        row.setEstadoDoc(r.estado());
-        row.setMotivo(r.motivo());
-        row.setConfianza(r.confianza());
-        ocrRepository.save(row);
-      } catch (Exception e) {
-        // no bloquear alta si falla el volcado OCR
-      }
-    }
   }
 
   void actualizarDocPrevalidacion(

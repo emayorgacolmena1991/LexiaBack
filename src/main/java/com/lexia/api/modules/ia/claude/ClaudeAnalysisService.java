@@ -950,7 +950,13 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     sev.put("type", "string");
     sev.putArray("enum").add("HIGH").add("MEDIUM").add("LOW");
     itemProps.putObject("mensaje").put("type", "string");
-    item.putArray("required").add("codigo").add("severidad").add("mensaje");
+    ObjectNode documento = itemProps.putObject("documentoId");
+    documento.putArray("type").add("string").add("null");
+    documento.put(
+        "description",
+        "Exactamente uno de los id de <documento> del texto, o null si la observación es general"
+            + " del expediente o involucra varios documentos.");
+    item.putArray("required").add("codigo").add("severidad").add("mensaje").add("documentoId");
     node.putArray("required").add("estado").add("resumen").add("observaciones");
     return node;
   }

@@ -36,6 +36,11 @@ public final class OcrFlujoDtos {
       String textoExtraido,
       String estado) {}
 
+  /**
+   * {@code documentId}/{@code versionNo}/{@code ocrOk} se suman a los campos que ya lee el wizard.
+   * {@code versionNo} es null en un borrador (sin versiones); con {@code ocrOk=false} el texto es el
+   * anterior.
+   */
   public record ReuploadResponse(
       String fileId,
       String fileName,
@@ -43,7 +48,10 @@ public final class OcrFlujoDtos {
       boolean legible,
       double scoreConfianza,
       String textoExtraido,
-      String motivo) {}
+      String motivo,
+      String documentId,
+      Integer versionNo,
+      boolean ocrOk) {}
 
   public record ConsolidateRequest(String sessionId, String consolidatedContent) {}
 

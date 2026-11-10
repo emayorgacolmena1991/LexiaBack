@@ -28,7 +28,16 @@ public class TitleObservation {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
+  /** Documento del expediente que origina la observación; null = general. */
+  @Column(name = "legal_document_id")
+  private UUID legalDocumentId;
+
   public static TitleObservation create(UUID tenantId, UUID titleStudyId, String detail) {
+    return create(tenantId, titleStudyId, detail, null);
+  }
+
+  public static TitleObservation create(
+      UUID tenantId, UUID titleStudyId, String detail, UUID legalDocumentId) {
     TitleObservation obs = new TitleObservation();
     obs.id = UUID.randomUUID();
     obs.tenantId = tenantId;
@@ -36,7 +45,12 @@ public class TitleObservation {
     obs.detail = detail;
     obs.status = "OPEN";
     obs.createdAt = Instant.now();
+    obs.legalDocumentId = legalDocumentId;
     return obs;
+  }
+
+  public UUID getLegalDocumentId() {
+    return legalDocumentId;
   }
 
   public UUID getId() {

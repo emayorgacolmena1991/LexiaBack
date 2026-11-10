@@ -7,6 +7,7 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ObservacionCotejoItem;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.RegularizacionResponse;
 import com.lexia.api.modules.expedientes.escrituracion.core.ObservacionesCotejo;
+import com.lexia.api.modules.expedientes.escrituracion.core.ObservacionesPorDocumento;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservation;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudy;
@@ -35,18 +36,21 @@ public class RegularizacionEscrituracionService {
   private final WritingFileRepository writingFiles;
   private final TitleStudyRepository titleStudies;
   private final TitleObservationRepository titleObservations;
+  private final ObservacionesPorDocumento porDocumento;
 
   public RegularizacionEscrituracionService(
       AuthorizationService authorization,
       LegalCaseRepository legalCases,
       WritingFileRepository writingFiles,
       TitleStudyRepository titleStudies,
-      TitleObservationRepository titleObservations) {
+      TitleObservationRepository titleObservations,
+      ObservacionesPorDocumento porDocumento) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
     this.titleStudies = titleStudies;
     this.titleObservations = titleObservations;
+    this.porDocumento = porDocumento;
   }
 
   @Transactional
@@ -156,13 +160,17 @@ public class RegularizacionEscrituracionService {
   private RegularizacionResponse respuesta(LegalCase legalCase, WritingFile file, UUID tenantId) {
     List<ObservacionCotejoItem> abiertas = observacionesAbiertas(file, tenantId);
     boolean puede = file.isFlagBloqueoReenvio() && abiertas.isEmpty() && !productoVacio(legalCase, file);
+    ObservacionesPorDocumento.Agrupadas agrupadas =
+        porDocumento.agrupar(legalCase.getId(), tenantId, abiertas);
     return new RegularizacionResponse(
         legalCase.getId(),
         file.getId(),
         file.getEstadoRegularizacion(),
         file.isFlagBloqueoReenvio(),
         puede,
-        abiertas);
+        abiertas,
+        agrupadas.porDocumento(),
+        agrupadas.generales());
   }
 
   private List<ObservacionCotejoItem> observacionesAbiertas(WritingFile file, UUID tenantId) {

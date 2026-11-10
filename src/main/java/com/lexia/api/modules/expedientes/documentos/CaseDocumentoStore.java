@@ -174,6 +174,12 @@ public class CaseDocumentoStore {
         doc.getDocType());
   }
 
+  @Transactional(readOnly = true)
+  public Integer versionActual(CaseFileContext ctx, String fileId) {
+    DocumentVersion version = latest(requireDoc(ctx, fileId).getId(), ctx.tenantId());
+    return version == null ? null : version.getVersionNo();
+  }
+
   @Transactional
   public StoredDoc reemplazar(
       CaseFileContext ctx, String fileId, String original, String mime, byte[] bytes, String tipo) {
