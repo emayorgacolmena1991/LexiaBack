@@ -50,6 +50,13 @@ lexia:
       zona-horaria: ${LEXIA_COACTIVAS_ZONA_HORARIA:America/Guayaquil}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
+  # Clasificación automática del tipo documental tras el OCR (expedientes persistidos).
+  clasificacion:
+    # Confianza mínima (0-1) para asignar el tipo; por debajo queda como sugerencia (POR_REVISAR).
+    umbral: ${LEXIA_CLASIFICACION_UMBRAL:0.8}
+    timeout-ms: ${LEXIA_CLASIFICACION_TIMEOUT_MS:8000}
+    # Vacío → el primero de anthropic.models.
+    modelo: ${LEXIA_CLASIFICACION_MODELO:}
   worker:
     id: ${LEXIA_WORKER_ID:${HOSTNAME:${COMPUTERNAME:local-dev-worker}}}
   prompts:

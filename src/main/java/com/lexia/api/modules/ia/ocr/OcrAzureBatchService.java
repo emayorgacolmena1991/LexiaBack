@@ -3,6 +3,8 @@ package com.lexia.api.modules.ia.ocr;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService.Modo;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
@@ -46,18 +48,21 @@ public class OcrAzureBatchService {
   private final OcrSessionCacheService cache;
   private final DocumentoTextoOcrRepository ocrRepository;
   private final Executor ocrExecutor;
+  private final ClasificacionDocumentoService clasificador;
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
       CargaDocumentoService cargaDocumentoService,
       OcrSessionCacheService cache,
       DocumentoTextoOcrRepository ocrRepository,
-      @Qualifier("ocrExecutor") Executor ocrExecutor) {
+      @Qualifier("ocrExecutor") Executor ocrExecutor,
+      ClasificacionDocumentoService clasificador) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
     this.ocrRepository = ocrRepository;
     this.ocrExecutor = ocrExecutor;
+    this.clasificador = clasificador;
   }
 
   public AnalyzeBatchResponse analyzeBatch(AnalyzeBatchRequest request) {
@@ -135,7 +140,7 @@ public class OcrAzureBatchService {
           StringUtils.hasText(stored.codigoTipoDocumento())
               ? stored.codigoTipoDocumento()
               : (tipo == null ? "DOCUMENTO" : tipo);
-      return procesarArchivo(sessionId, stored, tipoFinal);
+      return procesarArchivo(sessionId, stored, tipoFinal, Modo.ASIGNAR).item();
     } catch (ApiException e) {
       throw e;
     } catch (Exception e) {
@@ -191,7 +196,7 @@ public class OcrAzureBatchService {
             ? stored.codigoTipoDocumento()
             : (tipo == null ? "DOCUMENTO" : tipo);
 
-    AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal);
+    AnalyzeBatchResultItem item = procesarArchivo(sessionId, stored, tipoFinal, Modo.ASIGNAR).item();
     String estado = item.legible() ? "LEGIBLE" : "REVISAR";
     return new AnalyzeSingleResponse(
         item.fileId(),
@@ -248,10 +253,13 @@ public class OcrAzureBatchService {
             : (StringUtils.hasText(tipoDocumento) ? tipoDocumento.trim() : "DOCUMENTO");
     Integer versionNo = cargaDocumentoService.versionActual(sesion, replaced.idDocumento());
 
-    AnalyzeBatchResultItem item = ocrYConsolidar(sesion, replaced, tipo);
-    if (item == null) {
+    // El documento conserva su tipo: el clasificador solo detecta y avisa si no coincide.
+    Procesado procesado = ocrYConsolidar(sesion, replaced, tipo, Modo.SOLO_DETECTAR);
+    if (procesado == null) {
       return reuploadSinOcr(sesion, replaced, tipo, versionNo);
     }
+    AnalyzeBatchResultItem item = procesado.item();
+    String detectado = procesado.clasificacion().tipoDetectado();
     return new ReuploadResponse(
         item.fileId(),
         replaced.nombreOriginal(),
@@ -262,7 +270,9 @@ public class OcrAzureBatchService {
         item.motivo(),
         replaced.idDocumento(),
         versionNo,
-        true);
+        true,
+        detectado,
+        detectado == null ? null : detectado.equals(replaced.codigoTipoDocumento()));
   }
 
   /**
@@ -286,7 +296,9 @@ public class OcrAzureBatchService {
         OCR_FALLIDO,
         replaced.idDocumento(),
         versionNo,
-        false);
+        false,
+        null,
+        null);
   }
 
   /**
@@ -308,14 +320,14 @@ public class OcrAzureBatchService {
     StoredDoc stored = cargaDocumentoService.requireStoredDoc(sesion, idDocumento.trim());
     String tipo =
         StringUtils.hasText(stored.codigoTipoDocumento()) ? stored.codigoTipoDocumento() : "DOCUMENTO";
-    return ocrYConsolidar(sesion, stored, tipo) != null;
+    return ocrYConsolidar(sesion, stored, tipo, Modo.ASIGNAR) != null;
   }
 
   /** {@code null} si Azure falla: no se toca ni la caché ni la fila OCR anterior. */
-  private AnalyzeBatchResultItem ocrYConsolidar(String sesion, StoredDoc stored, String tipo) {
-    AnalyzeBatchResultItem item;
+  private Procesado ocrYConsolidar(String sesion, StoredDoc stored, String tipo, Modo modo) {
+    Procesado procesado;
     try {
-      item = procesarArchivo(sesion, stored, tipo);
+      procesado = procesarArchivo(sesion, stored, tipo, modo);
     } catch (RuntimeException e) {
       LOG.warn(
           "OCR falló sesion={} doc={}: {}; se conserva el texto anterior",
@@ -325,7 +337,7 @@ public class OcrAzureBatchService {
       return null;
     }
     consolidate(new ConsolidateRequest(sesion, null));
-    return item;
+    return procesado;
   }
 
   public ConsolidateResponse consolidate(ConsolidateRequest request) {
@@ -367,17 +379,27 @@ public class OcrAzureBatchService {
     return new ConsolidatedGetResponse(id, OcrSessionCacheService.cacheKey(id), content);
   }
 
-  private AnalyzeBatchResultItem procesarArchivo(
-      String sessionId, StoredDoc stored, String tipoDocumento) {
+  /** Resultado del pipeline de un archivo: OCR + clasificación. */
+  private record Procesado(
+      AnalyzeBatchResultItem item, ClasificacionDocumentoService.Resultado clasificacion) {}
+
+  private Procesado procesarArchivo(
+      String sessionId, StoredDoc stored, String tipoDocumento, Modo modo) {
     LayoutExtractResult layout =
         layoutService.evaluarYExtraer(stored.bytes(), stored.mimeType());
     CalidadDocumentoResultado q = layout.calidad();
     String texto = layout.texto() == null ? "" : layout.texto();
 
+    // Justo después del OCR: si asigna tipo, caché y fila OCR ya llevan ese tipo (<documento tipo>).
+    ClasificacionDocumentoService.Resultado clasificacion =
+        clasificar(sessionId, stored.idDocumento(), texto, modo);
+    String tipoFinal =
+        clasificacion.tipoAsignado() != null ? clasificacion.tipoAsignado() : tipoDocumento;
+
     AnalyzeBatchResultItem item =
         new AnalyzeBatchResultItem(
             stored.idDocumento(),
-            tipoDocumento,
+            tipoFinal,
             q.legible(),
             q.legible() ? null : q.mensaje(),
             q.promedioConfianza(),
@@ -408,7 +430,22 @@ public class OcrAzureBatchService {
             item.legible() ? "LEGIBLE" : "REVISAR",
             item.motivo(),
             confianza));
-    return item;
+    return new Procesado(item, clasificacion);
+  }
+
+  /**
+   * La clasificación es complementaria: un fallo al guardarla tampoco rompe el OCR. El
+   * clasificador ya convierte los fallos del LLM en estado ERROR; aquí solo llegan fallos de BD.
+   */
+  private ClasificacionDocumentoService.Resultado clasificar(
+      String sessionId, String idDocumento, String texto, Modo modo) {
+    try {
+      return clasificador.clasificar(sessionId, idDocumento, texto, modo);
+    } catch (RuntimeException e) {
+      LOG.error(
+          "Clasificación no aplicada doc={}: {}", idDocumento, e.getClass().getSimpleName(), e);
+      return ClasificacionDocumentoService.Resultado.OMITIDO;
+    }
   }
 
   private static String safe(Exception e) {

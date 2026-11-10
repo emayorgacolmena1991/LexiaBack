@@ -99,7 +99,13 @@ public class CaseDocumentoStore {
       long bytes = version == null ? 0 : storage.size(version.getStorageKey());
       rows.add(
           new DocumentoCargadoDTO(
-              doc.getId().toString(), doc.getName(), formatSize(bytes), doc.getDocType()));
+              doc.getId().toString(),
+              doc.getName(),
+              formatSize(bytes),
+              doc.getDocType(),
+              doc.getTipoSugerido(),
+              doc.getClasificacionEstado(),
+              doc.getClasificacionOrigen()));
     }
     return rows;
   }
@@ -140,7 +146,77 @@ public class CaseDocumentoStore {
       doc.classify(codigo);
     }
     documents.save(doc);
+    tipoEnFilaOcr(ctx, doc);
     return new TipoActualizadoDTO(doc.getId().toString(), doc.getDocType(), "CLASIFICADO");
+  }
+
+  /** El {@code <documento tipo>} que recibe la IA sale de la fila OCR: va con el tipo vigente. */
+  private void tipoEnFilaOcr(CaseFileContext ctx, LegalDocument doc) {
+    ocrRows
+        .findByIdExpedienteAndIdDocumento(ctx.caseId().toString(), doc.getId().toString())
+        .filter(row -> !java.util.Objects.equals(row.getTipoDocumento(), doc.getDocType()))
+        .ifPresent(
+            row -> {
+              row.setTipoDocumento(doc.getDocType());
+              ocrRows.save(row);
+            });
+  }
+
+  /** Estado de clasificación antes de llamar al LLM (fuera de la transacción de la llamada). */
+  @Transactional(readOnly = true)
+  public ClasificacionActual clasificacionActual(CaseFileContext ctx, String fileId) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    return new ClasificacionActual(doc.getDocType(), doc.tipoFijadoPorUsuario());
+  }
+
+  /**
+   * Guarda el resultado del clasificador. Se relee el documento: si entre la llamada al LLM y
+   * ahora alguien lo clasificó a mano, {@code asignar} no tiene efecto.
+   *
+   * @return el tipo vigente del documento tras aplicar.
+   */
+  @Transactional
+  public String aplicarClasificacion(
+      CaseFileContext ctx,
+      String fileId,
+      String tipo,
+      java.math.BigDecimal confianza,
+      String modelo,
+      String estado,
+      boolean asignar) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    doc.registrarClasificacionAuto(tipo, confianza, modelo, estado, asignar);
+    documents.save(doc);
+    return doc.getDocType();
+  }
+
+  @Transactional
+  public void registrarErrorClasificacion(CaseFileContext ctx, String fileId, String modelo) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    doc.registrarErrorClasificacion(modelo);
+    documents.save(doc);
+  }
+
+  /**
+   * Promoción: el documento recién creado hereda tipo y clasificación del borrador tal cual (sin
+   * reclasificar). En escaneado el tipo es fijo y va por {@link #actualizarTipo}.
+   */
+  @Transactional
+  public void copiarClasificacion(
+      CaseFileContext ctx,
+      String fileId,
+      String docType,
+      CargaDocumentoService.ClasificacionBorrador clasificacion) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    doc.copiarClasificacion(
+        docType,
+        clasificacion.tipoSugerido(),
+        clasificacion.confianza(),
+        clasificacion.origen(),
+        clasificacion.estado(),
+        clasificacion.modelo(),
+        clasificacion.clasificadoEn());
+    documents.save(doc);
   }
 
   @Transactional
@@ -184,11 +260,16 @@ public class CaseDocumentoStore {
   public StoredDoc reemplazar(
       CaseFileContext ctx, String fileId, String original, String mime, byte[] bytes, String tipo) {
     LegalDocument doc = requireDoc(ctx, fileId);
+    String tipoPrevio = doc.getDocType();
     String tipoFinal =
         ctx.ingestionMode().isFisicoEscaneado()
             ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
-            : (StringUtils.hasText(tipo) ? tipo.trim() : doc.getDocType());
+            : (StringUtils.hasText(tipo) ? tipo.trim() : tipoPrevio);
     doc.rename(original, tipoFinal);
+    if (!java.util.Objects.equals(tipoPrevio, tipoFinal)) {
+      // El usuario eligió otro tipo al reemplazar: es una clasificación manual.
+      doc.classify(tipoFinal);
+    }
     documents.save(doc);
     int next =
         versions
@@ -341,6 +422,9 @@ public class CaseDocumentoStore {
     return (mb < 10 ? String.format(Locale.ROOT, "%.1f", mb) : String.valueOf(Math.round(mb)))
         + " MB";
   }
+
+  /** @param fijadoPorUsuario MANUAL o tipo previo a la clasificación automática. */
+  public record ClasificacionActual(String docType, boolean fijadoPorUsuario) {}
 
   public record CaseFileContext(
       UUID caseId, UUID tenantId, String productCode, String canton, IngestionMode ingestionMode) {}

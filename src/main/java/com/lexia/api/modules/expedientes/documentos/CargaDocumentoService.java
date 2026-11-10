@@ -18,6 +18,8 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Prevalida
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -156,7 +158,9 @@ public class CargaDocumentoService {
       return caseDocs.listar(official);
     }
     DraftExpediente draft = requireDraft(idExpediente);
-    return draft.documentos().values().stream().map(StoredDoc::toDto).toList();
+    return draft.documentos().values().stream()
+        .map(doc -> doc.toDto(draft.clasificaciones().get(doc.idDocumento())))
+        .toList();
   }
 
   public DocumentoCargadoDTO subir(String idExpediente, MultipartFile file) {
@@ -209,6 +213,96 @@ public class CargaDocumentoService {
             fisico ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO : null);
     draft.documentos().put(idDoc, stored);
     return stored.toDto();
+  }
+
+  /**
+   * Estado de clasificación de un documento del borrador; vacío si {@code sessionId} no es un
+   * borrador, el documento no está o el modo es escaneado (tipo fijo).
+   */
+  public Optional<CaseDocumentoStore.ClasificacionActual> clasificacionActualBorrador(
+      String sessionId, String fileId) {
+    DraftExpediente draft = borradorONull(sessionId);
+    if (draft == null || draft.ingestionMode().isFisicoEscaneado()) {
+      return Optional.empty();
+    }
+    StoredDoc doc = draft.documentos().get(fileId);
+    if (doc == null) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        new CaseDocumentoStore.ClasificacionActual(
+            doc.codigoTipoDocumento(), draft.tipoFijadoPorUsuario(doc)));
+  }
+
+  /**
+   * Mismo criterio que {@link LegalDocument#registrarClasificacionAuto}: asigna solo si
+   * {@code asignar} y el tipo no lo fijó el usuario (se revisa de nuevo bajo el lock del mapa).
+   *
+   * @return tipo vigente del documento tras aplicar.
+   */
+  public String aplicarClasificacionBorrador(
+      String sessionId,
+      String fileId,
+      String tipo,
+      BigDecimal confianza,
+      String modelo,
+      String estado,
+      boolean asignar) {
+    DraftExpediente draft = requireDraft(sessionId);
+    synchronized (draft.documentos()) {
+      StoredDoc doc = draft.documentos().get(fileId);
+      if (doc == null) {
+        throw ApiException.notFound("Documento no encontrado: " + fileId);
+      }
+      ClasificacionBorrador previa = draft.clasificaciones().get(fileId);
+      boolean fijado = draft.tipoFijadoPorUsuario(doc);
+      boolean asigna = asignar && !fijado;
+      if (asigna) {
+        doc = doc.withTipo(tipo);
+        draft.documentos().put(fileId, doc);
+      }
+      String origen =
+          asigna ? LegalDocument.ORIGEN_AUTO : (previa == null ? null : previa.origen());
+      draft.clasificaciones()
+          .put(fileId, new ClasificacionBorrador(tipo, confianza, origen, estado, modelo, Instant.now()));
+      return doc.codigoTipoDocumento();
+    }
+  }
+
+  public void registrarErrorClasificacionBorrador(String sessionId, String fileId, String modelo) {
+    DraftExpediente draft = requireDraft(sessionId);
+    draft.clasificaciones()
+        .compute(
+            fileId,
+            (id, previa) ->
+                new ClasificacionBorrador(
+                    previa == null ? null : previa.tipoSugerido(),
+                    previa == null ? null : previa.confianza(),
+                    previa == null ? null : previa.origen(),
+                    LegalDocument.ESTADO_ERROR,
+                    modelo,
+                    Instant.now()));
+  }
+
+  /** Para la promoción: la clasificación de cada documento del borrador (id DOC-xxxx). */
+  public Map<String, ClasificacionBorrador> clasificacionesDelBorrador(String draftId) {
+    DraftExpediente draft = borradorONull(draftId);
+    return draft == null ? Map.of() : Map.copyOf(draft.clasificaciones());
+  }
+
+  /** {@code null} si no es un borrador del tenant: aquí no es un error, es "no aplica". */
+  private DraftExpediente borradorONull(String sessionId) {
+    if (caseDocs.context(sessionId) != null) {
+      return null;
+    }
+    try {
+      return requireDraft(sessionId);
+    } catch (ApiException e) {
+      if (e.getStatus() != org.springframework.http.HttpStatus.NOT_FOUND) {
+        throw e;
+      }
+      return null;
+    }
   }
 
   /** {@code true} si el id es un expediente persistido del tenant (no un borrador). */
@@ -297,6 +391,9 @@ public class CargaDocumentoService {
             tipo);
     draft.documentos().put(fileId, replaced);
     draft.ocrResultados().remove(fileId);
+    if (!fisico && !java.util.Objects.equals(tipo, existing.codigoTipoDocumento())) {
+      draft.marcarManual(fileId);
+    }
     return replaced;
   }
 
@@ -322,6 +419,7 @@ public class CargaDocumentoService {
       return;
     }
     draft.documentos().put(fileId, doc.withTipo(tipo.trim()));
+    draft.marcarManual(fileId);
   }
 
   public TipoActualizadoDTO actualizarTipo(
@@ -356,6 +454,7 @@ public class CargaDocumentoService {
     }
     StoredDoc updated = doc.withTipo(codigo);
     draft.documentos().put(idDocumento, updated);
+    draft.marcarManual(idDocumento);
     return new TipoActualizadoDTO(idDocumento, codigo, "CLASIFICADO");
   }
 
@@ -373,6 +472,7 @@ public class CargaDocumentoService {
       throw ApiException.notFound("Documento no encontrado: " + idDocumento);
     }
     draft.ocrResultados().remove(idDocumento);
+    draft.clasificaciones().remove(idDocumento);
   }
 
   /** POST iniciar-procesamiento / procesar-ia: encola Azure→Gemini una sola vez. */
@@ -667,6 +767,8 @@ public class CargaDocumentoService {
         Collections.synchronizedMap(new LinkedHashMap<>());
     /** OCR+LLM solo en RAM hasta crear expediente. */
     private final Map<String, DocumentoOcrResultadoDTO> ocrResultados = new ConcurrentHashMap<>();
+    /** Clasificación por documento (automática o manual) hasta la promoción. */
+    private final Map<String, ClasificacionBorrador> clasificaciones = new ConcurrentHashMap<>();
     private volatile boolean locked;
     private volatile PrevalidacionState prevalidacion;
 
@@ -713,6 +815,34 @@ public class CargaDocumentoService {
 
     Map<String, DocumentoOcrResultadoDTO> ocrResultados() {
       return ocrResultados;
+    }
+
+    Map<String, ClasificacionBorrador> clasificaciones() {
+      return clasificaciones;
+    }
+
+    /** El usuario eligió el tipo: MANUAL, conservando la última sugerencia del clasificador. */
+    void marcarManual(String fileId) {
+      clasificaciones.compute(
+          fileId,
+          (id, previa) ->
+              new ClasificacionBorrador(
+                  previa == null ? null : previa.tipoSugerido(),
+                  previa == null ? null : previa.confianza(),
+                  LegalDocument.ORIGEN_MANUAL,
+                  LegalDocument.ESTADO_CLASIFICADO,
+                  previa == null ? null : previa.modelo(),
+                  Instant.now()));
+    }
+
+    /** Igual que en {@code LegalDocument}: MANUAL, o un tipo puesto sin pasar por el clasificador. */
+    boolean tipoFijadoPorUsuario(StoredDoc doc) {
+      ClasificacionBorrador c = clasificaciones.get(doc.idDocumento());
+      if (c != null) {
+        return LegalDocument.ORIGEN_MANUAL.equals(c.origen())
+            || (c.origen() == null && StringUtils.hasText(doc.codigoTipoDocumento()));
+      }
+      return StringUtils.hasText(doc.codigoTipoDocumento());
     }
 
     void clearOcrResultados() {
@@ -834,7 +964,30 @@ public class CargaDocumentoService {
     }
 
     DocumentoCargadoDTO toDto() {
-      return new DocumentoCargadoDTO(idDocumento, nombreOriginal, tamano, codigoTipoDocumento);
+      return toDto(null);
+    }
+
+    DocumentoCargadoDTO toDto(ClasificacionBorrador clasificacion) {
+      return new DocumentoCargadoDTO(
+          idDocumento,
+          nombreOriginal,
+          tamano,
+          codigoTipoDocumento,
+          clasificacion == null ? null : clasificacion.tipoSugerido(),
+          clasificacion == null ? null : clasificacion.estado(),
+          clasificacion == null ? null : clasificacion.origen());
     }
   }
+
+  /**
+   * Clasificación de un documento del borrador; viaja al {@code LegalDocument} en la promoción.
+   * {@code origen} null = el clasificador solo sugirió (no asignó).
+   */
+  public record ClasificacionBorrador(
+      String tipoSugerido,
+      BigDecimal confianza,
+      String origen,
+      String estado,
+      String modelo,
+      Instant clasificadoEn) {}
 }

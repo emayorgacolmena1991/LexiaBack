@@ -40,8 +40,30 @@ public final class CargaDocumentoDtos {
 
   public record TipoPermitidoDTO(String codigo, String nombre) {}
 
+  /**
+   * Documento cargado (borrador o expediente). {@code tipoSugerido}/{@code clasificacionEstado}/
+   * {@code clasificacionOrigen}: resultado del clasificador automático; null si no corrió.
+   */
   public record DocumentoCargadoDTO(
-      String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {}
+      String idDocumento,
+      String nombreOriginal,
+      String tamano,
+      String codigoTipoDocumento,
+      String tipoSugerido,
+      String clasificacionEstado,
+      String clasificacionOrigen) {
+
+    public DocumentoCargadoDTO(
+        String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {
+      this(idDocumento, nombreOriginal, tamano, codigoTipoDocumento, null, null, null);
+    }
+
+    /** Mismo valor que {@code codigoTipoDocumento}, con el nombre que usa el resto del API. */
+    @com.fasterxml.jackson.annotation.JsonProperty("tipoDocumento")
+    public String tipoDocumento() {
+      return codigoTipoDocumento;
+    }
+  }
 
   /**
    * Respuesta del upload. {@code ocrOk}: resultado del OCR síncrono en un expediente persistido;

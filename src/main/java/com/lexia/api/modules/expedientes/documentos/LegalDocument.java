@@ -7,6 +7,7 @@ import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.data.domain.Persistable;
@@ -39,6 +40,31 @@ public class LegalDocument implements Persistable<UUID> {
 
   @Column(name = "deleted_at")
   private Instant deletedAt;
+
+  @Column(name = "tipo_sugerido", length = 80)
+  private String tipoSugerido;
+
+  @Column(name = "clasificacion_confianza", precision = 4, scale = 3)
+  private BigDecimal clasificacionConfianza;
+
+  @Column(name = "clasificacion_origen", length = 16)
+  private String clasificacionOrigen;
+
+  @Column(name = "clasificacion_estado", nullable = false, length = 16)
+  private String clasificacionEstado = ESTADO_PENDIENTE;
+
+  @Column(name = "clasificacion_modelo", length = 80)
+  private String clasificacionModelo;
+
+  @Column(name = "clasificado_en")
+  private Instant clasificadoEn;
+
+  public static final String ORIGEN_AUTO = "AUTO";
+  public static final String ORIGEN_MANUAL = "MANUAL";
+  public static final String ESTADO_PENDIENTE = "PENDIENTE";
+  public static final String ESTADO_CLASIFICADO = "CLASIFICADO";
+  public static final String ESTADO_POR_REVISAR = "POR_REVISAR";
+  public static final String ESTADO_ERROR = "ERROR";
 
   public static LegalDocument create(UUID tenantId, UUID caseId, String name, String docType) {
     LegalDocument doc = new LegalDocument();
@@ -102,9 +128,93 @@ public class LegalDocument implements Persistable<UUID> {
     this.updatedAt = Instant.now();
   }
 
+  /** Tipo elegido por el usuario (PATCH, wizard, ingesta masiva): ninguna clasificación AUTO lo pisa. */
   public void classify(String docType) {
+    Instant now = Instant.now();
     this.docType = docType;
+    this.clasificacionOrigen = ORIGEN_MANUAL;
+    this.clasificacionEstado = ESTADO_CLASIFICADO;
+    this.clasificadoEn = now;
+    this.updatedAt = now;
+  }
+
+  /**
+   * MANUAL, o un tipo previo a la clasificación automática (sin origen): lo puso una persona.
+   */
+  public boolean tipoFijadoPorUsuario() {
+    return ORIGEN_MANUAL.equals(clasificacionOrigen)
+        || (clasificacionOrigen == null && docType != null && !docType.isBlank());
+  }
+
+  /**
+   * Resultado del clasificador. {@code asignar=true} solo si superó el umbral y el tipo no está
+   * fijado por el usuario; si no, queda como sugerencia con el estado recibido.
+   */
+  public void registrarClasificacionAuto(
+      String tipo, BigDecimal confianza, String modelo, String estado, boolean asignar) {
+    Instant now = Instant.now();
+    this.tipoSugerido = tipo;
+    this.clasificacionConfianza = confianza;
+    this.clasificacionModelo = modelo;
+    this.clasificacionEstado = estado;
+    this.clasificadoEn = now;
+    if (asignar && !tipoFijadoPorUsuario()) {
+      this.docType = tipo;
+      this.clasificacionOrigen = ORIGEN_AUTO;
+    }
+    this.updatedAt = now;
+  }
+
+  /** Promoción del borrador: el documento nace con la clasificación que ya tenía, sin reclasificar. */
+  public void copiarClasificacion(
+      String docType,
+      String tipoSugerido,
+      BigDecimal confianza,
+      String origen,
+      String estado,
+      String modelo,
+      Instant clasificadoEn) {
+    this.docType = docType;
+    this.tipoSugerido = tipoSugerido;
+    this.clasificacionConfianza = confianza;
+    this.clasificacionOrigen = origen;
+    this.clasificacionEstado = estado == null ? ESTADO_PENDIENTE : estado;
+    this.clasificacionModelo = modelo;
+    this.clasificadoEn = clasificadoEn;
     this.updatedAt = Instant.now();
+  }
+
+  /** El clasificador falló: el usuario clasifica a mano. No toca el tipo ni el origen. */
+  public void registrarErrorClasificacion(String modelo) {
+    Instant now = Instant.now();
+    this.clasificacionEstado = ESTADO_ERROR;
+    this.clasificacionModelo = modelo;
+    this.clasificadoEn = now;
+    this.updatedAt = now;
+  }
+
+  public String getTipoSugerido() {
+    return tipoSugerido;
+  }
+
+  public BigDecimal getClasificacionConfianza() {
+    return clasificacionConfianza;
+  }
+
+  public String getClasificacionOrigen() {
+    return clasificacionOrigen;
+  }
+
+  public String getClasificacionEstado() {
+    return clasificacionEstado;
+  }
+
+  public String getClasificacionModelo() {
+    return clasificacionModelo;
+  }
+
+  public Instant getClasificadoEn() {
+    return clasificadoEn;
   }
 
   public void softDelete() {

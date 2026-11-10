@@ -22,6 +22,7 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
@@ -72,6 +73,7 @@ class DocumentosPosterioresOcrTest {
   private final DocumentoTextoOcrRepository ocrRepo = mock(DocumentoTextoOcrRepository.class);
   private final CargaDocumentoService carga = mock(CargaDocumentoService.class);
   private final AzureCalidadDocumentoService azure = mock(AzureCalidadDocumentoService.class);
+  private final ClasificacionDocumentoService clasificador = mock(ClasificacionDocumentoService.class);
   private final OcrSessionCacheService cache = new OcrSessionCacheService(2);
   private final LegalCaseRepository legalCases = mock(LegalCaseRepository.class);
   private final ExpedienteCompletoLlmService llm = mock(ExpedienteCompletoLlmService.class);
@@ -100,7 +102,9 @@ class DocumentosPosterioresOcrTest {
     when(carga.esExpedientePersistido(CASO.toString())).thenReturn(true);
     when(azure.isConfigured()).thenReturn(true);
 
-    ocr = new OcrAzureBatchService(azure, carga, cache, ocrRepo, Runnable::run);
+    when(clasificador.clasificar(anyString(), anyString(), any(), any()))
+        .thenReturn(ClasificacionDocumentoService.Resultado.OMITIDO);
+    ocr = new OcrAzureBatchService(azure, carga, cache, ocrRepo, Runnable::run, clasificador);
 
     LegalCase legalCase = mock(LegalCase.class);
     when(legalCase.getProductCode()).thenReturn("VIV_HIPOTECADA_BIESS");
@@ -206,6 +210,79 @@ class DocumentosPosterioresOcrTest {
         .anyMatch(r -> AVALUO.equals(r.fileId()) && "AVALUO USD 95000".equals(r.textoExtraido()));
     String consolidado = texto(CASO.toString(), "consolidado");
     assertThat(consolidado).contains("CEDULA 0912345678").contains("AVALUO USD 95000");
+  }
+
+  private static ClasificacionDocumentoService.Resultado clasificado(
+      String estado, String asignado, String detectado, String vigente) {
+    return new ClasificacionDocumentoService.Resultado(
+        estado, asignado, detectado, new java.math.BigDecimal("0.950"), vigente);
+  }
+
+  @Test
+  void tipoAsignadoPorElClasificadorLlegaAFilaOcrCacheYTextoDelLlm() {
+    when(carga.requireStoredDoc(CASO.toString(), AVALUO))
+        .thenReturn(archivo(AVALUO, null, "AVALUO USD 95000"));
+    when(clasificador.clasificar(eq(CASO.toString()), eq(AVALUO), any(), eq(ClasificacionDocumentoService.Modo.ASIGNAR)))
+        .thenReturn(clasificado("CLASIFICADO", "AVALUO", "AVALUO", "AVALUO"));
+    azureLee();
+
+    assertEquals(Boolean.TRUE, ocr.ocrTrasSubir(CASO.toString(), AVALUO));
+
+    assertEquals("AVALUO", filas.get(clave(CASO.toString(), AVALUO)).getTipoDocumento());
+    assertThat(cache.listResults(CASO.toString()))
+        .singleElement()
+        .satisfies(r -> assertEquals("AVALUO", r.tipoDocumento()));
+    assertThat(textoEnviadoAlLlm(new AnalysisRequestDTO(false, null)))
+        .contains("<documento id=\"" + AVALUO + "\" tipo=\"AVALUO\">");
+  }
+
+  @Test
+  void siElClasificadorFallaElOcrIgualSeGuarda() {
+    when(carga.requireStoredDoc(CASO.toString(), AVALUO))
+        .thenReturn(archivo(AVALUO, null, "AVALUO USD 95000"));
+    when(clasificador.clasificar(any(), any(), any(), any()))
+        .thenThrow(new IllegalStateException("BD caída al guardar la clasificación"));
+    azureLee();
+
+    assertEquals(Boolean.TRUE, ocr.ocrTrasSubir(CASO.toString(), AVALUO));
+    assertEquals("AVALUO USD 95000", texto(CASO.toString(), AVALUO));
+    assertEquals("DOCUMENTO", filas.get(clave(CASO.toString(), AVALUO)).getTipoDocumento());
+  }
+
+  @Test
+  void reemplazoConTipoDistintoConservaElTipoYAvisaCoincideFalse() {
+    MockMultipartFile nuevo =
+        new MockMultipartFile("file", "cedula.pdf", "application/pdf", "AVALUO USD 95000".getBytes());
+    when(carga.reemplazarArchivoOcr(CASO.toString(), CEDULA, nuevo, null))
+        .thenReturn(archivo(CEDULA, "CEDULA", "AVALUO USD 95000"));
+    when(carga.versionActual(CASO.toString(), CEDULA)).thenReturn(2);
+    when(clasificador.clasificar(
+            eq(CASO.toString()), eq(CEDULA), any(), eq(ClasificacionDocumentoService.Modo.SOLO_DETECTAR)))
+        .thenReturn(clasificado("POR_REVISAR", null, "AVALUO", "CEDULA"));
+    azureLee();
+
+    ReuploadResponse respuesta = ocr.reupload(CASO.toString(), CEDULA, null, nuevo);
+
+    assertTrue(respuesta.ocrOk());
+    assertEquals("CEDULA", respuesta.tipoDocumento(), "el documento conserva su tipo");
+    assertEquals("AVALUO", respuesta.tipoDetectado());
+    assertEquals(Boolean.FALSE, respuesta.coincide());
+    assertEquals("CEDULA", filas.get(clave(CASO.toString(), CEDULA)).getTipoDocumento());
+  }
+
+  @Test
+  void reemplazoConElMismoTipoCoincide() {
+    MockMultipartFile nuevo =
+        new MockMultipartFile("file", "cedula.pdf", "application/pdf", "CEDULA 222".getBytes());
+    when(carga.reemplazarArchivoOcr(CASO.toString(), CEDULA, nuevo, null))
+        .thenReturn(archivo(CEDULA, "CEDULA", "CEDULA 222"));
+    when(clasificador.clasificar(any(), any(), any(), eq(ClasificacionDocumentoService.Modo.SOLO_DETECTAR)))
+        .thenReturn(clasificado("CLASIFICADO", null, "CEDULA", "CEDULA"));
+    azureLee();
+
+    ReuploadResponse respuesta = ocr.reupload(CASO.toString(), CEDULA, null, nuevo);
+
+    assertEquals(Boolean.TRUE, respuesta.coincide());
   }
 
   @Test

@@ -39,7 +39,8 @@ public final class OcrFlujoDtos {
   /**
    * {@code documentId}/{@code versionNo}/{@code ocrOk} se suman a los campos que ya lee el wizard.
    * {@code versionNo} es null en un borrador (sin versiones); con {@code ocrOk=false} el texto es el
-   * anterior.
+   * anterior. {@code tipoDetectado}/{@code coincide}: lo que propone el clasificador frente al tipo
+   * que conserva el documento; null si no se clasificó (borrador, escaneado, OCR fallido).
    */
   public record ReuploadResponse(
       String fileId,
@@ -51,7 +52,9 @@ public final class OcrFlujoDtos {
       String motivo,
       String documentId,
       Integer versionNo,
-      boolean ocrOk) {}
+      boolean ocrOk,
+      String tipoDetectado,
+      Boolean coincide) {}
 
   public record ConsolidateRequest(String sessionId, String consolidatedContent) {}
 

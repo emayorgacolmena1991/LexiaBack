@@ -97,7 +97,7 @@ class CoactivaDiagnosticoClaudeTest {
     private final ArrayDeque<String> respuestas = new ArrayDeque<>();
 
     StubClaude() {
-      super("test-key", "claude-sonnet-5", new ObjectMapper(), null);
+      super("test-key", "claude-sonnet-5", "", new ObjectMapper(), null);
     }
 
     void responde(String body) {

@@ -11,6 +11,21 @@ public interface AnalisisDocumentoService {
   boolean isConfigured();
 
   /**
+   * Clasifica UN documento por su texto OCR (ya recortado por el llamador) entre {@code tipos}
+   * (lista cerrada; el proveedor agrega {@code OTRO}). Una sola llamada, sin reintentos, con
+   * {@code limite} como timeout. Lanza excepción si no puede responder: el llamador no debe romper
+   * el OCR por eso. Default: no soportado.
+   */
+  default ClasificacionDocumento clasificarDocumento(
+      String textoOcr, java.util.List<String> tipos, java.time.Duration limite) {
+    throw new UnsupportedOperationException(
+        "Clasificación de documentos no disponible para este proveedor LLM.");
+  }
+
+  /** @param confianza 0-1 según el modelo; {@code modelo} identifica qué modelo clasificó. */
+  record ClasificacionDocumento(String tipo, double confianza, String modelo) {}
+
+  /**
    * Una sola llamada por expediente: extracción por documento (cotejo) + datos consolidados +
    * dictamen. El prompt ya viene resuelto. El OCR llega marcado por archivo
    * ({@code <documento id="...">}), sin PDF unificado.
