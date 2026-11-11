@@ -11,6 +11,7 @@ import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.CaseStageRepository;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersionRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.documentos.LegalDocument;
@@ -92,7 +93,7 @@ class ExpedienteEstadoObservacionesTest {
             mock(MinutaGenerationService.class),
             mock(CaseStageRepository.class),
             mock(ProcessStageDefRepository.class),
-            new ObservacionesPorDocumento(documents, versions, studies, observaciones));
+            new ObservacionesPorDocumento(documents, versions, studies, observaciones, mock(CargaDocumentoService.class)));
 
     EstadoEscrituracion estado = service.estadoFlujo(CASO);
 
@@ -135,7 +136,8 @@ class ExpedienteEstadoObservacionesTest {
             mock(CaseStageRepository.class),
             mock(ProcessStageDefRepository.class),
             new ObservacionesPorDocumento(
-                mock(LegalDocumentRepository.class), mock(DocumentVersionRepository.class), studies, observaciones));
+                mock(LegalDocumentRepository.class), mock(DocumentVersionRepository.class), studies, observaciones,
+                mock(CargaDocumentoService.class)));
 
     EstadoEscrituracion estado = service.estadoFlujo(CASO);
 

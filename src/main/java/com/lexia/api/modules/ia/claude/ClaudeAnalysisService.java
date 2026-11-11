@@ -1038,10 +1038,33 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     documento.putArray("type").add("string").add("null");
     documento.put(
         "description",
-        "Exactamente uno de los id de <documento> del texto, o null si la observación es general"
-            + " del expediente o involucra varios documentos.");
-    item.putArray("required").add("codigo").add("severidad").add("mensaje").add("documentoId");
-    node.putArray("required").add("estado").add("resumen").add("observaciones");
+        "Id de <documento> que el abogado debe corregir o reemplazar. null SOLO si falta un"
+            + " documento (entonces tipoDocumentoFaltante).");
+    ObjectNode relacionados = itemProps.putObject("documentosRelacionados");
+    relacionados.put("type", "array");
+    relacionados.putObject("items").put("type", "string");
+    relacionados.put(
+        "description", "Otros id de <documento> involucrados en el mismo problema; vacía si ninguno.");
+    ObjectNode faltante = itemProps.putObject("tipoDocumentoFaltante");
+    faltante.putArray("type").add("string").add("null");
+    faltante.put(
+        "description",
+        "Solo si documentoId es null: código de <tipos_documento> del documento que falta.");
+    item.putArray("required")
+        .add("codigo")
+        .add("severidad")
+        .add("mensaje")
+        .add("documentoId")
+        .add("documentosRelacionados")
+        .add("tipoDocumentoFaltante");
+    ObjectNode validaciones = props.putObject("validaciones");
+    validaciones.put("type", "array");
+    validaciones.putObject("items").put("type", "string");
+    validaciones.put(
+        "description",
+        "Lo que está correcto (vigencias en plazo, datos que coinciden, sin gravámenes). Nunca"
+            + " problemas.");
+    node.putArray("required").add("estado").add("resumen").add("observaciones").add("validaciones");
     return node;
   }
 

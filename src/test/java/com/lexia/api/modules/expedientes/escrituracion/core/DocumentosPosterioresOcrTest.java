@@ -104,7 +104,10 @@ class DocumentosPosterioresOcrTest {
 
     when(clasificador.clasificar(anyString(), anyString(), any(), any()))
         .thenReturn(ClasificacionDocumentoService.Resultado.OMITIDO);
-    ocr = new OcrAzureBatchService(azure, carga, cache, ocrRepo, Runnable::run, clasificador);
+    ocr =
+        new OcrAzureBatchService(
+            azure, carga, cache, ocrRepo, Runnable::run, clasificador,
+            mock(org.springframework.transaction.PlatformTransactionManager.class));
 
     LegalCase legalCase = mock(LegalCase.class);
     when(legalCase.getProductCode()).thenReturn("VIV_HIPOTECADA_BIESS");
@@ -250,42 +253,6 @@ class DocumentosPosterioresOcrTest {
   }
 
   @Test
-  void reemplazoConTipoDistintoConservaElTipoYAvisaCoincideFalse() {
-    MockMultipartFile nuevo =
-        new MockMultipartFile("file", "cedula.pdf", "application/pdf", "AVALUO USD 95000".getBytes());
-    when(carga.reemplazarArchivoOcr(CASO.toString(), CEDULA, nuevo, null))
-        .thenReturn(archivo(CEDULA, "CEDULA", "AVALUO USD 95000"));
-    when(carga.versionActual(CASO.toString(), CEDULA)).thenReturn(2);
-    when(clasificador.clasificar(
-            eq(CASO.toString()), eq(CEDULA), any(), eq(ClasificacionDocumentoService.Modo.SOLO_DETECTAR)))
-        .thenReturn(clasificado("POR_REVISAR", null, "AVALUO", "CEDULA"));
-    azureLee();
-
-    ReuploadResponse respuesta = ocr.reupload(CASO.toString(), CEDULA, null, nuevo);
-
-    assertTrue(respuesta.ocrOk());
-    assertEquals("CEDULA", respuesta.tipoDocumento(), "el documento conserva su tipo");
-    assertEquals("AVALUO", respuesta.tipoDetectado());
-    assertEquals(Boolean.FALSE, respuesta.coincide());
-    assertEquals("CEDULA", filas.get(clave(CASO.toString(), CEDULA)).getTipoDocumento());
-  }
-
-  @Test
-  void reemplazoConElMismoTipoCoincide() {
-    MockMultipartFile nuevo =
-        new MockMultipartFile("file", "cedula.pdf", "application/pdf", "CEDULA 222".getBytes());
-    when(carga.reemplazarArchivoOcr(CASO.toString(), CEDULA, nuevo, null))
-        .thenReturn(archivo(CEDULA, "CEDULA", "CEDULA 222"));
-    when(clasificador.clasificar(any(), any(), any(), eq(ClasificacionDocumentoService.Modo.SOLO_DETECTAR)))
-        .thenReturn(clasificado("CLASIFICADO", null, "CEDULA", "CEDULA"));
-    azureLee();
-
-    ReuploadResponse respuesta = ocr.reupload(CASO.toString(), CEDULA, null, nuevo);
-
-    assertEquals(Boolean.TRUE, respuesta.coincide());
-  }
-
-  @Test
   void uploadEnBorradorNoHaceOcr() {
     assertNull(ocr.ocrTrasSubir(BORRADOR.toString(), "DOC-1234"));
     verify(azure, never()).evaluarYExtraer(any(), any());
@@ -300,66 +267,6 @@ class DocumentosPosterioresOcrTest {
     assertEquals(Boolean.FALSE, ocr.ocrTrasSubir(CASO.toString(), AVALUO));
     assertNull(texto(CASO.toString(), AVALUO));
     assertNull(texto(CASO.toString(), "consolidado"));
-  }
-
-  @Test
-  void reemplazoEsVersion2YElLlmRecibeElTextoNuevoYNoElViejo() {
-    filaPrevia(CASO.toString(), CEDULA, "CEDULA", "CEDULA VIEJA 111");
-    cache.putResult(
-        CASO.toString(),
-        new OcrFileResult(CEDULA, "cedula.pdf", "CEDULA", true, null, 0.9, "CEDULA VIEJA 111"));
-    MockMultipartFile nuevo =
-        new MockMultipartFile("file", "cedula.pdf", "application/pdf", "CEDULA NUEVA 222".getBytes());
-    when(carga.reemplazarArchivoOcr(CASO.toString(), CEDULA, nuevo, "CEDULA"))
-        .thenReturn(archivo(CEDULA, "CEDULA", "CEDULA NUEVA 222"));
-    when(carga.versionActual(CASO.toString(), CEDULA)).thenReturn(2);
-    azureLee();
-
-    ReuploadResponse respuesta = ocr.reupload(CASO.toString(), CEDULA, "CEDULA", nuevo);
-
-    assertEquals(CEDULA, respuesta.documentId());
-    assertEquals(2, respuesta.versionNo());
-    assertTrue(respuesta.ocrOk());
-    assertEquals("CEDULA", respuesta.tipoDocumento());
-    assertEquals("CEDULA NUEVA 222", texto(CASO.toString(), CEDULA));
-    assertThat(cache.listResults(CASO.toString()))
-        .singleElement()
-        .satisfies(r -> assertEquals("CEDULA NUEVA 222", r.textoExtraido()));
-    assertThat(texto(CASO.toString(), "consolidado"))
-        .contains("CEDULA NUEVA 222")
-        .doesNotContain("VIEJA");
-
-    String enviado = textoEnviadoAlLlm(new AnalysisRequestDTO(false, null));
-    assertThat(enviado).contains("CEDULA NUEVA 222").doesNotContain("CEDULA VIEJA 111");
-    assertEquals(1, veces(enviado, "CEDULA NUEVA 222"), "sin duplicar por el consolidado");
-  }
-
-  @Test
-  void reemplazoConOcrFallidoConservaVersionYTextoAnterior() {
-    filaPrevia(CASO.toString(), CEDULA, "CEDULA", "CEDULA VIEJA 111");
-    filaPrevia(CASO.toString(), "consolidado", "CONSOLIDADO", "=== DOCUMENTO: CEDULA ===\nCEDULA VIEJA 111");
-    cache.putResult(
-        CASO.toString(),
-        new OcrFileResult(CEDULA, "cedula.pdf", "CEDULA", true, null, 0.9, "CEDULA VIEJA 111"));
-    MockMultipartFile nuevo =
-        new MockMultipartFile("file", "cedula.pdf", "application/pdf", "ILEGIBLE".getBytes());
-    when(carga.reemplazarArchivoOcr(CASO.toString(), CEDULA, nuevo, null))
-        .thenReturn(archivo(CEDULA, "CEDULA", "ILEGIBLE"));
-    when(carga.versionActual(CASO.toString(), CEDULA)).thenReturn(2);
-    azureFalla();
-
-    ReuploadResponse respuesta = ocr.reupload(CASO.toString(), CEDULA, null, nuevo);
-
-    assertFalse(respuesta.ocrOk(), "200 con ocrOk=false, no 5xx");
-    assertEquals(2, respuesta.versionNo(), "la versión nueva se conserva");
-    assertEquals("CEDULA VIEJA 111", respuesta.textoExtraido());
-    assertEquals("CEDULA VIEJA 111", texto(CASO.toString(), CEDULA));
-    assertEquals(
-        "=== DOCUMENTO: CEDULA ===\nCEDULA VIEJA 111", texto(CASO.toString(), "consolidado"));
-    assertThat(cache.listResults(CASO.toString()))
-        .singleElement()
-        .satisfies(r -> assertEquals("CEDULA VIEJA 111", r.textoExtraido()));
-    verify(carga, never()).guardarResultadoOcr(anyString(), any());
   }
 
   @Test

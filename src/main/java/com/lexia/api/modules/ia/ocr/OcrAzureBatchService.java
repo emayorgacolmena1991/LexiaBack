@@ -7,7 +7,11 @@ import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoServic
 import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService.Modo;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.ReemplazoPreparado;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService.Deteccion;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchDocument;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchRequest;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.AnalyzeBatchResponse;
@@ -19,8 +23,15 @@ import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidateResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ConsolidatedGetResponse;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ReuploadResponse;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
@@ -29,6 +40,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -42,6 +55,11 @@ public class OcrAzureBatchService {
   private static final Logger LOG = LoggerFactory.getLogger(OcrAzureBatchService.class);
   static final String OCR_FALLIDO =
       "No se pudo leer el archivo nuevo con OCR; se conserva el texto anterior.";
+  static final String TIPO_DISTINTO =
+      "El archivo parece ser de otro tipo; confirme para reemplazar.";
+  /** Cuánto se guarda la validación de un reemplazo a la espera de la confirmación del usuario. */
+  static final Duration VALIDACION_TTL = Duration.ofMinutes(10);
+  private static final int VALIDACIONES_MAX = 200;
 
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
@@ -49,6 +67,13 @@ public class OcrAzureBatchService {
   private final DocumentoTextoOcrRepository ocrRepository;
   private final Executor ocrExecutor;
   private final ClasificacionDocumentoService clasificador;
+  private final TransactionTemplate transaccion;
+  /**
+   * OCR y detección de un reemplazo que espera confirmación de tipo: al confirmar no se vuelve a
+   * llamar a Azure ni al LLM. Clave: usuario + sesión + documento + hash + tipo; vence en
+   * {@link #VALIDACION_TTL}.
+   */
+  private final Map<String, Validacion> validaciones = new ConcurrentHashMap<>();
 
   public OcrAzureBatchService(
       AzureCalidadDocumentoService layoutService,
@@ -56,13 +81,15 @@ public class OcrAzureBatchService {
       OcrSessionCacheService cache,
       DocumentoTextoOcrRepository ocrRepository,
       @Qualifier("ocrExecutor") Executor ocrExecutor,
-      ClasificacionDocumentoService clasificador) {
+      ClasificacionDocumentoService clasificador,
+      PlatformTransactionManager transactionManager) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
     this.ocrRepository = ocrRepository;
     this.ocrExecutor = ocrExecutor;
     this.clasificador = clasificador;
+    this.transaccion = new TransactionTemplate(transactionManager);
   }
 
   public AnalyzeBatchResponse analyzeBatch(AnalyzeBatchRequest request) {
@@ -225,8 +252,25 @@ public class OcrAzureBatchService {
     return layout.texto() == null ? "" : layout.texto();
   }
 
+  /**
+   * Reemplazo validado antes de guardar:
+   *
+   * <ol>
+   *   <li>OCR de los bytes recibidos sin escribir nada; si falla, no se persiste nada.
+   *   <li>Clasificación SOLO_DETECTAR sin escribir (escaneado no clasifica). Un ERROR del LLM no
+   *       bloquea: se trata como coincidente.
+   *   <li>Tipo detectado distinto del que tendrá el documento y sin {@code confirmarTipoDistinto}:
+   *       no se persiste nada y se pide confirmación.
+   *   <li>Si no: archivo, versión N+1, fila OCR, clasificación y {@code consolidado} en una sola
+   *       transacción (el archivo se borra si se revierte); la caché, después del commit.
+   * </ol>
+   */
   public ReuploadResponse reupload(
-      String sessionId, String fileId, String tipoDocumento, MultipartFile file) {
+      String sessionId,
+      String fileId,
+      String tipoDocumento,
+      MultipartFile file,
+      boolean confirmarTipoDistinto) {
     if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(fileId)) {
       throw ApiException.badRequest("sessionId y fileId requeridos.");
     }
@@ -241,62 +285,149 @@ public class OcrAzureBatchService {
     }
 
     String sesion = sessionId.trim();
-    // En un expediente persistido es la versión N+1 del mismo LegalDocument; se conserva aunque el
-    // OCR falle después.
-    StoredDoc replaced =
-        cargaDocumentoService.reemplazarArchivoOcr(sesion, fileId.trim(), file, tipoDocumento);
-    String tipo =
-        StringUtils.hasText(replaced.codigoTipoDocumento())
-            ? replaced.codigoTipoDocumento()
-            : "DOCUMENTO";
-    Integer versionNo = cargaDocumentoService.versionActual(sesion, replaced.idDocumento());
-
-    // El documento conserva su tipo: el clasificador solo detecta y avisa si no coincide.
-    Procesado procesado = ocrYConsolidar(sesion, replaced, tipo, Modo.SOLO_DETECTAR);
-    if (procesado == null) {
-      return reuploadSinOcr(sesion, replaced, tipo, versionNo);
+    ReemplazoPreparado preparado =
+        cargaDocumentoService.prepararReemplazo(sesion, fileId.trim(), file, tipoDocumento);
+    String clave = claveValidacion(sesion, preparado);
+    Validacion validacion = confirmarTipoDistinto ? tomarValidacion(clave) : null;
+    if (validacion == null) {
+      LayoutExtractResult layout;
+      try {
+        layout = layoutService.evaluarYExtraer(preparado.bytes(), preparado.mime());
+      } catch (RuntimeException e) {
+        LOG.warn(
+            "Reemplazo sin guardar sesion={} doc={}: OCR falló ({})",
+            sesion,
+            preparado.fileId(),
+            safe(e));
+        return sinGuardar(sesion, preparado, OCR_FALLIDO, false, null, false);
+      }
+      String texto = layout.texto() == null ? "" : layout.texto();
+      validacion = new Validacion(layout, detectar(sesion, preparado.fileId(), texto), Instant.now());
     }
-    AnalyzeBatchResultItem item = procesado.item();
-    String detectado = procesado.clasificacion().tipoDetectado();
+    Deteccion deteccion = validacion.deteccion();
+    boolean distinto =
+        deteccion.ok()
+            && StringUtils.hasText(preparado.tipoFinal())
+            && !deteccion.tipo().equals(preparado.tipoFinal());
+    if (distinto && !confirmarTipoDistinto) {
+      guardarValidacion(clave, validacion);
+      return sinGuardar(sesion, preparado, TIPO_DISTINTO, true, deteccion.tipo(), true);
+    }
+
+    String tipo = StringUtils.hasText(preparado.tipoFinal()) ? preparado.tipoFinal() : "DOCUMENTO";
+    LayoutExtractResult layout = validacion.layout();
+    Guardado guardado =
+        transaccion.execute(
+            status -> {
+              StoredDoc nuevo = cargaDocumentoService.guardarReemplazo(preparado);
+              AnalyzeBatchResultItem item = itemDe(nuevo, tipo, layout);
+              guardarFilaOcr(sesion, nuevo, item);
+              clasificador.registrarDeteccion(sesion, preparado.fileId(), deteccion);
+              return new Guardado(nuevo, item, regenerarConsolidado(sesion, null));
+            });
+    // Caché de sesión solo con la transacción confirmada.
+    ponerEnCache(sesion, guardado.documento(), guardado.item());
+    cache.putConsolidated(sesion, guardado.consolidado());
+    AnalyzeBatchResultItem item = guardado.item();
     return new ReuploadResponse(
         item.fileId(),
-        replaced.nombreOriginal(),
+        guardado.documento().nombreOriginal(),
         item.tipoDocumento(),
         item.legible(),
         item.scoreConfianza(),
         item.textoExtraido(),
         item.motivo(),
-        replaced.idDocumento(),
-        versionNo,
+        preparado.fileId(),
+        cargaDocumentoService.versionActual(sesion, preparado.fileId()),
         true,
-        detectado,
-        detectado == null ? null : detectado.equals(replaced.codigoTipoDocumento()));
+        deteccion.ok() ? deteccion.tipo() : null,
+        deteccion.ok() ? Boolean.valueOf(!distinto) : (deteccion.error() ? Boolean.TRUE : null),
+        true,
+        false);
   }
 
   /**
-   * OCR fallido: la caché y {@code documento_texto_ocr} siguen con el texto anterior, que es el que
-   * se devuelve para que la pantalla no muestre un texto que el sistema ya no tiene.
+   * Nada se guardó: la caché y {@code documento_texto_ocr} siguen con el texto anterior, que es el
+   * que se devuelve para que la pantalla no muestre un texto que el sistema no tiene.
    */
-  private ReuploadResponse reuploadSinOcr(
-      String sesion, StoredDoc replaced, String tipo, Integer versionNo) {
+  private ReuploadResponse sinGuardar(
+      String sesion,
+      ReemplazoPreparado preparado,
+      String motivo,
+      boolean ocrOk,
+      String tipoDetectado,
+      boolean requiereConfirmacion) {
     OcrFileResult anterior =
         cache.listResults(sesion).stream()
-            .filter(r -> replaced.idDocumento().equals(r.fileId()))
+            .filter(r -> preparado.fileId().equals(r.fileId()))
             .findFirst()
             .orElse(null);
     return new ReuploadResponse(
-        replaced.idDocumento(),
-        replaced.nombreOriginal(),
-        tipo,
+        preparado.fileId(),
+        preparado.nombre(),
+        StringUtils.hasText(preparado.tipoActual()) ? preparado.tipoActual() : "DOCUMENTO",
         anterior != null && anterior.legible(),
         anterior == null ? 0.0 : anterior.scoreConfianza(),
         anterior == null ? null : anterior.textoExtraido(),
-        OCR_FALLIDO,
-        replaced.idDocumento(),
-        versionNo,
+        motivo,
+        preparado.fileId(),
+        cargaDocumentoService.versionActual(sesion, preparado.fileId()),
+        ocrOk,
+        tipoDetectado,
+        requiereConfirmacion ? Boolean.FALSE : null,
         false,
-        null,
-        null);
+        requiereConfirmacion);
+  }
+
+  /** Lo que se guarda dentro de la transacción del reemplazo. */
+  private record Guardado(StoredDoc documento, AnalyzeBatchResultItem item, String consolidado) {}
+
+  /** OCR + detección de un reemplazo pendiente de confirmación. */
+  private record Validacion(LayoutExtractResult layout, Deteccion deteccion, Instant creada) {
+
+    boolean vigente() {
+      return creada.plus(VALIDACION_TTL).isAfter(Instant.now());
+    }
+  }
+
+  private Validacion tomarValidacion(String clave) {
+    Validacion validacion = validaciones.remove(clave);
+    return validacion != null && validacion.vigente() ? validacion : null;
+  }
+
+  private void guardarValidacion(String clave, Validacion validacion) {
+    validaciones.values().removeIf(v -> !v.vigente());
+    if (validaciones.size() >= VALIDACIONES_MAX) {
+      // Tope de memoria: sin sitio, la confirmación vuelve a hacer el OCR (no se pierde nada).
+      return;
+    }
+    validaciones.put(clave, validacion);
+  }
+
+  /** Mismo usuario, misma sesión, mismo documento, mismos bytes y mismo tipo destino. */
+  private static String claveValidacion(String sesion, ReemplazoPreparado preparado) {
+    AuthPrincipal principal = AuthContext.get();
+    String usuario = principal == null || principal.userId() == null ? "-" : principal.userId().toString();
+    return String.join(
+        "|", usuario, sesion, preparado.fileId(), sha256(preparado.bytes()), String.valueOf(preparado.tipoFinal()));
+  }
+
+  private static String sha256(byte[] bytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 no disponible", e);
+    }
+  }
+
+  /** Un fallo de lectura previo a la detección no bloquea el reemplazo: cuenta como ERROR. */
+  private Deteccion detectar(String sesion, String idDocumento, String texto) {
+    try {
+      return clasificador.detectar(sesion, idDocumento, texto);
+    } catch (RuntimeException e) {
+      LOG.error("Detección de tipo no disponible doc={}: {}", idDocumento, e.getClass().getSimpleName(), e);
+      return new Deteccion(Deteccion.ERROR, null, null, null);
+    }
   }
 
   /**
@@ -343,6 +474,12 @@ public class OcrAzureBatchService {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String sessionId = request.sessionId().trim();
+    cache.putConsolidated(sessionId, regenerarConsolidado(sessionId, request.consolidatedContent()));
+    return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
+  }
+
+  /** Reescribe la fila {@code consolidado} con las filas por documento; no toca la caché. */
+  private String regenerarConsolidado(String sessionId, String alternativo) {
     StringBuilder unido = new StringBuilder();
     for (DocumentoTextoOcr row : ocrRepository.findByIdExpedienteOrderByCreatedAtAsc(sessionId)) {
       if (row == null || "consolidado".equals(row.getIdDocumento()) || !StringUtils.hasText(row.getTextoOcr())) {
@@ -354,15 +491,14 @@ public class OcrAzureBatchService {
     }
     String content = unido.toString().trim();
     if (!StringUtils.hasText(content)) {
-      content = request.consolidatedContent() == null ? "" : request.consolidatedContent();
+      content = alternativo == null ? "" : alternativo;
     }
-    cache.putConsolidated(sessionId, content);
     int confianza = 100;
     cargaDocumentoService.guardarResultadoOcr(
         sessionId,
         new DocumentoOcrResultadoDTO(
             "consolidado", "consolidado", "CONSOLIDADO", content, null, "LEGIBLE", null, confianza));
-    return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
+    return content;
   }
 
   public ConsolidatedGetResponse getConsolidated(String sessionId) {
@@ -385,7 +521,6 @@ public class OcrAzureBatchService {
       String sessionId, StoredDoc stored, String tipoDocumento, Modo modo) {
     LayoutExtractResult layout =
         layoutService.evaluarYExtraer(stored.bytes(), stored.mimeType());
-    CalidadDocumentoResultado q = layout.calidad();
     String texto = layout.texto() == null ? "" : layout.texto();
 
     // Justo después del OCR: si asigna tipo, caché y fila OCR ya llevan ese tipo (<documento tipo>).
@@ -394,15 +529,25 @@ public class OcrAzureBatchService {
     String tipoFinal =
         clasificacion.tipoAsignado() != null ? clasificacion.tipoAsignado() : tipoDocumento;
 
-    AnalyzeBatchResultItem item =
-        new AnalyzeBatchResultItem(
-            stored.idDocumento(),
-            tipoFinal,
-            q.legible(),
-            q.legible() ? null : q.mensaje(),
-            q.promedioConfianza(),
-            texto);
+    AnalyzeBatchResultItem item = itemDe(stored, tipoFinal, layout);
+    ponerEnCache(sessionId, stored, item);
+    guardarFilaOcr(sessionId, stored, item);
+    return new Procesado(item, clasificacion);
+  }
 
+  private static AnalyzeBatchResultItem itemDe(
+      StoredDoc stored, String tipoDocumento, LayoutExtractResult layout) {
+    CalidadDocumentoResultado q = layout.calidad();
+    return new AnalyzeBatchResultItem(
+        stored.idDocumento(),
+        tipoDocumento,
+        q.legible(),
+        q.legible() ? null : q.mensaje(),
+        q.promedioConfianza(),
+        layout.texto() == null ? "" : layout.texto());
+  }
+
+  private void ponerEnCache(String sessionId, StoredDoc stored, AnalyzeBatchResultItem item) {
     cache.putResult(
         sessionId,
         new OcrFileResult(
@@ -413,13 +558,16 @@ public class OcrAzureBatchService {
             item.motivo(),
             item.scoreConfianza(),
             item.textoExtraido()));
+  }
+
+  private void guardarFilaOcr(String sessionId, StoredDoc stored, AnalyzeBatchResultItem item) {
     int confianza =
         (int)
             Math.round(
                 item.scoreConfianza() <= 1 ? item.scoreConfianza() * 100 : item.scoreConfianza());
     cargaDocumentoService.guardarResultadoOcr(
         sessionId,
-        new com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO(
+        new DocumentoOcrResultadoDTO(
             item.fileId(),
             stored.nombreOriginal(),
             item.tipoDocumento(),
@@ -428,7 +576,6 @@ public class OcrAzureBatchService {
             item.legible() ? "LEGIBLE" : "REVISAR",
             item.motivo(),
             confianza));
-    return new Procesado(item, clasificacion);
   }
 
   /**

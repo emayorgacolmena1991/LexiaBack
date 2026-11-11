@@ -199,7 +199,8 @@ public class ExpedienteEstadoService {
         file != null && file.isFlagBloqueoReenvio(),
         observaciones.abiertas(),
         observaciones.porDocumento(),
-        observaciones.generales());
+        observaciones.generales(),
+        observaciones.faltantes());
   }
 
   private ProcessStageDef resolveStage(
@@ -317,9 +318,11 @@ public class ExpedienteEstadoService {
                         parsed.mensaje(),
                         row.getLegalDocumentId() == null
                             ? null
-                            : row.getLegalDocumentId().toString()));
+                            : row.getLegalDocumentId().toString(),
+                        row.getDocumentosRelacionados().stream().map(UUID::toString).toList(),
+                        row.getTipoDocumentoFaltante()));
               }
-              return new Dictamen(study.getStatus(), study.getSummary(), obs);
+              return new Dictamen(study.getStatus(), study.getSummary(), obs, study.getValidaciones());
             })
         .orElse(null);
   }

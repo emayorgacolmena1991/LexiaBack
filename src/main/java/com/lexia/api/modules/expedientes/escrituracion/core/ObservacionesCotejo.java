@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.escrituracion.core;
 
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.DocumentoRelacionadoItem;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ObservacionCotejoItem;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -31,7 +32,16 @@ public final class ObservacionesCotejo {
   /** Sin documentos válidos: todas quedan generales (p. ej. observaciones en texto del abogado). */
   public static void reemplazar(
       TitleObservationRepository repo, UUID tenantId, UUID studyId, List<Entrada> nuevas) {
-    reemplazar(repo, tenantId, studyId, nuevas, Set.of());
+    reemplazar(repo, tenantId, studyId, nuevas, Set.of(), Set.of());
+  }
+
+  public static void reemplazar(
+      TitleObservationRepository repo,
+      UUID tenantId,
+      UUID studyId,
+      List<Entrada> nuevas,
+      Set<UUID> documentosDelExpediente) {
+    reemplazar(repo, tenantId, studyId, nuevas, documentosDelExpediente, Set.of());
   }
 
   /**
@@ -39,14 +49,18 @@ public final class ObservacionesCotejo {
    *     {@code documentoId} fuera de este conjunto ({@code consolidado}, {@code DOC-xxxx}, otro
    *     expediente, inventado) se guarda como null, salvo que la misma observación ya estuviera
    *     abierta ligada a un documento: entonces conserva ese documento en vez de duplicarse como
-   *     general.
+   *     general. Los relacionados fuera del conjunto se descartan.
+   * @param tiposDelProducto códigos válidos para {@code tipoDocumentoFaltante}.
+   *     <p>Sin documento, en orden: documento de la misma observación ya abierta; documento faltante
+   *     (tipo válido); red de seguridad con el primer relacionado válido; si no, general.
    */
   public static void reemplazar(
       TitleObservationRepository repo,
       UUID tenantId,
       UUID studyId,
       List<Entrada> nuevas,
-      Set<UUID> documentosDelExpediente) {
+      Set<UUID> documentosDelExpediente,
+      Set<String> tiposDelProducto) {
     List<TitleObservation> actuales =
         repo.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(studyId, tenantId);
     Set<String> resueltas = new LinkedHashSet<>();
@@ -77,17 +91,34 @@ public final class ObservacionesCotejo {
       if (documento == null && entrada.documentoId() != null && !entrada.documentoId().isBlank()) {
         descartados++;
       }
-      Set<UUID> documentos =
-          documento != null
-              ? Set.of(documento)
-              : abiertasConDocumento.getOrDefault(
-                  clave(null, entrada.code(), entrada.mensaje()), Collections.singleton(null));
+      List<UUID> relacionados = relacionadosValidos(entrada.documentosRelacionados(), documentosDelExpediente);
+      String faltante = null;
+      Set<UUID> documentos;
+      if (documento != null) {
+        documentos = Set.of(documento);
+      } else if (abiertasConDocumento.containsKey(clave(null, entrada.code(), entrada.mensaje()))) {
+        documentos = abiertasConDocumento.get(clave(null, entrada.code(), entrada.mensaje()));
+      } else if ((faltante = tipoValido(entrada.tipoDocumentoFaltante(), tiposDelProducto)) != null) {
+        documentos = Collections.singleton(null);
+      } else if (!relacionados.isEmpty()) {
+        // Red de seguridad: el problema involucra documentos; se liga al primero.
+        documentos = Set.of(relacionados.get(0));
+        LOG.warn("Cotejo study={}: observación {} sin documento ligada al primer relacionado", studyId, codigoLog(entrada));
+      } else {
+        documentos = Collections.singleton(null);
+        if (!tiposDelProducto.isEmpty()) {
+          LOG.warn("Cotejo study={}: observación {} sin documento ni tipo faltante queda general", studyId, codigoLog(entrada));
+        }
+      }
       for (UUID destino : documentos) {
         String key = clave(texto(destino), entrada.code(), entrada.mensaje());
         if (!vistas.add(key) || resueltas.contains(key)) {
           continue;
         }
-        repo.save(TitleObservation.create(tenantId, studyId, formato(entrada), destino));
+        List<UUID> otros = relacionados.stream().filter(id -> !id.equals(destino)).toList();
+        repo.save(
+            TitleObservation.create(
+                tenantId, studyId, formato(entrada), destino, otros, destino == null ? faltante : null));
       }
     }
     if (descartados > 0) {
@@ -135,6 +166,34 @@ public final class ObservacionesCotejo {
     return "[" + severidad + "] " + code + ": " + entrada.mensaje().trim();
   }
 
+  /** Relacionados que son documentos vigentes del expediente, sin repetir. */
+  static List<UUID> relacionadosValidos(List<String> ids, Set<UUID> documentosDelExpediente) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    LinkedHashSet<UUID> validos = new LinkedHashSet<>();
+    for (String raw : ids) {
+      UUID id = documentoValido(raw, documentosDelExpediente);
+      if (id != null) {
+        validos.add(id);
+      }
+    }
+    return List.copyOf(validos);
+  }
+
+  static String tipoValido(String raw, Set<String> tiposDelProducto) {
+    if (raw == null || raw.isBlank() || tiposDelProducto == null) {
+      return null;
+    }
+    String tipo = raw.trim();
+    return tiposDelProducto.contains(tipo) ? tipo : null;
+  }
+
+  /** Solo el código: el mensaje puede traer datos personales. */
+  private static String codigoLog(Entrada entrada) {
+    return entrada.code() == null || entrada.code().isBlank() ? "OBS" : entrada.code().trim();
+  }
+
   static UUID documentoValido(String raw, Set<UUID> documentosDelExpediente) {
     if (raw == null || raw.isBlank() || documentosDelExpediente == null) {
       return null;
@@ -156,7 +215,11 @@ public final class ObservacionesCotejo {
         parsed.mensaje(),
         "PENDIENTE",
         row.getCreatedAt() == null ? Instant.now() : row.getCreatedAt(),
-        row.getLegalDocumentId());
+        row.getLegalDocumentId(),
+        row.getDocumentosRelacionados().stream()
+            .map(id -> new DocumentoRelacionadoItem(id, null))
+            .toList(),
+        row.getTipoDocumentoFaltante());
   }
 
   private static Parsed parse(String detail) {
@@ -199,11 +262,25 @@ public final class ObservacionesCotejo {
     return "MEDIUM";
   }
 
-  /** @param documentoId id propuesto (sin validar) o null si es general. */
-  public record Entrada(String code, String severidad, String mensaje, String documentoId) {
+  /**
+   * @param documentoId id propuesto (sin validar) o null.
+   * @param documentosRelacionados ids propuestos de otros documentos involucrados (sin validar).
+   * @param tipoDocumentoFaltante código propuesto del documento que falta (sin validar).
+   */
+  public record Entrada(
+      String code,
+      String severidad,
+      String mensaje,
+      String documentoId,
+      List<String> documentosRelacionados,
+      String tipoDocumentoFaltante) {
 
     public Entrada(String code, String severidad, String mensaje) {
-      this(code, severidad, mensaje, null);
+      this(code, severidad, mensaje, null, List.of(), null);
+    }
+
+    public Entrada(String code, String severidad, String mensaje, String documentoId) {
+      this(code, severidad, mensaje, documentoId, List.of(), null);
     }
   }
 

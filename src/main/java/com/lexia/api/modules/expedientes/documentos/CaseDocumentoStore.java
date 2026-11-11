@@ -278,6 +278,8 @@ public class CaseDocumentoStore {
             .orElse(1);
     ExpedienteDocumentoStorage.Stored stored =
         storage.write(ctx.tenantId(), ctx.caseId(), doc.getId(), original, bytes);
+    // Si la transacción del reemplazo (versión, fila OCR, consolidado) se revierte, no queda archivo huérfano.
+    storage.borrarSiHayRollback(stored.path());
     versions.save(
         DocumentVersion.upload(
             ctx.tenantId(), doc.getId(), next, mime, stored.sha256(), stored.path()));

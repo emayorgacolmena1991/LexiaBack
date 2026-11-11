@@ -62,7 +62,7 @@ class CargaDocumentoPermisosTest {
 
   @Test
   void sinPermisoNoSeReemplaza() {
-    assertProhibido(() -> reupload.reupload(CASO, "d1", "CEDULA", archivo));
+    assertProhibido(() -> reupload.reupload(CASO, "d1", "CEDULA", archivo, false));
     verifyNoInteractions(ocr);
   }
 

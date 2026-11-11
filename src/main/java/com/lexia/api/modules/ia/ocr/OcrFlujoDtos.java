@@ -41,6 +41,8 @@ public final class OcrFlujoDtos {
    * {@code versionNo} es null en un borrador (sin versiones); con {@code ocrOk=false} el texto es el
    * anterior. {@code tipoDetectado}/{@code coincide}: lo que propone el clasificador frente al tipo
    * que conserva el documento; null si no se clasificó (borrador, escaneado, OCR fallido).
+   * {@code guardado=false}: no se persistió nada (OCR fallido, o {@code requiereConfirmacion} porque
+   * el archivo parece de otro tipo; reenviar con {@code confirmarTipoDistinto=true}).
    */
   public record ReuploadResponse(
       String fileId,
@@ -54,7 +56,9 @@ public final class OcrFlujoDtos {
       Integer versionNo,
       boolean ocrOk,
       String tipoDetectado,
-      Boolean coincide) {}
+      Boolean coincide,
+      boolean guardado,
+      boolean requiereConfirmacion) {}
 
   public record ConsolidateRequest(String sessionId, String consolidatedContent) {}
 

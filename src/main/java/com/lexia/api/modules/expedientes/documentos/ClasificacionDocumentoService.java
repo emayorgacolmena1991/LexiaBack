@@ -131,6 +131,26 @@ public class ClasificacionDocumentoService {
     };
   }
 
+  /**
+   * Lo que propone el LLM, sin escribir nada. {@code estado}: OK, ERROR (el LLM falló) u OMITIDO
+   * (escaneado, sin catálogo, sin texto, documento inexistente).
+   */
+  public record Deteccion(String estado, String tipo, BigDecimal confianza, String modelo) {
+
+    public static final String OK = "OK";
+    public static final String ERROR = "ERROR";
+    public static final String OMITIDO = "OMITIDO";
+    public static final Deteccion OMITIDA = new Deteccion(OMITIDO, null, null, null);
+
+    public boolean ok() {
+      return OK.equals(estado);
+    }
+
+    public boolean error() {
+      return ERROR.equals(estado);
+    }
+  }
+
   public Resultado clasificar(String idExpediente, String idDocumento, String textoOcr, Modo modo) {
     if (!StringUtils.hasText(textoOcr)) {
       return Resultado.OMITIDO;
@@ -143,10 +163,39 @@ public class ClasificacionDocumentoService {
     if (modo == Modo.ASIGNAR && actual.fijadoPorUsuario()) {
       return Resultado.OMITIDO;
     }
+    Deteccion deteccion = consultar(idExpediente, idDocumento, textoOcr);
+    return registrar(destino, idDocumento, deteccion, modo, actual);
+  }
+
+  /**
+   * Reemplazo validado antes de guardar: consulta al LLM sin escribir nada. Si después se guarda,
+   * {@link #registrarDeteccion} persiste esta misma detección (no se vuelve a llamar al LLM).
+   */
+  public Deteccion detectar(String idExpediente, String idDocumento, String textoOcr) {
+    if (!StringUtils.hasText(textoOcr) || destino(idExpediente, idDocumento) == null) {
+      return Deteccion.OMITIDA;
+    }
+    return consultar(idExpediente, idDocumento, textoOcr);
+  }
+
+  /** Persiste una detección previa en modo SOLO_DETECTAR (el documento conserva su tipo). */
+  public Resultado registrarDeteccion(String idExpediente, String idDocumento, Deteccion deteccion) {
+    if (deteccion == null || Deteccion.OMITIDO.equals(deteccion.estado())) {
+      return Resultado.OMITIDO;
+    }
+    Destino destino = destino(idExpediente, idDocumento);
+    if (destino == null) {
+      return Resultado.OMITIDO;
+    }
+    return registrar(destino, idDocumento, deteccion, Modo.SOLO_DETECTAR, destino.actual());
+  }
+
+  /** Solo la llamada al LLM y la normalización a la lista cerrada. No escribe. */
+  private Deteccion consultar(String idExpediente, String idDocumento, String textoOcr) {
     List<String> tipos = tiposDelCatalogo(idExpediente);
     if (tipos.isEmpty()) {
       LOG.info("Clasificación omitida doc={}: el expediente no tiene catálogo de tipos", idDocumento);
-      return Resultado.OMITIDO;
+      return Deteccion.OMITIDA;
     }
     AnalisisDocumentoService proveedor = llm.getIfAvailable();
     ClasificacionDocumento respuesta;
@@ -161,11 +210,26 @@ public class ClasificacionDocumentoService {
           "Clasificación falló doc={}: {}; queda en ERROR para clasificación manual",
           idDocumento,
           e.getClass().getSimpleName());
+      return new Deteccion(Deteccion.ERROR, null, null, null);
+    }
+    return new Deteccion(
+        Deteccion.OK,
+        normalizar(respuesta.tipo(), tipos),
+        confianza(respuesta.confianza()),
+        respuesta.modelo());
+  }
+
+  private Resultado registrar(
+      Destino destino, String idDocumento, Deteccion deteccion, Modo modo, ClasificacionActual actual) {
+    if (Deteccion.OMITIDO.equals(deteccion.estado())) {
+      return Resultado.OMITIDO;
+    }
+    if (deteccion.error()) {
       destino.error();
       return new Resultado(LegalDocument.ESTADO_ERROR, null, null, null, actual.docType());
     }
-    String tipo = normalizar(respuesta.tipo(), tipos);
-    BigDecimal confianza = confianza(respuesta.confianza());
+    String tipo = deteccion.tipo();
+    BigDecimal confianza = deteccion.confianza();
     boolean supera = confianza.compareTo(umbral) >= 0 && !OTRO.equals(tipo);
     String estado;
     boolean asignar;
@@ -179,7 +243,7 @@ public class ClasificacionDocumentoService {
       asignar = supera;
       estado = supera ? LegalDocument.ESTADO_CLASIFICADO : LegalDocument.ESTADO_POR_REVISAR;
     }
-    String vigente = destino.aplicar(tipo, confianza, respuesta.modelo(), estado, asignar);
+    String vigente = destino.aplicar(tipo, confianza, deteccion.modelo(), estado, asignar);
     boolean asignado = asignar && tipo.equals(vigente);
     LOG.info(
         "Clasificación doc={} modo={} tipo={} confianza={} estado={} asignado={}",

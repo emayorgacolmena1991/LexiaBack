@@ -15,6 +15,7 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersion;
 import com.lexia.api.modules.expedientes.documentos.DocumentVersionRepository;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
@@ -57,6 +58,8 @@ class ObservacionesPorDocumentoTest {
   private final LegalDocumentRepository documents = mock(LegalDocumentRepository.class);
   private final DocumentVersionRepository versions = mock(DocumentVersionRepository.class);
   private final TitleStudyRepository studies = mock(TitleStudyRepository.class);
+  private final com.lexia.api.modules.expedientes.documentos.CargaDocumentoService carga =
+      mock(com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.class);
   private LegalDocument cedula;
   private LegalDocument avaluo;
   private ObservacionesPorDocumento porDocumento;
@@ -81,7 +84,7 @@ class ObservacionesPorDocumentoTest {
     when(versions.findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(cedula.getId(), TENANT))
         .thenReturn(
             Optional.of(DocumentVersion.upload(TENANT, cedula.getId(), 2, "application/pdf", "s", "v2")));
-    porDocumento = new ObservacionesPorDocumento(documents, versions, studies, repo);
+    porDocumento = new ObservacionesPorDocumento(documents, versions, studies, repo, carga);
   }
 
   @AfterEach
@@ -251,7 +254,8 @@ class ObservacionesPorDocumentoTest {
   void observacionDeDocumentoEliminadoPasaAGenerales() {
     UUID eliminado = UUID.randomUUID();
     ObservacionCotejoItem item =
-        new ObservacionCotejoItem(UUID.randomUUID(), "X", "HIGH", "m", "PENDIENTE", null, eliminado);
+        new ObservacionCotejoItem(
+            UUID.randomUUID(), "X", "HIGH", "m", "PENDIENTE", null, eliminado, List.of(), null);
 
     ObservacionesPorDocumento.Agrupadas agrupadas = porDocumento.agrupar(CASO, TENANT, List.of(item));
 
@@ -273,9 +277,96 @@ class ObservacionesPorDocumentoTest {
     assertNull(sin.documentoId());
   }
 
-  /** Recorrido completo: la IA devuelve el documentoId y persistStudy lo valida contra el caso. */
+  private static final Set<String> TIPOS = Set.of("CEDULA", "AVALUO", "PODER");
+
+  private void reemplazarConTipos(ObservacionesCotejo.Entrada... entradas) {
+    ObservacionesCotejo.reemplazar(repo, TENANT, STUDY, List.of(entradas), documentosDelCaso(), TIPOS);
+  }
+
+  private static ObservacionesCotejo.Entrada completa(
+      String code, String documentoId, List<String> relacionados, String faltante) {
+    return new ObservacionesCotejo.Entrada(code, "HIGH", "Mensaje " + code, documentoId, relacionados, faltante);
+  }
+
   @Test
-  void analizarIaPersisteElDocumentoValidoYDescartaElInvalido() {
+  void observacionEntreDosDocumentosQuedaLigadaAUnoYElOtroEnRelacionados() {
+    reemplazarConTipos(
+        completa("NOMBRE_DIFIERE", cedula.getId().toString(), List.of(avaluo.getId().toString()), null));
+
+    assertThat(filas).singleElement().satisfies(f -> {
+      assertEquals(cedula.getId(), f.getLegalDocumentId());
+      assertEquals(List.of(avaluo.getId()), f.getDocumentosRelacionados());
+      assertNull(f.getTipoDocumentoFaltante());
+    });
+    ObservacionesPorDocumento.Agrupadas agrupadas =
+        porDocumento.agrupar(CASO, TENANT, ObservacionesCotejo.pendientes(repo, TENANT, STUDY));
+    assertThat(agrupadas.porDocumento()).singleElement().satisfies(doc ->
+        assertThat(doc.observaciones()).singleElement().satisfies(o ->
+            assertThat(o.documentosRelacionados())
+                .containsExactly(new EscrituracionDtos.DocumentoRelacionadoItem(avaluo.getId(), "avaluo.pdf"))));
+  }
+
+  @Test
+  void documentoFaltanteQuedaEnFaltantesConSuTipo() {
+    reemplazarConTipos(completa("FALTA_PODER", null, List.of(), "PODER"));
+
+    assertThat(filas).singleElement().satisfies(f -> {
+      assertNull(f.getLegalDocumentId());
+      assertEquals("PODER", f.getTipoDocumentoFaltante());
+    });
+    ObservacionesPorDocumento.Agrupadas agrupadas =
+        porDocumento.agrupar(CASO, TENANT, ObservacionesCotejo.pendientes(repo, TENANT, STUDY));
+    assertThat(agrupadas.faltantes()).singleElement().satisfies(o -> assertEquals("PODER", o.tipoDocumentoFaltante()));
+    assertThat(agrupadas.generales()).isEmpty();
+    assertThat(agrupadas.porDocumento()).isEmpty();
+  }
+
+  @Test
+  void sinDocumentoNiTipoSeLigaAlPrimerRelacionadoValido() {
+    reemplazarConTipos(
+        completa("DIFERENCIA", null, List.of("consolidado", avaluo.getId().toString(), cedula.getId().toString()), null));
+
+    assertThat(filas).singleElement().satisfies(f -> {
+      assertEquals(avaluo.getId(), f.getLegalDocumentId(), "red de seguridad: primer relacionado válido");
+      assertEquals(List.of(cedula.getId()), f.getDocumentosRelacionados());
+    });
+  }
+
+  @Test
+  void sinDocumentoNiTipoNiRelacionadosQuedaGeneral() {
+    reemplazarConTipos(completa("REVISAR", null, List.of(), null), completa("TIPO_RARO", null, List.of(), "PASAPORTE"));
+
+    assertEquals(2, filas.size());
+    assertThat(filas).allSatisfy(f -> {
+      assertNull(f.getLegalDocumentId());
+      assertNull(f.getTipoDocumentoFaltante(), "un tipo fuera del catálogo se descarta");
+    });
+    ObservacionesPorDocumento.Agrupadas agrupadas =
+        porDocumento.agrupar(CASO, TENANT, ObservacionesCotejo.pendientes(repo, TENANT, STUDY));
+    assertEquals(2, agrupadas.generales().size());
+    assertThat(agrupadas.faltantes()).isEmpty();
+  }
+
+  @Test
+  void relacionadosInvalidosRepetidosOElPropioSeDescartan() {
+    reemplazarConTipos(
+        completa(
+            "NOMBRE_DIFIERE",
+            cedula.getId().toString(),
+            List.of(
+                "consolidado",
+                "DOC-AB12CD34",
+                UUID.randomUUID().toString(),
+                cedula.getId().toString(),
+                avaluo.getId().toString(),
+                avaluo.getId().toString()),
+            null));
+
+    assertThat(filas).singleElement().satisfies(f -> assertEquals(List.of(avaluo.getId()), f.getDocumentosRelacionados()));
+  }
+
+  /** Arma IaAnalysisService con el caso y analiza con el dictamen dado; devuelve el estudio y el texto enviado. */
+  private TitleStudy analizarCon(Dictamen dictamen, StringBuilder enviado) {
     AuthContext.set(new AuthPrincipal(UUID.randomUUID(), UUID.randomUUID(), TENANT, UUID.randomUUID()));
     LegalCase legalCase = mock(LegalCase.class);
     when(legalCase.getProductCode()).thenReturn("VIV_HIPOTECADA_BIESS");
@@ -287,6 +378,12 @@ class ObservacionesPorDocumentoTest {
     TitleStudy study = TitleStudy.create(TENANT, ficha.getId());
     when(studies.findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(ficha.getId(), TENANT))
         .thenReturn(Optional.of(study));
+    when(carga.tiposPermitidos(CASO.toString()))
+        .thenReturn(
+            List.of(
+                new TipoPermitidoDTO("CEDULA", "Cédula"),
+                new TipoPermitidoDTO("AVALUO", "Avalúo"),
+                new TipoPermitidoDTO("PODER", "Poder especial")));
     DocumentoTextoOcr fila = new DocumentoTextoOcr();
     fila.setIdExpediente(CASO.toString());
     fila.setIdDocumento(cedula.getId().toString());
@@ -296,19 +393,15 @@ class ObservacionesPorDocumentoTest {
     when(ocr.findByIdExpedienteOrderByCreatedAtAsc(CASO.toString())).thenReturn(List.of(fila));
     ExpedienteCompletoLlmService llm = mock(ExpedienteCompletoLlmService.class);
     when(llm.ejecutar(anyString(), anyString(), anyString()))
-        .thenReturn(
-            new Ejecucion(
-                "biess.v1",
-                ExtraccionExpedienteCompleto.ok(
-                    new ProcesarExpedienteCompletoPayload(
-                        List.of(),
-                        new DatosExtraidos(null, null, null),
-                        new Dictamen(
-                            "WITH_OBSERVATIONS",
-                            "Observado",
-                            List.of(
-                                new Observacion("CED_VENCIDA", "HIGH", "Cédula vencida", cedula.getId().toString()),
-                                new Observacion("GRAVAMEN", "HIGH", "Hipoteca vigente", "consolidado")))))));
+        .thenAnswer(
+            llamada -> {
+              enviado.append(llamada.<String>getArgument(0));
+              return new Ejecucion(
+                  "biess.v1",
+                  ExtraccionExpedienteCompleto.ok(
+                      new ProcesarExpedienteCompletoPayload(
+                          List.of(), new DatosExtraidos(null, null, null), dictamen)));
+            });
     IaAnalysisService ia =
         new IaAnalysisService(
             legalCases,
@@ -326,9 +419,52 @@ class ObservacionesPorDocumentoTest {
             porDocumento);
 
     ia.analizarExpedienteConPromptProducto(CASO, new AnalysisRequestDTO(true, null));
+    return study;
+  }
+
+  /** Recorrido completo: la IA devuelve el documentoId y persistStudy lo valida contra el caso. */
+  @Test
+  void analizarIaPersisteElDocumentoValidoYDescartaElInvalido() {
+    analizarCon(
+        new Dictamen(
+            "WITH_OBSERVATIONS",
+            "Observado",
+            List.of(
+                new Observacion("CED_VENCIDA", "HIGH", "Cédula vencida", cedula.getId().toString()),
+                new Observacion("GRAVAMEN", "HIGH", "Hipoteca vigente", "consolidado"))),
+        new StringBuilder());
 
     assertThat(filas)
         .extracting(TitleObservation::getLegalDocumentId)
         .containsExactly(cedula.getId(), null);
+  }
+
+  @Test
+  void confirmacionesQuedanEnValidacionesYNoEnTitleObservation() {
+    StringBuilder enviado = new StringBuilder();
+    TitleStudy study =
+        analizarCon(
+            new Dictamen(
+                "WITH_OBSERVATIONS",
+                "Observado",
+                List.of(new Observacion("CED_VENCIDA", "HIGH", "Cédula vencida", cedula.getId().toString())),
+                List.of("Avalúo vigente", "Sin gravámenes", " ")),
+            enviado);
+
+    assertThat(filas).singleElement().satisfies(f -> assertThat(f.getDetail()).contains("CED_VENCIDA"));
+    assertEquals(List.of("Avalúo vigente", "Sin gravámenes"), study.getValidaciones());
+    assertThat(enviado.toString()).contains("<tipos_documento>").contains("- PODER: Poder especial");
+  }
+
+  @Test
+  void faltanteDeLaIaConTipoDelCatalogoLlegaAFaltantes() {
+    analizarCon(
+        new Dictamen(
+            "WITH_OBSERVATIONS",
+            "Falta el poder",
+            List.of(new Observacion("FALTA_PODER", "HIGH", "Falta el poder especial", null, List.of(), "PODER"))),
+        new StringBuilder());
+
+    assertThat(filas).singleElement().satisfies(f -> assertEquals("PODER", f.getTipoDocumentoFaltante()));
   }
 }

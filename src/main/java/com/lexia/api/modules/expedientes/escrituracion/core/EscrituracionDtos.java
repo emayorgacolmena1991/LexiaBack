@@ -45,7 +45,23 @@ public final class EscrituracionDtos {
       String mensaje,
       String estado,
       Instant createdAt,
-      UUID documentoId) {}
+      UUID documentoId,
+      List<DocumentoRelacionadoItem> documentosRelacionados,
+      String tipoDocumentoFaltante) {
+
+    public ObservacionCotejoItem {
+      documentosRelacionados = documentosRelacionados == null ? List.of() : documentosRelacionados;
+    }
+
+    /** Misma observación con los nombres de sus documentos relacionados. */
+    public ObservacionCotejoItem conRelacionados(List<DocumentoRelacionadoItem> relacionados) {
+      return new ObservacionCotejoItem(
+          id, code, severidad, mensaje, estado, createdAt, documentoId, relacionados, tipoDocumentoFaltante);
+    }
+  }
+
+  /** Otro documento involucrado en la observación («También involucra»). */
+  public record DocumentoRelacionadoItem(UUID documentId, String nombre) {}
 
   /** Observaciones abiertas de un documento, con la versión vigente que se está observando. */
   public record ObservacionesDocumentoItem(
@@ -207,7 +223,8 @@ public final class EscrituracionDtos {
       boolean flagBloqueoReenvio,
       List<ObservacionCotejoItem> observacionesAbiertas,
       List<ObservacionesDocumentoItem> porDocumento,
-      List<ObservacionCotejoItem> generales) {}
+      List<ObservacionCotejoItem> generales,
+      List<ObservacionCotejoItem> faltantes) {}
 
   public record RegularizacionResponse(
       UUID expedienteId,
@@ -217,7 +234,8 @@ public final class EscrituracionDtos {
       boolean puedeMarcarRegularizado,
       List<ObservacionCotejoItem> observacionesAbiertas,
       List<ObservacionesDocumentoItem> porDocumento,
-      List<ObservacionCotejoItem> generales) {}
+      List<ObservacionCotejoItem> generales,
+      List<ObservacionCotejoItem> faltantes) {}
 
   /** Estado consolidado en BD para hidratar el FE al abrir o refrescar. */
   public record EstadoMinutaBorrador(

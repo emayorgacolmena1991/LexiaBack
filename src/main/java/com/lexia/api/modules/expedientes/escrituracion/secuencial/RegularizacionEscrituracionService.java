@@ -168,9 +168,10 @@ public class RegularizacionEscrituracionService {
         file.getEstadoRegularizacion(),
         file.isFlagBloqueoReenvio(),
         puede,
-        abiertas,
+        agrupadas.abiertas(),
         agrupadas.porDocumento(),
-        agrupadas.generales());
+        agrupadas.generales(),
+        agrupadas.faltantes());
   }
 
   private List<ObservacionCotejoItem> observacionesAbiertas(WritingFile file, UUID tenantId) {

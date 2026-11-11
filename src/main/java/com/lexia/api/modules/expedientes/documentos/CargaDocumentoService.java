@@ -336,15 +336,40 @@ public class CargaDocumentoService {
    */
   public StoredDoc reemplazarArchivoOcr(
       String sessionId, String fileId, MultipartFile file, String tipoDocumento) {
+    return guardarReemplazo(prepararReemplazo(sessionId, fileId, file, tipoDocumento));
+  }
+
+  /**
+   * Reemplazo validado pero todavía sin persistir: archivo leído, formato y modo revisados, tipo del
+   * cliente resuelto al catálogo. El OCR y la clasificación se hacen sobre {@link
+   * ReemplazoPreparado#candidato()} antes de decidir si se guarda.
+   */
+  public ReemplazoPreparado prepararReemplazo(
+      String sessionId, String fileId, MultipartFile file, String tipoDocumento) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
     if (official != null) {
+      // 404 si el documento no es de este expediente; además trae el tipo vigente.
+      String tipoActual = caseDocs.clasificacionActual(official, fileId).docType();
       byte[] bytes = readBytes(file, official.ingestionMode());
-      String codigo =
-          official.ingestionMode().isFisicoEscaneado()
-              ? null
-              : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
-      return caseDocs.reemplazar(
-          official, fileId, originalName(file), file.getContentType(), bytes, codigo);
+      boolean escaneado = official.ingestionMode().isFisicoEscaneado();
+      String tipoCliente =
+          escaneado ? null : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
+      String tipoFinal =
+          escaneado
+              ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
+              : (tipoCliente != null ? tipoCliente : tipoActual);
+      return new ReemplazoPreparado(
+          sessionId,
+          fileId,
+          originalName(file),
+          file.getContentType(),
+          bytes,
+          formatSize(bytes.length),
+          tipoCliente,
+          tipoActual,
+          tipoFinal,
+          escaneado,
+          true);
     }
     DraftExpediente draft = requireDraft(sessionId);
     StoredDoc existing = draft.documentos().get(fileId);
@@ -375,27 +400,44 @@ public class CargaDocumentoService {
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
-    String tipo;
-    if (fisico) {
-      tipo = IngestionMode.EXPEDIENTE_FISICO_ESCANEADO;
-    } else {
-      tipo =
-          tipoDelCliente(sessionId, fileId, tipoDocumento)
-              .orElse(existing.codigoTipoDocumento());
+    String tipoCliente =
+        fisico ? null : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
+    String tipoFinal =
+        fisico
+            ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
+            : (tipoCliente != null ? tipoCliente : existing.codigoTipoDocumento());
+    return new ReemplazoPreparado(
+        sessionId,
+        fileId,
+        original,
+        file.getContentType(),
+        bytes,
+        formatSize(file.getSize()),
+        tipoCliente,
+        existing.codigoTipoDocumento(),
+        tipoFinal,
+        fisico,
+        false);
+  }
+
+  /** Persiste un reemplazo ya validado: versión N+1 (expediente) o el documento del borrador. */
+  public StoredDoc guardarReemplazo(ReemplazoPreparado p) {
+    if (p.expediente()) {
+      CaseDocumentoStore.CaseFileContext official = caseDocs.context(p.sessionId());
+      if (official == null) {
+        throw ApiException.notFound("Expediente no encontrado: " + p.sessionId());
+      }
+      return caseDocs.reemplazar(official, p.fileId(), p.nombre(), p.mime(), p.bytes(), p.tipoCliente());
     }
-    StoredDoc replaced =
-        new StoredDoc(
-            fileId,
-            original,
-            file.getSize(),
-            formatSize(file.getSize()),
-            file.getContentType(),
-            bytes,
-            tipo);
-    draft.documentos().put(fileId, replaced);
-    draft.ocrResultados().remove(fileId);
-    if (!fisico && !java.util.Objects.equals(tipo, existing.codigoTipoDocumento())) {
-      draft.marcarManual(fileId);
+    DraftExpediente draft = requireDraft(p.sessionId());
+    if (!draft.documentos().containsKey(p.fileId())) {
+      throw ApiException.notFound("Documento no encontrado: " + p.fileId());
+    }
+    StoredDoc replaced = p.candidato();
+    draft.documentos().put(p.fileId(), replaced);
+    draft.ocrResultados().remove(p.fileId());
+    if (!p.escaneado() && !java.util.Objects.equals(p.tipoFinal(), p.tipoActual())) {
+      draft.marcarManual(p.fileId());
     }
     return replaced;
   }
@@ -1029,6 +1071,33 @@ public class CargaDocumentoService {
           clasificacion == null ? null : clasificacion.tipoSugerido(),
           clasificacion == null ? null : clasificacion.estado(),
           clasificacion == null ? null : clasificacion.origen());
+    }
+  }
+
+  /**
+   * Reemplazo validado sin persistir.
+   *
+   * @param tipoCliente tipo elegido por el usuario y resuelto al catálogo (null si no eligió).
+   * @param tipoActual tipo del documento antes del reemplazo.
+   * @param tipoFinal tipo que tendrá el documento si se guarda.
+   * @param expediente true si es un expediente persistido (versionado), false si es un borrador.
+   */
+  public record ReemplazoPreparado(
+      String sessionId,
+      String fileId,
+      String nombre,
+      String mime,
+      byte[] bytes,
+      String tamano,
+      String tipoCliente,
+      String tipoActual,
+      String tipoFinal,
+      boolean escaneado,
+      boolean expediente) {
+
+    /** El archivo nuevo como documento, para el OCR previo y para el borrador. */
+    public StoredDoc candidato() {
+      return new StoredDoc(fileId, nombre, bytes.length, tamano, mime, bytes, tipoFinal);
     }
   }
 

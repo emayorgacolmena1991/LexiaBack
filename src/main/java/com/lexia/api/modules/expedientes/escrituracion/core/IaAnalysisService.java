@@ -9,6 +9,7 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorrador;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
@@ -178,6 +179,8 @@ public class IaAnalysisService {
     if (!pendientesPrevias.isEmpty() || !reemplazados.isEmpty()) {
       ocrText = ocrText + contextoRegularizacion(pendientesPrevias, reemplazados);
     }
+    List<TipoPermitidoDTO> tiposProducto = observacionesPorDocumento.tiposDelProducto(expedienteId.toString());
+    ocrText = ocrText + contextoTipos(tiposProducto);
     Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
@@ -272,7 +275,7 @@ public class IaAnalysisService {
                   null,
                   documentos.cargar(expedienteId, tenantId),
                   loadDatos(expedienteId, tenantId),
-                  new Dictamen(study.getStatus(), study.getSummary(), obs));
+                  new Dictamen(study.getStatus(), study.getSummary(), obs, study.getValidaciones()));
             })
         .orElse(null);
   }
@@ -350,6 +353,8 @@ public class IaAnalysisService {
         : dictamen.estado().trim();
     String resumen = dictamen == null ? "" : dictamen.resumen();
     study.applyResult(estado, resumen);
+    // Lo correcto se guarda aparte: nunca es observación ni llega a E3.
+    study.registrarValidaciones(dictamen == null ? List.of() : dictamen.validaciones());
     titleStudies.save(study);
     List<ObservacionesCotejo.Entrada> entradas = new java.util.ArrayList<>();
     if (dictamen != null && dictamen.observaciones() != null) {
@@ -359,7 +364,18 @@ public class IaAnalysisService {
         }
         entradas.add(
             new ObservacionesCotejo.Entrada(
-                item.codigo(), item.severidad(), item.mensaje(), item.documentoId()));
+                item.codigo(),
+                item.severidad(),
+                item.mensaje(),
+                item.documentoId(),
+                item.documentosRelacionados(),
+                item.tipoDocumentoFaltante()));
+      }
+    }
+    Set<String> tipos = new LinkedHashSet<>();
+    for (TipoPermitidoDTO tipo : observacionesPorDocumento.tiposDelProducto(writingFile.getCaseId().toString())) {
+      if (tipo != null && StringUtils.hasText(tipo.codigo())) {
+        tipos.add(tipo.codigo().trim());
       }
     }
     ObservacionesCotejo.reemplazar(
@@ -367,7 +383,8 @@ public class IaAnalysisService {
         tenantId,
         study.getId(),
         entradas,
-        observacionesPorDocumento.documentosDelExpediente(writingFile.getCaseId(), tenantId));
+        observacionesPorDocumento.documentosDelExpediente(writingFile.getCaseId(), tenantId),
+        tipos);
   }
 
   /** Reanálisis: OCR por archivo/sesión si existe; si no, consolidado del worker. */
@@ -405,7 +422,11 @@ public class IaAnalysisService {
                     item.code(),
                     item.severidad(),
                     item.mensaje(),
-                    item.documentoId() == null ? null : item.documentoId().toString()))
+                    item.documentoId() == null ? null : item.documentoId().toString(),
+                    item.documentosRelacionados().stream()
+                        .map(rel -> rel.documentId().toString())
+                        .toList(),
+                    item.tipoDocumentoFaltante()))
         .toList();
   }
 
@@ -430,6 +451,28 @@ public class IaAnalysisService {
           pedidos.size());
     }
     return presentes;
+  }
+
+  /**
+   * Catálogo del producto para {@code tipoDocumentoFaltante}. Sin etiquetas {@code <documento>}:
+   * no se confunde con el OCR al leer las cabeceras.
+   */
+  static String contextoTipos(List<TipoPermitidoDTO> tipos) {
+    if (tipos == null || tipos.isEmpty()) {
+      return "";
+    }
+    StringBuilder sb = new StringBuilder("\n\n<tipos_documento>\n");
+    for (TipoPermitidoDTO tipo : tipos) {
+      if (tipo == null || !StringUtils.hasText(tipo.codigo())) {
+        continue;
+      }
+      sb.append("- ").append(plano(tipo.codigo()));
+      if (StringUtils.hasText(tipo.nombre())) {
+        sb.append(": ").append(plano(tipo.nombre()));
+      }
+      sb.append('\n');
+    }
+    return sb.append("</tipos_documento>\n").toString();
   }
 
   /**
@@ -535,7 +578,7 @@ public class IaAnalysisService {
         continue;
       }
       // Sin confirmación explícita: sigue pendiente.
-      merged.add(new Observacion(code, prev.severidad(), prev.mensaje(), prev.documentoId()));
+      merged.add(aObservacion(code, prev));
     }
     String estado =
         dictamen == null || !StringUtils.hasText(dictamen.estado())
@@ -549,17 +592,24 @@ public class IaAnalysisService {
       for (ObservacionesCotejo.Entrada prev : previas) {
         if (prev != null && StringUtils.hasText(prev.mensaje())) {
           merged.add(
-              new Observacion(
-                  StringUtils.hasText(prev.code()) ? prev.code() : "OBS",
-                  prev.severidad(),
-                  prev.mensaje(),
-                  prev.documentoId()));
+              aObservacion(StringUtils.hasText(prev.code()) ? prev.code() : "OBS", prev));
         }
       }
       estado = "WITH_OBSERVATIONS";
     }
     String resumen = dictamen == null ? "" : dictamen.resumen();
-    return new Dictamen(estado, resumen, List.copyOf(merged));
+    return new Dictamen(
+        estado, resumen, List.copyOf(merged), dictamen == null ? List.of() : dictamen.validaciones());
+  }
+
+  private static Observacion aObservacion(String code, ObservacionesCotejo.Entrada prev) {
+    return new Observacion(
+        code,
+        prev.severidad(),
+        prev.mensaje(),
+        prev.documentoId(),
+        prev.documentosRelacionados(),
+        prev.tipoDocumentoFaltante());
   }
 
   private static Set<String> parseResueltas(String resumen) {

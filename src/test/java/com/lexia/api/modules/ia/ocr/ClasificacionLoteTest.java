@@ -123,7 +123,8 @@ class ClasificacionLoteTest {
 
     service =
         new OcrAzureBatchService(
-            azure, carga, new OcrSessionCacheService(2), mock(DocumentoTextoOcrRepository.class), ocrExecutor, clasificador);
+            azure, carga, new OcrSessionCacheService(2), mock(DocumentoTextoOcrRepository.class), ocrExecutor, clasificador,
+            mock(org.springframework.transaction.PlatformTransactionManager.class));
   }
 
   @AfterEach
