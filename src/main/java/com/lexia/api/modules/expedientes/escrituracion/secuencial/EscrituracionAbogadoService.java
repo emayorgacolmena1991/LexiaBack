@@ -153,8 +153,9 @@ public class EscrituracionAbogadoService {
     study.applyResult(status, request.summary());
     titleStudies.save(study);
 
+    // null: solo status y summary. Con lista: se sincroniza sin recrear las que ya están abiertas.
     if (request.observaciones() != null) {
-      ObservacionesCotejo.reemplazar(
+      ObservacionesCotejo.sincronizarTextos(
           titleObservations,
           tenantId,
           study.getId(),

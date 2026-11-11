@@ -130,6 +130,51 @@ public final class ObservacionesCotejo {
     }
   }
 
+  /**
+   * {@code POST estudio-titulo}: el abogado manda la lista completa en texto. No se borra y recrea
+   * todo (eso perdía documento, relacionados, tipo faltante e id):
+   *
+   * <ul>
+   *   <li>texto que coincide ({@code codigo|mensaje}) con una abierta → esa fila queda tal cual;
+   *   <li>texto nuevo → se crea como general (observación manual);
+   *   <li>abierta que ya no viene en la lista → se elimina.
+   * </ul>
+   *
+   * Las RESOLVED no se tocan ni se reinsertan.
+   */
+  public static void sincronizarTextos(
+      TitleObservationRepository repo, UUID tenantId, UUID studyId, List<Entrada> textos) {
+    List<TitleObservation> actuales =
+        repo.findByTitleStudyIdAndTenantIdOrderByCreatedAtAsc(studyId, tenantId);
+    Map<String, List<TitleObservation>> abiertas = new LinkedHashMap<>();
+    Set<String> resueltas = new LinkedHashSet<>();
+    for (TitleObservation row : actuales) {
+      Parsed parsed = parse(row.getDetail());
+      String key = clave(null, parsed.code(), parsed.mensaje());
+      if ("RESOLVED".equals(row.getStatus())) {
+        resueltas.add(key);
+      } else {
+        abiertas.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
+      }
+    }
+    Set<String> enLista = new LinkedHashSet<>();
+    for (Entrada entrada : textos == null ? List.<Entrada>of() : textos) {
+      if (entrada == null || entrada.mensaje() == null || entrada.mensaje().isBlank()) {
+        continue;
+      }
+      String key = clave(null, entrada.code(), entrada.mensaje());
+      if (!enLista.add(key) || abiertas.containsKey(key) || resueltas.contains(key)) {
+        continue;
+      }
+      repo.save(TitleObservation.create(tenantId, studyId, formato(entrada)));
+    }
+    for (Map.Entry<String, List<TitleObservation>> abierta : abiertas.entrySet()) {
+      if (!enLista.contains(abierta.getKey())) {
+        abierta.getValue().forEach(repo::delete);
+      }
+    }
+  }
+
   public static List<ObservacionCotejoItem> pendientes(
       TitleObservationRepository repo, UUID tenantId, UUID studyId) {
     Map<String, ObservacionCotejoItem> unicas = new LinkedHashMap<>();
