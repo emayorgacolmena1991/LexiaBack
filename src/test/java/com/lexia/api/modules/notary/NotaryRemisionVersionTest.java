@@ -420,7 +420,7 @@ class NotaryRemisionVersionTest {
     assertEquals("minuta_compraventa.docx", version.getMinutaFileName());
     assertThat(storage.read(version.getMinutaStorageRef())).isEqualTo(MINUTA);
     assertThat(version.getMinutaStorageRef())
-        .startsWith(FIRMA + "/expedientes/" + CASO + "/remisiones/")
+        .startsWith(FIRMA + "/remisiones/" + remision.id() + "/v1/")
         .doesNotContain(minuta.getId().toString());
     assertEquals("Urgente", version.getObservacionesBufete());
     assertEquals(USUARIO, version.getCreatedBy());

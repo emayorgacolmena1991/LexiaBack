@@ -3,6 +3,7 @@ package com.lexia.api.modules.expedientes.minutas;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.common.storage.ArchivoStorage;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
@@ -34,11 +35,10 @@ import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionMinutaViv
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
 import com.lexia.api.modules.identity.AuthorizationService;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -50,7 +50,6 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,11 +77,14 @@ public class MinutaGenerationService {
   private final DatosBiessStore datosBiess;
   private final ExtractedDataRepository extractedData;
   private final ObjectMapper objectMapper;
-  private final Path storageDir;
+  private final ArchivoStorage archivos;
   private final BorradorPromocionService promocion;
   private final MinutaDocxContenido contenido;
   private final ExpedienteVariablesService variablesService;
   private final DocxPdfConverter pdf;
+
+  private static final String MIME_DOCX =
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
   /**
    * Campos canónicos que cambia la captura BIESS / ingreso manual; lo único que se toca en un DOCX
@@ -107,7 +109,7 @@ public class MinutaGenerationService {
       DatosBiessStore datosBiess,
       ExtractedDataRepository extractedData,
       ObjectMapper objectMapper,
-      @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir,
+      ArchivoStorage archivos,
       BorradorPromocionService promocion,
       MinutaDocxContenido contenido,
       ExpedienteVariablesService variablesService,
@@ -124,7 +126,7 @@ public class MinutaGenerationService {
     this.datosBiess = datosBiess;
     this.extractedData = extractedData;
     this.objectMapper = objectMapper;
-    this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
+    this.archivos = archivos;
     this.promocion = promocion;
     this.contenido = contenido;
     this.variablesService = variablesService;
@@ -240,11 +242,11 @@ public class MinutaGenerationService {
       MinutaViviendaData base,
       MinutaViviendaData data,
       Map<String, String> overrides) {
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    String stored = persistDocx(draft, descriptor.fileName(), docx);
     persistData(draft, data);
     draft.setDatosExtraidos(json(base));
     draft.setOverrides(variablesService.escribirOverrides(overrides));
-    draft.markGenerated(stored.toString());
+    draft.markGenerated(stored);
     minutaDrafts.save(draft);
   }
 
@@ -466,9 +468,9 @@ public class MinutaGenerationService {
     }
 
     byte[] docx = aplicarBiess(draft, descriptor, data, biess, leerDocx(draft));
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    String stored = persistDocx(draft, descriptor.fileName(), docx);
     persistData(draft, data);
-    draft.markGenerated(stored.toString());
+    draft.markGenerated(stored);
     minutaDrafts.save(draft);
     datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
 
@@ -561,9 +563,9 @@ public class MinutaGenerationService {
       docx = aplicarBiess(draft, descriptor, data, biess, docx);
     }
 
-    Path stored = persistDocx(draft.getId(), descriptor.fileName(), docx);
+    String stored = persistDocx(draft, descriptor.fileName(), docx);
     persistData(draft, data);
-    draft.markGenerated(stored.toString());
+    draft.markGenerated(stored);
     minutaDrafts.save(draft);
     if (biessCambia) {
       datosBiess.guardar(draft.getTenantId(), caseId, DatosBiessMinuta.from(data));
@@ -633,11 +635,11 @@ public class MinutaGenerationService {
             .find(draft.getProductCode(), draft.getTemplateKind())
             .map(MinutaTemplateDescriptor::fileName)
             .orElse("minuta.docx");
-    Path stored = persistDocx(draft.getId(), fileName, docx);
+    String stored = persistDocx(draft, fileName, docx);
     if (!cambios.isEmpty()) {
       draft.markEditedManually();
     }
-    draft.markGenerated(stored.toString());
+    draft.markGenerated(stored);
     minutaDrafts.save(draft);
     LOG.info(
         "Contenido de minuta guardado case={} draft={} parrafos={} bytes={}",
@@ -669,42 +671,48 @@ public class MinutaGenerationService {
     if (!StringUtils.hasText(draft.getStoragePath())) {
       throw ApiException.badRequest("La minuta aún no tiene archivo generado.");
     }
-    Path path = Path.of(draft.getStoragePath());
-    if (!Files.isRegularFile(path)) {
-      throw ApiException.notFound("Archivo DOCX no encontrado en almacenamiento.");
-    }
-    try {
-      return Files.readAllBytes(path);
-    } catch (IOException e) {
-      throw ApiException.badRequest("No se pudo leer el archivo de la minuta.");
-    }
+    return archivos.leer(draft.getStoragePath());
   }
 
   @Transactional(readOnly = true)
   public DownloadedMinuta descargar(UUID caseId, UUID minutaId) {
     authorization.requirePermission("expedientes:caso:leer");
     MinutaDraft draft = requireDraft(caseId, minutaId);
+    byte[] bytes = leerDocx(draft);
+    String fileName =
+        catalog
+            .find(draft.getProductCode(), draft.getTemplateKind())
+            .map(MinutaTemplateDescriptor::fileName)
+            .orElse("minuta.docx");
+    return new DownloadedMinuta(fileName, bytes);
+  }
 
-    if (!StringUtils.hasText(draft.getStoragePath())) {
-      throw ApiException.badRequest("La minuta aún no tiene archivo generado.");
+  /**
+   * Nombre del .docx tal como se guardó, sin el prefijo {@code {draftId}_} ni el {@code {uuid}_}
+   * de la clave. Sirve claves nuevas y rutas absolutas heredadas.
+   */
+  public static String nombreGuardado(MinutaDraft draft) {
+    String ruta = draft.getStoragePath();
+    String nombre = ruta.substring(Math.max(ruta.lastIndexOf('/'), ruta.lastIndexOf('\\')) + 1);
+    String prefijo = draft.getId() + "_";
+    if (nombre.startsWith(prefijo)) {
+      nombre = nombre.substring(prefijo.length());
     }
-    Path path = Path.of(draft.getStoragePath());
-    if (!Files.isRegularFile(path)) {
-      throw ApiException.notFound("Archivo DOCX no encontrado en almacenamiento.");
+    if (nombre.length() > 37 && nombre.charAt(36) == '_' && esUuid(nombre.substring(0, 36))) {
+      nombre = nombre.substring(37);
     }
+    return nombre;
+  }
+
+  private static boolean esUuid(String texto) {
     try {
-      String fileName =
-          catalog
-              .find(draft.getProductCode(), draft.getTemplateKind())
-              .map(MinutaTemplateDescriptor::fileName)
-              .orElse("minuta.docx");
-      return new DownloadedMinuta(fileName, Files.readAllBytes(path));
-    } catch (IOException e) {
-      throw ApiException.badRequest("No se pudo leer el archivo de la minuta.");
+      return UUID.fromString(texto).toString().equalsIgnoreCase(texto);
+    } catch (IllegalArgumentException e) {
+      return false;
     }
   }
 
-  /** Payload en BD; si el borrador es anterior a V47, cae al JSON en disco. */
+  /** Payload en BD ({@code null} si el borrador no lo tiene: el llamador lo reconstruye). */
   public MinutaViviendaData leerDatos(MinutaDraft draft) {
     return loadData(draft);
   }
@@ -892,10 +900,6 @@ public class MinutaGenerationService {
     return datosBase(tenantId, caseId, legalCase, null, legalCase.getProductCode(), null);
   }
 
-  private Path dataPath(UUID draftId) {
-    return storageDir.resolve(draftId + "_datos.json");
-  }
-
   private void persistData(MinutaDraft draft, MinutaViviendaData data) {
     draft.setPayload(json(data));
   }
@@ -924,40 +928,30 @@ public class MinutaGenerationService {
   }
 
   private MinutaViviendaData loadData(MinutaDraft draft) {
-    if (draft != null && StringUtils.hasText(draft.getPayload())) {
-      try {
-        return objectMapper.readValue(draft.getPayload(), MinutaViviendaData.class);
-      } catch (IOException e) {
-        LOG.warn("Payload de minuta ilegible draft={}: {}", draft.getId(), e.getMessage());
-      }
-    }
-    if (draft == null) {
-      return null;
-    }
-    Path path = dataPath(draft.getId());
-    if (!Files.isRegularFile(path)) {
+    if (draft == null || !StringUtils.hasText(draft.getPayload())) {
       return null;
     }
     try {
-      return objectMapper.readValue(path.toFile(), MinutaViviendaData.class);
+      return objectMapper.readValue(draft.getPayload(), MinutaViviendaData.class);
     } catch (IOException e) {
-      LOG.warn("Datos de minuta ilegibles draft={}: {}", draft.getId(), e.getMessage());
+      LOG.warn("Payload de minuta ilegible draft={}: {}", draft.getId(), e.getMessage());
       return null;
     }
   }
 
-  private Path persistDocx(UUID draftId, String fileName, byte[] bytes) {
-    try {
-      Files.createDirectories(storageDir);
-      String safeName =
-          (fileName == null || fileName.isBlank() ? "minuta.docx" : fileName)
-              .replaceAll("[^a-zA-Z0-9._-]", "_");
-      Path target = storageDir.resolve(draftId + "_" + safeName);
-      Files.write(target, bytes);
-      return target;
-    } catch (IOException e) {
-      throw ApiException.badRequest("No se pudo guardar el DOCX generado.");
-    }
+  /**
+   * Clave nueva en cada guardado ({@code {tenant}/minutas/{draftId}_{uuid}_{nombre}}): nunca
+   * sobrescribe. Commit borra el .docx anterior del borrador; rollback, el nuevo.
+   */
+  private String persistDocx(MinutaDraft draft, String fileName, byte[] bytes) {
+    String safeName =
+        (fileName == null || fileName.isBlank() ? "minuta.docx" : fileName)
+            .replaceAll("[^a-zA-Z0-9._-]", "_");
+    String clave =
+        draft.getTenantId() + "/minutas/" + draft.getId() + "_" + UUID.randomUUID() + "_" + safeName;
+    archivos.guardar(clave, new ByteArrayInputStream(bytes), bytes.length, MIME_DOCX);
+    archivos.sustituirAlTerminar(clave, draft.getStoragePath());
+    return clave;
   }
 
   private String findOcrConsolidated(LegalCase legalCase, String sessionIdHint) {

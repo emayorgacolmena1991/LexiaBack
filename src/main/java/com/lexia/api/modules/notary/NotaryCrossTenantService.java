@@ -25,7 +25,6 @@ import com.lexia.api.modules.notifications.BrevoProperties;
 import com.lexia.api.modules.notifications.EmailNotificationService;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantRepository;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -529,8 +528,10 @@ public class NotaryCrossTenantService {
             remision.getId(),
             versionNo,
             minuta.getPayload(),
-            copiarDocx(firmId, caseId, versionId, minuta, minutaDocx),
-            contrato == null ? null : copiarDocx(firmId, caseId, versionId, contrato, contratoDocx),
+            copiarDocx(firmId, remision.getId(), versionNo, minuta, minutaDocx),
+            contrato == null
+                ? null
+                : copiarDocx(firmId, remision.getId(), versionNo, contrato, contratoDocx),
             observacionesBufete,
             AuthContext.require().userId(),
             minuta.getProductCode()));
@@ -638,15 +639,19 @@ public class NotaryCrossTenantService {
 
   /** Copia propia de la versión: el .docx del borrador puede cambiar después del envío. */
   private NotaryRemisionVersion.Archivo copiarDocx(
-      UUID firmId, UUID caseId, UUID versionId, MinutaDraft draft, byte[] docx) {
-    String guardado = Path.of(draft.getStoragePath()).getFileName().toString();
-    String prefijo = draft.getId() + "_";
-    String nombre = guardado.startsWith(prefijo) ? guardado.substring(prefijo.length()) : guardado;
-    String ruta =
-        documentStorage
-            .writeEnCarpeta(
-                firmId, "expedientes/" + caseId + "/remisiones", versionId, nombre, guessMime(nombre), docx)
-            .clave();
+      UUID firmId, UUID remisionId, int versionNo, MinutaDraft draft, byte[] docx) {
+    String nombre = MinutaGenerationService.nombreGuardado(draft);
+    String clave =
+        firmId
+            + "/remisiones/"
+            + remisionId
+            + "/v"
+            + versionNo
+            + "/"
+            + UUID.randomUUID()
+            + "_"
+            + ExpedienteDocumentoStorage.safeName(nombre);
+    String ruta = documentStorage.guardar(clave, guessMime(nombre), docx).clave();
     borrarSiHayRollback(ruta);
     return new NotaryRemisionVersion.Archivo(draft.getId(), ruta, nombre);
   }

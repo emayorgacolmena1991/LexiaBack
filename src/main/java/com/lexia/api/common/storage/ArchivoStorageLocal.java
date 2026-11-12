@@ -25,7 +25,8 @@ import org.springframework.stereotype.Component;
 /**
  * Disco local bajo {@code lexia.storage.local-root}. Las claves nuevas son relativas a esa raíz.
  * Las filas anteriores guardan rutas absolutas: se resuelven solo dentro de las carpetas heredadas
- * ({@code lexia.expedientes|minutas|coactivas.storage-dir}), directamente o reubicando su cola.
+ * ({@code lexia.expedientes|minutas|coactivas[.documentos].storage-dir}), directamente o
+ * reubicando su cola.
  */
 @Component
 @ConditionalOnProperty(
@@ -46,8 +47,14 @@ public class ArchivoStorageLocal implements ArchivoStorage {
       @Value("${lexia.storage.local-root:./data}") String root,
       @Value("${lexia.expedientes.storage-dir:./data/expedientes}") String expedientes,
       @Value("${lexia.minutas.storage-dir:./data/minutas}") String minutas,
-      @Value("${lexia.coactivas.storage-dir:./data/coactivas}") String coactivas) {
-    this(Path.of(root), Path.of(expedientes), Path.of(minutas), Path.of(coactivas));
+      @Value("${lexia.coactivas.storage-dir:./data/coactivas}") String coactivas,
+      @Value("${lexia.coactivas.documentos.storage-dir:./data/coactivas}") String coactivasBorradores) {
+    this(
+        Path.of(root),
+        Path.of(expedientes),
+        Path.of(minutas),
+        Path.of(coactivas),
+        Path.of(coactivasBorradores));
   }
 
   public ArchivoStorageLocal(Path root, Path... heredadas) {
@@ -196,12 +203,13 @@ public class ArchivoStorageLocal implements ArchivoStorage {
 
   /**
    * Ruta absoluta guardada por otro equipo, cwd o storage-dir. Se usa tal cual si existe dentro de
-   * una carpeta heredada; si no, la cola desde un segmento UUID ({@code tenant/case/archivo}) se
-   * busca bajo cada carpeta heredada actual. Con {@code ..} en la ruta no se reubica.
+   * una carpeta heredada; si no, la cola desde un segmento UUID ({@code tenant/case/archivo}) o el
+   * archivo {@code {uuid}_{nombre}} se busca bajo cada carpeta heredada actual. Con {@code ..} en la
+   * ruta no se reubica.
    */
   private Path resolverHeredada(String clave) {
     String[] partes = clave.replace('\\', '/').split("/");
-    if (Arrays.asList(partes).contains("..")) {
+    if (partes.length == 0 || Arrays.asList(partes).contains("..")) {
       return null;
     }
     try {
@@ -216,19 +224,31 @@ public class ArchivoStorageLocal implements ArchivoStorage {
       if (!esUuid(partes[i])) {
         continue;
       }
-      String cola = String.join("/", Arrays.copyOfRange(partes, i, partes.length));
-      for (Path carpeta : heredadas) {
-        Path reubicada;
-        try {
-          reubicada = carpeta.resolve(cola).normalize();
-        } catch (InvalidPathException ex) {
-          continue;
-        }
-        if (reubicada.startsWith(carpeta)
-            && !reubicada.equals(carpeta)
-            && Files.isRegularFile(reubicada)) {
-          return reubicada;
-        }
+      Path reubicada = reubicar(String.join("/", Arrays.copyOfRange(partes, i, partes.length)));
+      if (reubicada != null) {
+        return reubicada;
+      }
+    }
+    // Minutas y borradores de coactiva: {draftId}_{nombre} directamente en la carpeta.
+    String archivo = partes[partes.length - 1];
+    if (archivo.length() > 37 && archivo.charAt(36) == '_' && esUuid(archivo.substring(0, 36))) {
+      return reubicar(archivo);
+    }
+    return null;
+  }
+
+  private Path reubicar(String cola) {
+    for (Path carpeta : heredadas) {
+      Path reubicada;
+      try {
+        reubicada = carpeta.resolve(cola).normalize();
+      } catch (InvalidPathException ex) {
+        continue;
+      }
+      if (reubicada.startsWith(carpeta)
+          && !reubicada.equals(carpeta)
+          && Files.isRegularFile(reubicada)) {
+        return reubicada;
       }
     }
     return null;

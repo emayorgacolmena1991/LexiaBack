@@ -116,7 +116,9 @@ class NotaryLogoServiceTest {
     NotaryTenantProfile perfil = perfiles.get(NOTARIA);
     assertEquals("image/png", perfil.getLogoContentType());
     assertThat(perfil.getLogoUpdatedAt()).isNotNull();
-    assertThat(perfil.getLogoStorageRef()).contains(NOTARIA.toString()).contains("perfil-notaria");
+    assertThat(perfil.getLogoStorageRef())
+        .startsWith(NOTARIA + "/perfil-notaria/")
+        .endsWith("_logo.png");
     assertThat(service.leer().bytes()).isEqualTo(PNG);
     assertEquals("image/png", service.leer().mimeType());
   }

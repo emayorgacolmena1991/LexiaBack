@@ -19,7 +19,7 @@ class DocxPdfConverterTest {
             catalog.require(MinutaTemplateCatalog.PRODUCT_SUSTITUCION_HIPOTECA, "CONTRATO_MUTUO"),
             data);
 
-    byte[] pdf = new DocxPdfConverter("", "target/minutas-test").toPdf(docx);
+    byte[] pdf = new DocxPdfConverter("").toPdf(docx);
 
     assertTrue(pdf.length > 1000, "PDF demasiado pequeño: " + pdf.length);
     assertTrue(new String(pdf, 0, 5, StandardCharsets.US_ASCII).startsWith("%PDF-"));

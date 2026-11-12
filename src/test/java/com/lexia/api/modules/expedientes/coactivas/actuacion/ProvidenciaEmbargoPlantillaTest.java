@@ -55,7 +55,7 @@ class ProvidenciaEmbargoPlantillaTest {
     assertTrue(texto.contains("juan.perez@mail.com"));
     assertTrue(texto.contains("estudio@juridico.ec"));
 
-    byte[] pdf = new DocxPdfConverter("", "target/coactivas-test").toPdf(docx);
+    byte[] pdf = new DocxPdfConverter("").toPdf(docx);
     assertTrue(pdf.length > 1000);
     assertEquals("%PDF", new String(pdf, 0, 4));
   }

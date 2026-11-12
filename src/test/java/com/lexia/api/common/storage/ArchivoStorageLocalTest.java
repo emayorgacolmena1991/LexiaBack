@@ -18,6 +18,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronizationUtils;
 
 class ArchivoStorageLocalTest {
 
@@ -169,6 +172,46 @@ class ArchivoStorageLocalTest {
     ApiException ex = assertThrows(ApiException.class, () -> storage.leer("t/fantasma.pdf"));
     assertEquals("Archivo no disponible en el almacenamiento.", ex.getMessage());
     assertFalse(storage.existe("t/fantasma.pdf"));
+  }
+
+  @Test
+  void sustituirAlTerminarBorraLaAnteriorEnCommitYLaNuevaEnRollback() {
+    guardar("t/v1.pdf", (byte) 1);
+    guardar("t/v2.pdf", (byte) 2);
+    guardar("t/v3.pdf", (byte) 3);
+
+    conTransaccion(TransactionSynchronization.STATUS_COMMITTED, () -> storage.sustituirAlTerminar("t/v2.pdf", "t/v1.pdf"));
+    conTransaccion(TransactionSynchronization.STATUS_ROLLED_BACK, () -> storage.sustituirAlTerminar("t/v3.pdf", "t/v2.pdf"));
+
+    assertFalse(storage.existe("t/v1.pdf"));
+    assertTrue(storage.existe("t/v2.pdf"));
+    assertFalse(storage.existe("t/v3.pdf"));
+  }
+
+  @Test
+  void siBorrarLaAnteriorFallaSoloQuedaHuerfanaYNoLanza() {
+    ArchivoStorageLocal fallaAlBorrar =
+        new ArchivoStorageLocal(raiz, heredada) {
+          @Override
+          public void borrar(String clave) {
+            throw new IllegalStateException("disco");
+          }
+        };
+    fallaAlBorrar.guardar("t/viejo.png", new ByteArrayInputStream(new byte[] {1}), 1, "image/png");
+
+    conTransaccion(TransactionSynchronization.STATUS_COMMITTED, () -> fallaAlBorrar.sustituirAlTerminar("t/nuevo.png", "t/viejo.png"));
+
+    assertTrue(storage.existe("t/viejo.png"), "huérfano, sin excepción");
+  }
+
+  private static void conTransaccion(int status, Runnable registrar) {
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      registrar.run();
+      TransactionSynchronizationUtils.triggerAfterCompletion(status);
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+    }
   }
 
   @Test

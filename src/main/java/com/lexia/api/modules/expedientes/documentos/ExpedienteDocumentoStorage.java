@@ -55,27 +55,6 @@ public class ExpedienteDocumentoStorage {
     return guardar(clave, contentType, bytes);
   }
 
-  /** Archivo del tenant fuera de las versiones documentales (logo, escritura, copia de remisión). */
-  public Stored writeEnCarpeta(
-      UUID tenantId,
-      String carpeta,
-      UUID archivoId,
-      String fileName,
-      String contentType,
-      byte[] bytes) {
-    String clave =
-        tenantId
-            + "/"
-            + carpeta
-            + "/"
-            + archivoId
-            + "_"
-            + UUID.randomUUID()
-            + "_"
-            + safeName(fileName);
-    return guardar(clave, contentType, bytes);
-  }
-
   public byte[] read(String storageKey) {
     return archivos.leer(storageKey);
   }
@@ -85,13 +64,9 @@ public class ExpedienteDocumentoStorage {
     archivos.borrarSiHayRollback(storageKey);
   }
 
-  /** Limpieza tras commit/rollback: un fallo aquí no puede cambiar el resultado de la operación. */
-  public void delete(String storageKey) {
-    try {
-      archivos.borrar(storageKey);
-    } catch (RuntimeException ex) {
-      LOG.warn("Storage.delete FALLO key={}: {}", storageKey, ex.getMessage());
-    }
+  /** Ver {@link ArchivoStorage#sustituirAlTerminar}. */
+  public void sustituirAlTerminar(String nueva, String anterior) {
+    archivos.sustituirAlTerminar(nueva, anterior);
   }
 
   /** Tamaño para listados: un archivo ausente o una clave rechazada no rompe el listado (0). */
@@ -107,7 +82,8 @@ public class ExpedienteDocumentoStorage {
     }
   }
 
-  private Stored guardar(String clave, String contentType, byte[] bytes) {
+  /** Clave completa armada por el llamador ({@code {tenant}/...}); nunca sobrescribe. */
+  public Stored guardar(String clave, String contentType, byte[] bytes) {
     String sha256;
     try {
       sha256 = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
@@ -120,7 +96,7 @@ public class ExpedienteDocumentoStorage {
     return new Stored(guardada, sha256);
   }
 
-  static String safeName(String fileName) {
+  public static String safeName(String fileName) {
     String raw = fileName == null || fileName.isBlank() ? "archivo" : fileName.trim();
     String cleaned = raw.replaceAll("[^A-Za-z0-9._-]", "_");
     if (cleaned.length() > 80) {

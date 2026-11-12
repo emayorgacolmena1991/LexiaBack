@@ -124,7 +124,7 @@ class NotaryEscrituraServiceTest {
             perfiles,
             logos,
             new DocxMinutaRenderer(),
-            new DocxPdfConverter("", "target/notary-escritura-test"),
+            new DocxPdfConverter(""),
             new MinutaTemplateCatalog(),
             storage,
             mock(AppUserRepository.class),
@@ -512,7 +512,8 @@ class NotaryEscrituraServiceTest {
         .containsExactlyInAnyOrder(primera.id(), segunda.id());
     assertThat(service.archivo(id, segunda.id()).bytes()).isEqualTo(docx(segunda));
     assertThat(escrituraGuardada(primera).getStorageRef())
-        .isNotEqualTo(escrituraGuardada(segunda).getStorageRef());
+        .isNotEqualTo(escrituraGuardada(segunda).getStorageRef())
+        .startsWith(NOTARIA + "/escrituras/" + primera.id() + "_");
 
     sesion(OTRA_NOTARIA);
     assertEstado(

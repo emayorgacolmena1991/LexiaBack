@@ -18,8 +18,6 @@ import javax.imageio.stream.ImageInputStream;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 /** Logo de la notaría de la sesión. Sin parámetro de tenant: nadie opera sobre el logo de otra. */
@@ -71,9 +69,9 @@ public class NotaryLogoService {
     String anterior = perfil.getLogoStorageRef();
     String nuevo =
         storage
-            .writeEnCarpeta(perfil.getTenantId(), CARPETA, UUID.randomUUID(), nombre, tipo, bytes)
+            .guardar(perfil.getTenantId() + "/" + CARPETA + "/" + UUID.randomUUID() + "_" + nombre, tipo, bytes)
             .clave();
-    limpiarAlTerminar(nuevo, anterior);
+    storage.sustituirAlTerminar(nuevo, anterior);
     perfil.asignarLogo(nuevo, tipo);
     profiles.save(perfil);
     audit(perfil, "NOTARY_LOGO_UPDATED");
@@ -83,7 +81,7 @@ public class NotaryLogoService {
   public void quitar() {
     authorization.requirePermission(PERMISO);
     NotaryTenantProfile perfil = perfilConLogo();
-    limpiarAlTerminar(null, perfil.getLogoStorageRef());
+    storage.sustituirAlTerminar(null, perfil.getLogoStorageRef());
     perfil.quitarLogo();
     profiles.save(perfil);
     audit(perfil, "NOTARY_LOGO_REMOVED");
@@ -182,26 +180,6 @@ public class NotaryLogoService {
   private static boolean empiezaCon(byte[] bytes, byte[] firma) {
     return bytes.length >= firma.length
         && Arrays.equals(Arrays.copyOf(bytes, firma.length), firma);
-  }
-
-  /** Rollback: sobra el archivo nuevo. Commit: sobra el anterior. */
-  private void limpiarAlTerminar(String nuevo, String anterior) {
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      return;
-    }
-    TransactionSynchronizationManager.registerSynchronization(
-        new TransactionSynchronization() {
-          @Override
-          public void afterCompletion(int status) {
-            String sobrante =
-                status == STATUS_ROLLED_BACK
-                    ? nuevo
-                    : status == STATUS_COMMITTED ? anterior : null;
-            if (sobrante != null) {
-              storage.delete(sobrante);
-            }
-          }
-        });
   }
 
   private void audit(NotaryTenantProfile perfil, String evento) {

@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.BorradorPromocionService;
@@ -134,7 +135,7 @@ class MinutaGenerationOverridesTest {
             datosBiess,
             extractedData,
             mapper,
-            storage.toString(),
+            new ArchivoStorageLocal(storage.resolve("data"), storage),
             promocion,
             mock(MinutaDocxContenido.class),
             new ExpedienteVariablesService(actos, renderer, mapper),
@@ -160,6 +161,7 @@ class MinutaGenerationOverridesTest {
     return draft;
   }
 
+  /** {@code draftConArchivo} guarda una ruta absoluta bajo la carpeta heredada de minutas. */
   @Test
   void leerDocxSirveBorradoresDelTenantDeSesion() throws Exception {
     assertArrayEquals(new byte[] {7, 8}, service.leerDocx(draftConArchivo(TENANT)));
@@ -169,6 +171,34 @@ class MinutaGenerationOverridesTest {
   void leerDocxRechazaBorradorDeOtroTenant() throws Exception {
     MinutaDraft ajeno = draftConArchivo(UUID.randomUUID());
     assertThrows(ApiException.class, () -> service.leerDocx(ajeno));
+  }
+
+  @Test
+  void generarDosVecesLaMismaMinutaGuardaDosClavesRelativasConTenant() throws Exception {
+    PreviewMinutaRequest request = new PreviewMinutaRequest(Map.of("nombre_vendedor", VENDEDOR), null);
+    service.previsualizar(CASO, TIPO, request);
+    MinutaDraft draft = guardados.get(0);
+    String primera = draft.getStoragePath();
+
+    service.previsualizar(CASO, TIPO, request);
+    String segunda = draft.getStoragePath();
+
+    assertEquals(1, guardados.size(), "mismo borrador");
+    assertNotEquals(primera, segunda);
+    for (String clave : List.of(primera, segunda)) {
+      assertTrue(clave.startsWith(TENANT + "/minutas/" + draft.getId() + "_"), clave);
+      assertTrue(Files.isRegularFile(storage.resolve("data").resolve(clave)), "nunca sobrescribe");
+    }
+    assertTrue(texto(storage.resolve("data").resolve(segunda)).contains(VENDEDOR));
+  }
+
+  @Test
+  void nombreGuardadoQuitaElPrefijoDeLaClaveYDeLaRutaHeredada() {
+    MinutaDraft draft = MinutaDraft.create(TENANT, UUID.randomUUID(), PRODUCTO, TIPO);
+    draft.markGenerated(TENANT + "/minutas/" + draft.getId() + "_" + UUID.randomUUID() + "_minuta_compraventa.docx");
+    assertEquals("minuta_compraventa.docx", MinutaGenerationService.nombreGuardado(draft));
+    draft.markGenerated("C:\\lexia\\data\\minutas\\" + draft.getId() + "_minuta_compraventa.docx");
+    assertEquals("minuta_compraventa.docx", MinutaGenerationService.nombreGuardado(draft));
   }
 
   @Test
@@ -192,7 +222,7 @@ class MinutaGenerationOverridesTest {
     assertEquals(2, guardados.size());
     MinutaDraft nuevo = guardados.get(1);
     assertNotEquals(guardados.get(0).getId(), nuevo.getId());
-    assertTrue(texto(Path.of(nuevo.getStoragePath())).contains(VENDEDOR));
+    assertTrue(texto(storage.resolve("data").resolve(nuevo.getStoragePath())).contains(VENDEDOR));
     JsonNode payload = mapper.readTree(nuevo.getPayload());
     assertEquals(VENDEDOR, payload.path("nombre_vendedor").asText());
     assertEquals(VENDEDOR, mapper.readTree(nuevo.getOverrides()).path("nombre_vendedor").asText());

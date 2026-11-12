@@ -1,6 +1,7 @@
 package com.lexia.api.common.storage;
 
 import java.io.InputStream;
+import java.util.Objects;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -37,6 +38,15 @@ public interface ArchivoStorage {
    * fallo al borrar se registra: la limpieza no puede cambiar el resultado de la operación.
    */
   default void borrarSiHayRollback(String clave) {
+    sustituirAlTerminar(clave, null);
+  }
+
+  /**
+   * Archivo que reemplaza a otro en una fila: rollback borra {@code nueva}; commit borra {@code
+   * anterior}. Sin transacción no hace nada. Si el borrado falla queda un huérfano (WARN): la fila ya
+   * apunta al archivo correcto y no se pierde nada.
+   */
+  default void sustituirAlTerminar(String nueva, String anterior) {
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
       return;
     }
@@ -44,14 +54,19 @@ public interface ArchivoStorage {
         new TransactionSynchronization() {
           @Override
           public void afterCompletion(int status) {
-            if (status != STATUS_ROLLED_BACK) {
+            String sobrante =
+                status == STATUS_ROLLED_BACK
+                    ? nueva
+                    : status == STATUS_COMMITTED ? anterior : null;
+            // Misma clave en ambas: es el archivo vigente, no se borra.
+            if (sobrante == null || sobrante.isBlank() || Objects.equals(nueva, anterior)) {
               return;
             }
             try {
-              borrar(clave);
+              borrar(sobrante);
             } catch (RuntimeException ex) {
               LoggerFactory.getLogger(ArchivoStorage.class)
-                  .warn("Storage.borrarSiHayRollback FALLO key={}: {}", clave, ex.getMessage());
+                  .warn("Storage: no se pudo borrar {} (queda huérfano): {}", sobrante, ex.getMessage());
             }
           }
         });

@@ -59,7 +59,7 @@ class CoactivaActuacionGenerarIncompletoTest {
   @Mock private CoactivaArchivoStorage storage;
   @Mock private CoactivaPlantillaDataMapper mapper;
 
-  private final DocxPdfConverter pdfConverter = spy(new DocxPdfConverter("", "target/coactivas-test"));
+  private final DocxPdfConverter pdfConverter = spy(new DocxPdfConverter(""));
   private CoactivaActuacionService service;
   private CoactivaExpediente expediente;
   private CoactivaPlantilla plantilla;

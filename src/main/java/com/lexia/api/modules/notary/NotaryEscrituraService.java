@@ -149,7 +149,10 @@ public class NotaryEscrituraService {
         "escritura_" + remision.getExpedienteCodigo() + "_v" + p.version().getVersionNo() + ".docx";
     String ruta =
         storage
-            .writeEnCarpeta(remision.getNotaryTenantId(), CARPETA, id, nombre, MIME_DOCX, render.docx())
+            .guardar(
+                remision.getNotaryTenantId() + "/" + CARPETA + "/" + id + "_" + ExpedienteDocumentoStorage.safeName(nombre),
+                MIME_DOCX,
+                render.docx())
             .clave();
     storage.borrarSiHayRollback(ruta);
     AuthPrincipal principal = AuthContext.require();
