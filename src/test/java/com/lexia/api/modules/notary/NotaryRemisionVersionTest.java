@@ -590,6 +590,81 @@ class NotaryRemisionVersionTest {
         HttpStatus.NOT_FOUND, assertThrows(ApiException.class, () -> service.getRemision(id)));
   }
 
+  /** Documento del bufete con su v1 en disco; la "última versión" del caso apunta a ella. */
+  private DocumentVersion documentoEnviado(byte[] bytes) {
+    estudio("APPROVED");
+    LegalDocument doc = LegalDocument.create(FIRMA, CASO, "cedula.pdf", "CEDULA");
+    when(documentosCaso.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(CASO, FIRMA))
+        .thenReturn(List.of(doc));
+    String clave =
+        storage.guardarVersion(FIRMA, CASO, doc.getId(), 1, "cedula.pdf", "application/pdf", bytes).clave();
+    DocumentVersion v1 = DocumentVersion.upload(FIRMA, doc.getId(), 1, "application/pdf", "sha1", clave);
+    when(versionesDocumento.findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(doc.getId(), FIRMA))
+        .thenReturn(Optional.of(v1));
+    when(versionesDocumento.findById(v1.getId())).thenReturn(Optional.of(v1));
+    MinutaDraft minuta = draft("MINUTA_COMPRAVENTA", PAYLOAD, MINUTA);
+    when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
+        .thenReturn(List.of(minuta));
+    return v1;
+  }
+
+  private void leible(UUID remisionId, NotaryRemisionDocument fila) {
+    when(documentos.findByRemisionIdAndId(remisionId, fila.getId())).thenReturn(Optional.of(fila));
+  }
+
+  @Test
+  void reemplazarElDocumentoTrasElEnvioNoCambiaLoQueLeeLaNotaria() {
+    byte[] original = {11, 12};
+    DocumentVersion v1 = documentoEnviado(original);
+    UUID id = enviar().id();
+    NotaryRemisionDocument fila = documentosGuardados.get(0);
+    leible(id, fila);
+    assertEquals(v1.getStorageKey(), fila.getStorageKey(), "snapshot con la clave enviada");
+
+    // El bufete reemplaza: v2 con clave nueva; v1 y su archivo quedan intactos.
+    String claveV2 =
+        storage.guardarVersion(FIRMA, CASO, v1.getDocumentId(), 2, "cedula.pdf", "application/pdf", new byte[] {99})
+            .clave();
+    when(versionesDocumento.findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(v1.getDocumentId(), FIRMA))
+        .thenReturn(Optional.of(DocumentVersion.upload(FIRMA, v1.getDocumentId(), 2, "application/pdf", "sha2", claveV2)));
+
+    sesion(NOTARIA);
+    assertThat(service.readRemisionDocument(id, fila.getId()).bytes()).isEqualTo(original);
+  }
+
+  @Test
+  void laClaveDelSnapshotTienePrioridadSobreLaDeLaVersion() {
+    byte[] original = {21};
+    DocumentVersion v1 = documentoEnviado(original);
+    UUID id = enviar().id();
+    NotaryRemisionDocument fila = documentosGuardados.get(0);
+    leible(id, fila);
+    DocumentVersion movida = mock(DocumentVersion.class);
+    when(movida.getTenantId()).thenReturn(FIRMA);
+    when(movida.getStorageKey()).thenReturn(FIRMA + "/expedientes/otra-clave.pdf");
+    when(versionesDocumento.findById(v1.getId())).thenReturn(Optional.of(movida));
+
+    sesion(NOTARIA);
+    assertThat(service.readRemisionDocument(id, fila.getId()).bytes()).isEqualTo(original);
+  }
+
+  @Test
+  void filaSinStorageKeyLeeLaClaveDeLaVersion() {
+    byte[] original = {31, 32};
+    DocumentVersion v1 = documentoEnviado(original);
+    UUID id = enviar().id();
+    NotaryRemisionDocument anterior =
+        NotaryRemisionDocument.of(
+            id, versionGuardada().getId(), FIRMA, v1.getId(), "cedula.pdf", 0, null, "Incluido", null);
+    leible(id, anterior);
+
+    sesion(NOTARIA);
+    NotaryDtos.RemisionDocumentContent contenido = service.readRemisionDocument(id, anterior.getId());
+
+    assertThat(contenido.bytes()).isEqualTo(original);
+    assertEquals("application/pdf", contenido.mimeType());
+  }
+
   @Test
   void contenidoDeDocumentoATenantAjenoResponde404() {
     UUID id = enviada().id();

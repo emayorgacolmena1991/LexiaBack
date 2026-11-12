@@ -37,6 +37,10 @@ public class NotaryRemisionDocument {
   @Column(name = "status_label", nullable = false, length = 40)
   private String statusLabel;
 
+  /** Clave del archivo de la versión enviada; {@code null} en filas anteriores a V101 sin backfill. */
+  @Column(name = "storage_key", length = 512)
+  private String storageKey;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -50,7 +54,8 @@ public class NotaryRemisionDocument {
       String displayName,
       int sortOrder,
       Long sizeBytes,
-      String statusLabel) {
+      String statusLabel,
+      String storageKey) {
     NotaryRemisionDocument d = new NotaryRemisionDocument();
     d.id = UUID.randomUUID();
     d.remisionId = remisionId;
@@ -61,6 +66,7 @@ public class NotaryRemisionDocument {
     d.sortOrder = sortOrder;
     d.sizeBytes = sizeBytes;
     d.statusLabel = statusLabel;
+    d.storageKey = storageKey;
     d.createdAt = Instant.now();
     return d;
   }
@@ -99,5 +105,9 @@ public class NotaryRemisionDocument {
 
   public String getStatusLabel() {
     return statusLabel;
+  }
+
+  public String getStorageKey() {
+    return storageKey;
   }
 }

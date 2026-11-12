@@ -245,7 +245,10 @@ public class NotaryCrossTenantService {
             .findById(snapshot.getFirmDocumentVersionId())
             .filter(v -> v.getTenantId().equals(snapshot.getFirmTenantId()))
             .orElseThrow(() -> NotaryBusinessException.notFound("Versión documental no disponible."));
-    byte[] bytes = documentStorage.read(version.getStorageKey());
+    // Clave del snapshot; filas anteriores a V101 sin backfill usan la de la versión.
+    String clave =
+        snapshot.getStorageKey() != null ? snapshot.getStorageKey() : version.getStorageKey();
+    byte[] bytes = documentStorage.read(clave);
     String mime =
         version.getMimeType() == null || version.getMimeType().isBlank()
             ? guessMime(snapshot.getDisplayName())
@@ -680,7 +683,9 @@ public class NotaryCrossTenantService {
               doc.getName(),
               order++,
               size > 0 ? size : null,
-              status));
+              status,
+              // Snapshot: las claves no se sobrescriben, reemplazar en el bufete no la toca.
+              version.get().getStorageKey()));
     }
     return order;
   }
