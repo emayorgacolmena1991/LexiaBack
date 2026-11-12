@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
@@ -111,7 +112,7 @@ class NotaryEscrituraServiceTest {
                     .filter(e -> e.getRemisionId().equals(llamada.getArgument(1)))
                     .findFirst());
 
-    storage = new ExpedienteDocumentoStorage(almacenamiento.toString());
+    storage = new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento));
     AuditEventRepository auditoria = mock(AuditEventRepository.class);
     logos = new NotaryLogoService(authorization, perfiles, storage, auditoria);
     service =
@@ -488,7 +489,7 @@ class NotaryEscrituraServiceTest {
     TransactionSynchronizationManager.initSynchronization();
     try {
       NotaryDtos.EscrituraDto escritura = generarCompleta(id);
-      Path archivo = Path.of(escrituraGuardada(escritura).getStorageRef());
+      Path archivo = almacenamiento.resolve(escrituraGuardada(escritura).getStorageRef());
       assertThat(Files.exists(archivo)).isTrue();
 
       TransactionSynchronizationUtils.triggerAfterCompletion(

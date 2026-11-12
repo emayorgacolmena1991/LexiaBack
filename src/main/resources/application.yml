@@ -30,6 +30,12 @@ spring:
       hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
+  # Almacenamiento de archivos (ArchivoStorage). Hoy solo `local`; en el futuro habrá `b2`.
+  # Claves nuevas: relativas a local-root ({tenant}/expedientes/{caso}/...). Las filas antiguas
+  # guardan rutas absolutas y se leen solo si caen dentro de los storage-dir de abajo.
+  storage:
+    provider: ${LEXIA_STORAGE_PROVIDER:local}
+    local-root: ${LEXIA_STORAGE_LOCAL_ROOT:./data}
   minutas:
     storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
     # Opcional: ejecutable de LibreOffice (soffice) para la vista previa PDF con máxima fidelidad.

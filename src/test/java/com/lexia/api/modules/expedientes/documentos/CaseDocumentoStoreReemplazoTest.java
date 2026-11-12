@@ -1,12 +1,16 @@
 package com.lexia.api.modules.expedientes.documentos;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.modules.expedientes.caso.ExpedienteSeguimientoService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.expedientes.documentos.CaseDocumentoStore.CaseFileContext;
@@ -34,10 +38,12 @@ class CaseDocumentoStoreReemplazoTest {
   private final DocumentVersionRepository versions = mock(DocumentVersionRepository.class);
   private final List<DocumentVersion> guardadas = new ArrayList<>();
   private CaseDocumentoStore store;
+  private ExpedienteDocumentoStorage archivos;
 
   @BeforeEach
   @SuppressWarnings("unchecked")
   void setUp() {
+    archivos = new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento));
     when(versions.save(any()))
         .thenAnswer(
             llamada -> {
@@ -57,7 +63,7 @@ class CaseDocumentoStoreReemplazoTest {
             documents,
             versions,
             mock(DocumentoTextoOcrRepository.class),
-            new ExpedienteDocumentoStorage(almacenamiento.toString()),
+            archivos,
             mock(ObjectProvider.class));
   }
 
@@ -91,6 +97,27 @@ class CaseDocumentoStoreReemplazoTest {
     ArgumentCaptor<LegalDocument> documento = ArgumentCaptor.forClass(LegalDocument.class);
     verify(documents, times(1)).save(documento.capture());
     assertEquals(doc.getId(), documento.getValue().getId(), "no se crea otro LegalDocument");
+  }
+
+  @Test
+  void reemplazarGuardaUnaClaveNuevaYLaVersion1QuedaIntacta() {
+    CaseFileContext ctx = contexto("DIGITAL_SEPARADO");
+    String id = store.subir(ctx, "cedula.pdf", "application/pdf", new byte[] {1, 2, 3}).idDocumento();
+    ArgumentCaptor<LegalDocument> creado = ArgumentCaptor.forClass(LegalDocument.class);
+    verify(documents).save(creado.capture());
+    when(documents.findByIdAndTenantIdAndDeletedAtIsNull(creado.getValue().getId(), TENANT))
+        .thenReturn(Optional.of(creado.getValue()));
+
+    store.reemplazar(ctx, id, "cedula.pdf", "application/pdf", new byte[] {9}, null);
+
+    DocumentVersion v1 = guardadas.get(0);
+    DocumentVersion v2 = guardadas.get(1);
+    assertEquals(2, v2.getVersionNo());
+    assertNotEquals(v1.getStorageKey(), v2.getStorageKey(), "mismo nombre, clave distinta");
+    assertThat(v1.getStorageKey()).startsWith(TENANT + "/expedientes/" + CASO + "/" + id + "/v1_");
+    assertThat(v2.getStorageKey()).startsWith(TENANT + "/expedientes/" + CASO + "/" + id + "/v2_");
+    assertArrayEquals(new byte[] {1, 2, 3}, archivos.read(v1.getStorageKey()));
+    assertArrayEquals(new byte[] {9}, archivos.read(v2.getStorageKey()));
   }
 
   @Test

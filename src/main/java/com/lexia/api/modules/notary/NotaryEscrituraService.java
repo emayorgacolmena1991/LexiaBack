@@ -148,7 +148,9 @@ public class NotaryEscrituraService {
     String nombre =
         "escritura_" + remision.getExpedienteCodigo() + "_v" + p.version().getVersionNo() + ".docx";
     String ruta =
-        storage.writeEnCarpeta(remision.getNotaryTenantId(), CARPETA, id, nombre, render.docx()).path();
+        storage
+            .writeEnCarpeta(remision.getNotaryTenantId(), CARPETA, id, nombre, MIME_DOCX, render.docx())
+            .clave();
     storage.borrarSiHayRollback(ruta);
     AuthPrincipal principal = AuthContext.require();
     NotaryEscritura escritura =

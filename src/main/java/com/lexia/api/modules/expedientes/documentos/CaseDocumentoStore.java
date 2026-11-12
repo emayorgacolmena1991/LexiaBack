@@ -127,11 +127,12 @@ public class CaseDocumentoStore {
     }
     LegalDocument doc = LegalDocument.create(ctx.tenantId(), ctx.caseId(), original, tipo);
     ExpedienteDocumentoStorage.Stored stored =
-        storage.write(ctx.tenantId(), ctx.caseId(), doc.getId(), original, bytes);
+        storage.guardarVersion(ctx.tenantId(), ctx.caseId(), doc.getId(), 1, original, mime, bytes);
+    storage.borrarSiHayRollback(stored.clave());
     documents.save(doc);
     versions.save(
         DocumentVersion.upload(
-            ctx.tenantId(), doc.getId(), 1, mime, stored.sha256(), stored.path()));
+            ctx.tenantId(), doc.getId(), 1, mime, stored.sha256(), stored.clave()));
     seguimiento.ifAvailable(
         service -> service.documentoSubido(ctx.caseId(), ctx.tenantId(), original));
     return new DocumentoCargadoDTO(doc.getId().toString(), original, formatSize(bytes.length), tipo);
@@ -276,13 +277,14 @@ public class CaseDocumentoStore {
             .findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(doc.getId(), ctx.tenantId())
             .map(version -> version.getVersionNo() + 1)
             .orElse(1);
+    // Clave nueva por versión: el archivo de la versión anterior queda intacto.
     ExpedienteDocumentoStorage.Stored stored =
-        storage.write(ctx.tenantId(), ctx.caseId(), doc.getId(), original, bytes);
+        storage.guardarVersion(ctx.tenantId(), ctx.caseId(), doc.getId(), next, original, mime, bytes);
     // Si la transacción del reemplazo (versión, fila OCR, consolidado) se revierte, no queda archivo huérfano.
-    storage.borrarSiHayRollback(stored.path());
+    storage.borrarSiHayRollback(stored.clave());
     versions.save(
         DocumentVersion.upload(
-            ctx.tenantId(), doc.getId(), next, mime, stored.sha256(), stored.path()));
+            ctx.tenantId(), doc.getId(), next, mime, stored.sha256(), stored.clave()));
     return new StoredDoc(
         doc.getId().toString(),
         doc.getName(),

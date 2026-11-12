@@ -14,6 +14,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.modules.actos.ActoNotarialService;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
@@ -140,7 +141,7 @@ class ReemplazoValidadoTest {
             documents,
             versions,
             ocrRows,
-            new ExpedienteDocumentoStorage(almacenamiento.toString()),
+            new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento)),
             mock(ObjectProvider.class));
     ProductoBiessService productos = mock(ProductoBiessService.class);
     when(productos.detalle(PRODUCTO, null))

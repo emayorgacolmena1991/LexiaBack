@@ -642,7 +642,11 @@ public class NotaryCrossTenantService {
     String guardado = Path.of(draft.getStoragePath()).getFileName().toString();
     String prefijo = draft.getId() + "_";
     String nombre = guardado.startsWith(prefijo) ? guardado.substring(prefijo.length()) : guardado;
-    String ruta = documentStorage.write(firmId, caseId, versionId, nombre, docx).path();
+    String ruta =
+        documentStorage
+            .writeEnCarpeta(
+                firmId, "expedientes/" + caseId + "/remisiones", versionId, nombre, guessMime(nombre), docx)
+            .clave();
     borrarSiHayRollback(ruta);
     return new NotaryRemisionVersion.Archivo(draft.getId(), ruta, nombre);
   }

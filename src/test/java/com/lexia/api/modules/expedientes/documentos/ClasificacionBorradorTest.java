@@ -13,6 +13,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.modules.actos.ActoNotarialService;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
@@ -103,7 +104,7 @@ class ClasificacionBorradorTest {
             documents,
             mock(DocumentVersionRepository.class),
             ocrRows,
-            new ExpedienteDocumentoStorage(almacenamiento.toString()),
+            new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento)),
             mock(ObjectProvider.class));
 
     ExpedienteBorradorStore borradores = mock(ExpedienteBorradorStore.class);

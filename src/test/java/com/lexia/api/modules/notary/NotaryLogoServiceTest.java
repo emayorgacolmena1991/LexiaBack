@@ -8,6 +8,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
@@ -68,7 +69,7 @@ class NotaryLogoServiceTest {
     NotaryTenantProfileRepository repositorio = mock(NotaryTenantProfileRepository.class);
     when(repositorio.findById(any()))
         .thenAnswer(llamada -> Optional.ofNullable(perfiles.get(llamada.<UUID>getArgument(0))));
-    storage = new ExpedienteDocumentoStorage(almacenamiento.toString());
+    storage = new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento));
     service =
         new NotaryLogoService(
             authorization, repositorio, storage, mock(AuditEventRepository.class));
@@ -306,7 +307,7 @@ class NotaryLogoServiceTest {
   @Test
   void quitarVaciaElPerfilYBorraElArchivoAlConfirmar() {
     service.subir(archivo("l.png", "image/png", PNG));
-    Path archivo = Path.of(perfiles.get(NOTARIA).getLogoStorageRef());
+    Path archivo = almacenamiento.resolve(perfiles.get(NOTARIA).getLogoStorageRef());
 
     TransactionSynchronizationManager.initSynchronization();
     try {
@@ -328,7 +329,7 @@ class NotaryLogoServiceTest {
   @Test
   void reemplazarBorraElLogoAnteriorAlConfirmar() {
     service.subir(archivo("l.png", "image/png", PNG));
-    Path anterior = Path.of(perfiles.get(NOTARIA).getLogoStorageRef());
+    Path anterior = almacenamiento.resolve(perfiles.get(NOTARIA).getLogoStorageRef());
 
     TransactionSynchronizationManager.initSynchronization();
     try {
@@ -346,12 +347,12 @@ class NotaryLogoServiceTest {
   @Test
   void rollbackBorraElLogoNuevoYConservaElAnterior() {
     service.subir(archivo("l.png", "image/png", PNG));
-    Path anterior = Path.of(perfiles.get(NOTARIA).getLogoStorageRef());
+    Path anterior = almacenamiento.resolve(perfiles.get(NOTARIA).getLogoStorageRef());
 
     TransactionSynchronizationManager.initSynchronization();
     try {
       service.subir(archivo("l.jpg", "image/jpeg", JPEG));
-      Path nuevo = Path.of(perfiles.get(NOTARIA).getLogoStorageRef());
+      Path nuevo = almacenamiento.resolve(perfiles.get(NOTARIA).getLogoStorageRef());
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
           TransactionSynchronization.STATUS_ROLLED_BACK);

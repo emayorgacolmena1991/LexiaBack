@@ -71,8 +71,8 @@ public class NotaryLogoService {
     String anterior = perfil.getLogoStorageRef();
     String nuevo =
         storage
-            .writeEnCarpeta(perfil.getTenantId(), CARPETA, UUID.randomUUID(), nombre, bytes)
-            .path();
+            .writeEnCarpeta(perfil.getTenantId(), CARPETA, UUID.randomUUID(), nombre, tipo, bytes)
+            .clave();
     limpiarAlTerminar(nuevo, anterior);
     perfil.asignarLogo(nuevo, tipo);
     profiles.save(perfil);

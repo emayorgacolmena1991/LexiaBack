@@ -1,148 +1,126 @@
 package com.lexia.api.modules.expedientes.documentos;
 
 import com.lexia.api.common.api.ApiException;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
-import java.nio.file.Path;
+import com.lexia.api.common.storage.ArchivoStorage;
+import java.io.ByteArrayInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/** Bytes de escrituración en disco. La fila vive en {@code document_version.storage_key}. */
+/**
+ * Bytes de escrituración sobre {@link ArchivoStorage}. La fila guarda la clave en {@code
+ * document_version.storage_key}; las filas anteriores conservan su ruta absoluta heredada.
+ */
 @Component
 public class ExpedienteDocumentoStorage {
 
   private static final Logger LOG = LoggerFactory.getLogger(ExpedienteDocumentoStorage.class);
 
-  private final Path root;
+  private final ArchivoStorage archivos;
 
-  public ExpedienteDocumentoStorage(
-      @Value("${lexia.expedientes.storage-dir:./data/expedientes}") String root) {
-    this.root = Path.of(root).toAbsolutePath().normalize();
+  public ExpedienteDocumentoStorage(ArchivoStorage archivos) {
+    this.archivos = archivos;
   }
 
-  public Stored write(UUID tenantId, UUID caseId, UUID documentId, String fileName, byte[] bytes) {
-    return writeEnCarpeta(tenantId, caseId.toString(), documentId, fileName, bytes);
+  /**
+   * Versión de un documento del expediente. Cada versión tiene su clave: reemplazar nunca toca la
+   * anterior.
+   */
+  public Stored guardarVersion(
+      UUID tenantId,
+      UUID caseId,
+      UUID documentId,
+      int versionNo,
+      String fileName,
+      String contentType,
+      byte[] bytes) {
+    String clave =
+        tenantId
+            + "/expedientes/"
+            + caseId
+            + "/"
+            + documentId
+            + "/v"
+            + versionNo
+            + "_"
+            + UUID.randomUUID()
+            + "_"
+            + safeName(fileName);
+    return guardar(clave, contentType, bytes);
   }
 
-  /** Archivo del tenant que no pertenece a un expediente, como el logo de una notaría. */
+  /** Archivo del tenant fuera de las versiones documentales (logo, escritura, copia de remisión). */
   public Stored writeEnCarpeta(
-      UUID tenantId, String carpeta, UUID documentId, String fileName, byte[] bytes) {
-    String safe = safeName(fileName);
-    Path dir = root.resolve(tenantId.toString()).resolve(carpeta);
-    Path target = dir.resolve(documentId + "_" + safe);
-    try {
-      Files.createDirectories(dir);
-      Files.write(target, bytes);
-      LOG.info("Storage.write OK path={} size={} bytes", target, bytes.length);
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      return new Stored(target.toString(), HexFormat.of().formatHex(digest.digest(bytes)));
-    } catch (IOException | NoSuchAlgorithmException ex) {
-      throw new ApiException(
-          HttpStatus.INTERNAL_SERVER_ERROR, "DOC_STORAGE_ERROR", "No se pudo guardar el archivo.");
-    }
+      UUID tenantId,
+      String carpeta,
+      UUID archivoId,
+      String fileName,
+      String contentType,
+      byte[] bytes) {
+    String clave =
+        tenantId
+            + "/"
+            + carpeta
+            + "/"
+            + archivoId
+            + "_"
+            + UUID.randomUUID()
+            + "_"
+            + safeName(fileName);
+    return guardar(clave, contentType, bytes);
   }
 
   public byte[] read(String storageKey) {
-    Path path = ubicar(storageKey);
-    if (path == null) {
-      LOG.warn("Storage.read FALLO key={} NO EXISTE", storageKey);
-      throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
-    }
-    try {
-      return Files.readAllBytes(path);
-    } catch (IOException ex) {
-      throw new ApiException(
-          HttpStatus.INTERNAL_SERVER_ERROR, "DOC_STORAGE_ERROR", "No se pudo leer el archivo.");
-    }
+    return archivos.leer(storageKey);
   }
 
   /** Borra el archivo si la transacción en curso hace rollback; sin transacción no hace nada. */
   public void borrarSiHayRollback(String storageKey) {
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      return;
-    }
-    TransactionSynchronizationManager.registerSynchronization(
-        new TransactionSynchronization() {
-          @Override
-          public void afterCompletion(int status) {
-            if (status == STATUS_ROLLED_BACK) {
-              delete(storageKey);
-            }
-          }
-        });
+    archivos.borrarSiHayRollback(storageKey);
   }
 
-  /** Limpieza tras un rollback: un fallo aquí no puede cambiar el resultado de la operación. */
+  /** Limpieza tras commit/rollback: un fallo aquí no puede cambiar el resultado de la operación. */
   public void delete(String storageKey) {
-    Path path = ubicar(storageKey);
-    if (path == null) {
-      return;
-    }
     try {
-      Files.deleteIfExists(path);
-    } catch (IOException ex) {
+      archivos.borrar(storageKey);
+    } catch (RuntimeException ex) {
       LOG.warn("Storage.delete FALLO key={}: {}", storageKey, ex.getMessage());
     }
   }
 
+  /** Tamaño para listados: un archivo ausente o una clave rechazada no rompe el listado (0). */
   public long size(String storageKey) {
-    Path path = ubicar(storageKey);
-    if (path == null) {
-      return 0;
-    }
-    try {
-      return Files.size(path);
-    } catch (IOException ex) {
-      return 0;
-    }
-  }
-
-  /**
-   * {@code storage_key} es la ruta absoluta del equipo que subió el archivo. Si la raíz de este
-   * proceso es otra (otro equipo, otro cwd o {@code LEXIA_EXPEDIENTES_DIR}), se busca el mismo
-   * tramo {@code <tenant>/<case>/<archivo>} bajo {@link #root}.
-   */
-  Path ubicar(String storageKey) {
     if (storageKey == null || storageKey.isBlank()) {
-      return null;
+      return 0;
     }
     try {
-      Path directa = Path.of(storageKey).toAbsolutePath().normalize();
-      if (directa.startsWith(root) && Files.isRegularFile(directa)) {
-        return directa;
-      }
-    } catch (InvalidPathException ignored) {
-      // Ruta de otro sistema operativo: se reubica abajo.
+      return archivos.existe(storageKey) ? archivos.tamano(storageKey) : 0;
+    } catch (ApiException ex) {
+      LOG.warn("Storage.size FALLO key={}: {}", storageKey, ex.getMessage());
+      return 0;
     }
-    String[] partes = storageKey.replace('\\', '/').split("/");
-    for (int i = 0; i < partes.length; i++) {
-      try {
-        UUID.fromString(partes[i]);
-      } catch (IllegalArgumentException ex) {
-        continue;
-      }
-      Path reubicada =
-          root.resolve(String.join("/", Arrays.copyOfRange(partes, i, partes.length))).normalize();
-      if (reubicada.startsWith(root) && Files.isRegularFile(reubicada)) {
-        return reubicada;
-      }
-    }
-    return null;
   }
 
-  private static String safeName(String fileName) {
+  private Stored guardar(String clave, String contentType, byte[] bytes) {
+    String sha256;
+    try {
+      sha256 = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (NoSuchAlgorithmException ex) {
+      throw new ApiException(
+          HttpStatus.INTERNAL_SERVER_ERROR, "DOC_STORAGE_ERROR", "No se pudo guardar el archivo.");
+    }
+    String guardada =
+        archivos.guardar(clave, new ByteArrayInputStream(bytes), bytes.length, contentType);
+    return new Stored(guardada, sha256);
+  }
+
+  static String safeName(String fileName) {
     String raw = fileName == null || fileName.isBlank() ? "archivo" : fileName.trim();
     String cleaned = raw.replaceAll("[^A-Za-z0-9._-]", "_");
     if (cleaned.length() > 80) {
@@ -151,5 +129,6 @@ public class ExpedienteDocumentoStorage {
     return cleaned.toLowerCase(Locale.ROOT);
   }
 
-  public record Stored(String path, String sha256) {}
+  /** @param clave lo que se persiste en la fila ({@code storage_key} / {@code *_storage_ref}). */
+  public record Stored(String clave, String sha256) {}
 }

@@ -14,6 +14,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.common.api.ApiExceptionHandler;
 import com.lexia.api.modules.auth.AuthContext;
@@ -98,7 +99,7 @@ class NotaryRemisionVersionTest {
   @BeforeEach
   void setUp() {
     AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), FIRMA, UUID.randomUUID()));
-    storage = new ExpedienteDocumentoStorage(almacenamiento.toString());
+    storage = new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento));
     auditoria = mock(AuditEventRepository.class);
 
     TenantNotaryPartnership vinculo = mock(TenantNotaryPartnership.class);
@@ -419,7 +420,7 @@ class NotaryRemisionVersionTest {
     assertEquals("minuta_compraventa.docx", version.getMinutaFileName());
     assertThat(storage.read(version.getMinutaStorageRef())).isEqualTo(MINUTA);
     assertThat(version.getMinutaStorageRef())
-        .startsWith(almacenamiento.toString())
+        .startsWith(FIRMA + "/expedientes/" + CASO + "/remisiones/")
         .doesNotContain(minuta.getId().toString());
     assertEquals("Urgente", version.getObservacionesBufete());
     assertEquals(USUARIO, version.getCreatedBy());
@@ -841,7 +842,7 @@ class NotaryRemisionVersionTest {
     TransactionSynchronizationManager.initSynchronization();
     try {
       enviada();
-      Path copia = Path.of(versionGuardada().getMinutaStorageRef());
+      Path copia = almacenamiento.resolve(versionGuardada().getMinutaStorageRef());
       assertThat(Files.exists(copia)).isTrue();
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
@@ -856,12 +857,12 @@ class NotaryRemisionVersionTest {
   @Test
   void rollbackAlEditarBorraSoloLaCopiaNueva() {
     UUID id = enviada().id();
-    Path v1 = Path.of(versionGuardada().getMinutaStorageRef());
+    Path v1 = almacenamiento.resolve(versionGuardada().getMinutaStorageRef());
     borradorCorregido();
     TransactionSynchronizationManager.initSynchronization();
     try {
       editar(id);
-      Path v2 = Path.of(versionesGuardadas.get(1).getMinutaStorageRef());
+      Path v2 = almacenamiento.resolve(versionesGuardadas.get(1).getMinutaStorageRef());
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
           TransactionSynchronization.STATUS_ROLLED_BACK);
@@ -878,7 +879,7 @@ class NotaryRemisionVersionTest {
     TransactionSynchronizationManager.initSynchronization();
     try {
       enviada();
-      Path copia = Path.of(versionGuardada().getMinutaStorageRef());
+      Path copia = almacenamiento.resolve(versionGuardada().getMinutaStorageRef());
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
           TransactionSynchronization.STATUS_COMMITTED);
