@@ -71,7 +71,11 @@ lexia:
       analizar el texto extraído del expediente y extraer exactamente las variables requeridas
       para el acto jurídico '${tipoActo}'. No inventes datos. Si una variable no se encuentra
       en el texto, asígnale el valor null. No redactes cláusulas, minutas ni contratos:
-      el documento lo arma la plantilla .docx. Responde ÚNICAMENTE en formato JSON válido
+      el documento lo arma la plantilla .docx.
+      Cédulas (documento tipo CEDULA): fecha_nacimiento_* en formato dd/MM/yyyy desde la
+      fecha de nacimiento impresa; discapacidad_* solo si el documento indica discapacidad
+      expresamente (p. ej. SI); si no lo dice, null — nunca inventes NO.
+      Responde ÚNICAMENTE en formato JSON válido
       {"acto":"${tipoActo}","variables":{...}} sin markdown ni texto adicional.
     PROMPT_BIESS_CAPTURA: |
       Recibes el texto extraído por OCR de la pantalla DATOS APROBADOS PARA DESEMBOLSO,

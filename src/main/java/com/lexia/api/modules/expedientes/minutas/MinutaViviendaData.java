@@ -38,6 +38,21 @@ public class MinutaViviendaData {
   @JsonProperty("profesion_conyuge_2")
   private String profesionConyuge2 = "";
 
+  /** dd/MM/yyyy desde la cédula del comprador / deudor. */
+  @JsonProperty("fecha_nacimiento_conyuge_1")
+  private String fechaNacimientoConyuge1 = "";
+
+  /** dd/MM/yyyy desde la cédula del cónyuge del comprador. */
+  @JsonProperty("fecha_nacimiento_conyuge_2")
+  private String fechaNacimientoConyuge2 = "";
+
+  /** Solo si la cédula lo indica expresamente; vacío si no consta (nunca inventar «NO»). */
+  @JsonProperty("discapacidad_conyuge_1")
+  private String discapacidadConyuge1 = "";
+
+  @JsonProperty("discapacidad_conyuge_2")
+  private String discapacidadConyuge2 = "";
+
   @JsonProperty("canton_domicilio")
   private String cantonDomicilio = "";
 
@@ -155,6 +170,10 @@ public class MinutaViviendaData {
 
   @JsonProperty("cedula_vendedor")
   private String cedulaVendedor = "";
+
+  /** dd/MM/yyyy desde la cédula del vendedor (persona natural). */
+  @JsonProperty("fecha_nacimiento_vendedor")
+  private String fechaNacimientoVendedor = "";
 
   @JsonProperty("estado_civil_vendedor")
   private String estadoCivilVendedor = "";
@@ -322,6 +341,10 @@ public class MinutaViviendaData {
     ETIQUETAS.put("cedula_conyuge_2", "Cédula del cónyuge del comprador");
     ETIQUETAS.put("profesion_conyuge_1", "Profesión del comprador");
     ETIQUETAS.put("profesion_conyuge_2", "Profesión del cónyuge del comprador");
+    ETIQUETAS.put("fecha_nacimiento_conyuge_1", "Fecha de nacimiento del comprador");
+    ETIQUETAS.put("fecha_nacimiento_conyuge_2", "Fecha de nacimiento del cónyuge del comprador");
+    ETIQUETAS.put("discapacidad_conyuge_1", "Discapacidad del comprador");
+    ETIQUETAS.put("discapacidad_conyuge_2", "Discapacidad del cónyuge del comprador");
     ETIQUETAS.put("canton_domicilio", "Cantón de domicilio del deudor");
     ETIQUETAS.put("nombre_afiliado", "Nombre del afiliado BIESS");
     ETIQUETAS.put("descripcion_inmuebles_antecedentes", "Descripción del inmueble (antecedentes)");
@@ -359,6 +382,7 @@ public class MinutaViviendaData {
     ETIQUETAS.put("cedula_apoderado_biess", "Cédula del apoderado BIESS");
     ETIQUETAS.put("nombre_vendedor", "Nombre del vendedor");
     ETIQUETAS.put("cedula_vendedor", "Cédula del vendedor");
+    ETIQUETAS.put("fecha_nacimiento_vendedor", "Fecha de nacimiento del vendedor");
     ETIQUETAS.put("estado_civil_vendedor", "Estado civil del vendedor");
     ETIQUETAS.put("nombre_conyuge_vendedor", "Nombre del cónyuge del vendedor");
     ETIQUETAS.put("cedula_conyuge_vendedor", "Cédula del cónyuge del vendedor");
@@ -442,6 +466,38 @@ public class MinutaViviendaData {
 
   public void setProfesionConyuge2(String profesionConyuge2) {
     this.profesionConyuge2 = nullToEmpty(profesionConyuge2);
+  }
+
+  public String getFechaNacimientoConyuge1() {
+    return fechaNacimientoConyuge1;
+  }
+
+  public void setFechaNacimientoConyuge1(String fechaNacimientoConyuge1) {
+    this.fechaNacimientoConyuge1 = nullToEmpty(fechaNacimientoConyuge1);
+  }
+
+  public String getFechaNacimientoConyuge2() {
+    return fechaNacimientoConyuge2;
+  }
+
+  public void setFechaNacimientoConyuge2(String fechaNacimientoConyuge2) {
+    this.fechaNacimientoConyuge2 = nullToEmpty(fechaNacimientoConyuge2);
+  }
+
+  public String getDiscapacidadConyuge1() {
+    return discapacidadConyuge1;
+  }
+
+  public void setDiscapacidadConyuge1(String discapacidadConyuge1) {
+    this.discapacidadConyuge1 = nullToEmpty(discapacidadConyuge1);
+  }
+
+  public String getDiscapacidadConyuge2() {
+    return discapacidadConyuge2;
+  }
+
+  public void setDiscapacidadConyuge2(String discapacidadConyuge2) {
+    this.discapacidadConyuge2 = nullToEmpty(discapacidadConyuge2);
   }
 
   public String getCantonDomicilio() {
@@ -740,6 +796,14 @@ public class MinutaViviendaData {
     this.cedulaVendedor = nullToEmpty(cedulaVendedor);
   }
 
+  public String getFechaNacimientoVendedor() {
+    return fechaNacimientoVendedor;
+  }
+
+  public void setFechaNacimientoVendedor(String fechaNacimientoVendedor) {
+    this.fechaNacimientoVendedor = nullToEmpty(fechaNacimientoVendedor);
+  }
+
   public String getEstadoCivilVendedor() {
     return estadoCivilVendedor;
   }
@@ -918,6 +982,10 @@ public class MinutaViviendaData {
     map.put("cedula_conyuge_2", digitosConLetras(cedulaConyuge2));
     map.put("profesion_conyuge_1", blankToNodata(profesionConyuge1));
     map.put("profesion_conyuge_2", blankToNodata(profesionConyuge2));
+    map.put("fecha_nacimiento_conyuge_1", blankToNodata(fechaNacimientoConyuge1));
+    map.put("fecha_nacimiento_conyuge_2", blankToNodata(fechaNacimientoConyuge2));
+    map.put("discapacidad_conyuge_1", blankToNodata(discapacidadConyuge1));
+    map.put("discapacidad_conyuge_2", blankToNodata(discapacidadConyuge2));
     map.put("canton_domicilio", blankToNodata(cantonDomicilio));
     map.put("nombre_afiliado", blankToNodata(nombreAfiliado));
     map.put("descripcion_inmuebles_antecedentes", blankToNodata(descripcionInmueblesAntecedentes));
@@ -955,6 +1023,7 @@ public class MinutaViviendaData {
     map.put("cedula_apoderado_biess", digitosConLetras(cedulaApoderadoBiess));
     map.put("nombre_vendedor", blankToNodata(nombreVendedor));
     map.put("cedula_vendedor", blankToNodata(cedulaVendedor));
+    map.put("fecha_nacimiento_vendedor", blankToNodata(fechaNacimientoVendedor));
     map.put("estado_civil_vendedor", blankToNodata(estadoCivilVendedor));
     map.put("nombre_conyuge_vendedor", blankToNodata(nombreConyugeVendedor));
     map.put("cedula_conyuge_vendedor", blankToNodata(cedulaConyugeVendedor));

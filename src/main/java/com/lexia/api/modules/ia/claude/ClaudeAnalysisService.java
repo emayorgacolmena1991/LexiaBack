@@ -853,7 +853,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
       varProps
           .putObject(field)
           .put("type", "string")
-          .put("description", "Valor en el OCR. Cadena vacía si no consta. No redactes cláusulas.");
+          .put("description", descripcionVariableMinuta(field));
       requiredVars.add(field);
     }
     schema.putArray("required").add("acto").add("variables");
@@ -880,6 +880,23 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
             + "\n</expediente_ocr>");
 
     return objectMapper.writeValueAsString(body);
+  }
+
+  /** Descripción por campo en el tool schema de extracción de minuta. */
+  private static String descripcionVariableMinuta(String field) {
+    if (field == null) {
+      return "Valor en el OCR. Cadena vacía si no consta. No redactes cláusulas.";
+    }
+    return switch (field) {
+      case "fecha_nacimiento_conyuge_1",
+          "fecha_nacimiento_conyuge_2",
+          "fecha_nacimiento_vendedor" ->
+          "Fecha de nacimiento en la cédula, formato dd/MM/yyyy. Vacío si no consta.";
+      case "discapacidad_conyuge_1", "discapacidad_conyuge_2" ->
+          "Solo si la cédula indica discapacidad expresamente (p. ej. SI). Vacío si no lo dice;"
+              + " nunca inventes NO.";
+      default -> "Valor en el OCR. Cadena vacía si no consta. No redactes cláusulas.";
+    };
   }
 
   private JsonNode leerToolInput(JsonNode root) {
