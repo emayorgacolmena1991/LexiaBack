@@ -43,6 +43,35 @@ class NumeroALetrasTest {
     assertEquals("", NumeroALetras.monto(cifra));
   }
 
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "0                 | CERO CON 00/100",
+        "120000            | CIENTO VEINTE MIL CON 00/100",
+        "USD 120.000,00    | CIENTO VEINTE MIL CON 00/100",
+        "2.500.000         | DOS MILLONES QUINIENTOS MIL CON 00/100",
+        "85,000.50         | OCHENTA Y CINCO MIL CON 50/100",
+        "1000000000000     | UN BILLÓN CON 00/100"
+      })
+  void montoBancarioSiempreLlevaCentavos(String cifra, String esperado) {
+    assertEquals(esperado, NumeroALetras.montoBancario(NumeroALetras.parsearMonto(cifra).orElseThrow()));
+  }
+
+  @Test
+  void digitosALetrasLeeCadaDigitoEIgnoraElResto() {
+    assertEquals(
+        "CERO NUEVE CINCO CUATRO UNO DOS TRES CUATRO CINCO SEIS",
+        NumeroALetras.digitosALetras("0954123456"));
+    assertEquals("CERO NUEVE OCHO SIETE", NumeroALetras.digitosALetras("+(09) 8-7"));
+    assertEquals("", NumeroALetras.digitosALetras(null));
+  }
+
+  @Test
+  void textoBasuraNoTieneMontoBancario() {
+    assertTrue(NumeroALetras.parsearMonto("ciento veinte mil").isEmpty());
+  }
+
   @Test
   void parseoDistingueSeparadorDecimalDeMiles() {
     assertEquals(new BigDecimal("85000.00"), NumeroALetras.parsearMonto("85,000.00").orElseThrow());

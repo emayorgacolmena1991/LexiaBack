@@ -913,9 +913,9 @@ public class MinutaViviendaData {
   public Map<String, Object> toTemplateMap() {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put("nombre_conyuge_1", blankToNodata(nombreConyuge1));
-    map.put("cedula_conyuge_1", blankToNodata(cedulaConyuge1));
+    map.put("cedula_conyuge_1", blankToNodata(NumeroALetras.digitosALetras(cedulaConyuge1)));
     map.put("nombre_conyuge_2", blankToNodata(nombreConyuge2));
-    map.put("cedula_conyuge_2", blankToNodata(cedulaConyuge2));
+    map.put("cedula_conyuge_2", blankToNodata(NumeroALetras.digitosALetras(cedulaConyuge2)));
     map.put("profesion_conyuge_1", blankToNodata(profesionConyuge1));
     map.put("profesion_conyuge_2", blankToNodata(profesionConyuge2));
     map.put("canton_domicilio", blankToNodata(cantonDomicilio));
@@ -941,18 +941,18 @@ public class MinutaViviendaData {
     map.put("alicuota", blankToNodata(alicuota));
     map.put("estado_civil", blankToNodata(estadoCivil));
     map.put("monto_prestamo", blankToNodata(cifra("monto_prestamo", montoPrestamo)));
-    map.put("monto_prestamo_letras", blankToNodata(montoPrestamoLetras));
+    map.put("monto_prestamo_letras", blankToNodata(letras(montoPrestamo, montoPrestamoLetras)));
     map.put("plazo_credito", blankToNodata(plazo(plazoCredito)));
     map.put("tasa_interes_inicial", blankToNodata(tasa(tasaInteresInicial)));
     map.put("cuota_credito", blankToNodata(cifra("cuota_credito", cuotaCredito)));
     map.put("institucion_financiera_original", blankToNodata(institucionFinancieraOriginal));
     map.put("direccion_deudor", blankToNodata(direccionDeudor));
-    map.put("telefono_deudor", blankToNodata(telefonoDeudor));
+    map.put("telefono_deudor", blankToNodata(NumeroALetras.digitosALetras(telefonoDeudor)));
     map.put("correo_deudor", blankToNodata(correoDeudor));
     map.put("ciudad_firma", blankToNodata(ciudadFirma));
     map.put("fecha_firma", blankToNodata(fechaFirma));
     map.put("apoderado_biess", blankToNodata(apoderadoBiess));
-    map.put("cedula_apoderado_biess", blankToNodata(cedulaApoderadoBiess));
+    map.put("cedula_apoderado_biess", blankToNodata(NumeroALetras.digitosALetras(cedulaApoderadoBiess)));
     map.put("nombre_vendedor", blankToNodata(nombreVendedor));
     map.put("cedula_vendedor", blankToNodata(cedulaVendedor));
     map.put("estado_civil_vendedor", blankToNodata(estadoCivilVendedor));
@@ -961,16 +961,16 @@ public class MinutaViviendaData {
     map.put("profesion_vendedor", blankToNodata(profesionVendedor));
     map.put("profesion_vendedor_2", blankToNodata(profesionVendedor2));
     map.put("direccion_vendedor", blankToNodata(direccionVendedor));
-    map.put("telefono_vendedor", blankToNodata(telefonoVendedor));
+    map.put("telefono_vendedor", blankToNodata(NumeroALetras.digitosALetras(telefonoVendedor)));
     map.put("correo_vendedor", blankToNodata(correoVendedor));
     map.put("clave_catastral", blankToNodata(claveCatastral));
     map.put("avaluo_inmueble", blankToNodata(cifra("avaluo_inmueble", avaluoInmueble)));
     map.put("precio_compraventa_numero", blankToNodata(cifra("precio_compraventa_numero", precioCompraventaNumero)));
-    map.put("precio_compraventa_letras", blankToNodata(precioCompraventaLetras));
+    map.put("precio_compraventa_letras", blankToNodata(letras(precioCompraventaNumero, precioCompraventaLetras)));
     map.put("valor_entrada_numero", blankToNodata(cifra("valor_entrada_numero", valorEntradaNumero)));
-    map.put("valor_entrada_letras", blankToNodata(valorEntradaLetras));
+    map.put("valor_entrada_letras", blankToNodata(letras(valorEntradaNumero, valorEntradaLetras)));
     map.put("saldo_compraventa_numero", blankToNodata(cifra("saldo_compraventa_numero", saldoCompraventaNumero)));
-    map.put("saldo_compraventa_letras", blankToNodata(saldoCompraventaLetras));
+    map.put("saldo_compraventa_letras", blankToNodata(letras(saldoCompraventaNumero, saldoCompraventaLetras)));
     map.put("fecha_escritura_antecedente", blankToNodata(fechaEscrituraAntecedente));
     map.put("fecha_inscripcion_antecedente", blankToNodata(fechaInscripcionAntecedente));
     map.put("repertorio_antecedente", blankToNodata(repertorioAntecedente));
@@ -981,8 +981,8 @@ public class MinutaViviendaData {
     map.put(
         "representacion_sociedad_conyugal_comprador",
         blankToNodata(representacionSociedadConyugalComprador));
-    map.put("celular_vendedor", blankToNodata(celularVendedor));
-    map.put("celular_comprador", blankToNodata(celularComprador));
+    map.put("celular_vendedor", blankToNodata(NumeroALetras.digitosALetras(celularVendedor)));
+    map.put("celular_comprador", blankToNodata(NumeroALetras.digitosALetras(celularComprador)));
     map.put("canton_notario_adquisicion", blankToNodata(cantonNotarioAdquisicion));
     map.put("nombre_adquirente_anterior", blankToNodata(nombreAdquirenteAnterior));
     map.put("estado_civil_adquirente_anterior", blankToNodata(estadoCivilAdquirenteAnterior));
@@ -1048,6 +1048,11 @@ public class MinutaViviendaData {
       return t.replaceFirst("(?i)^(USD|US\\$|\\$)\\s*(\\$\\s*)?", "").trim();
     }
     return formatoMonto().format(monto.get());
+  }
+
+  /** Letras desde la cifra para que coincidan con el número; sin cifra interpretable, lo extraído. */
+  static String letras(String cifra, String extraidas) {
+    return NumeroALetras.parsearMonto(cifra).map(NumeroALetras::montoBancario).orElse(extraidas);
   }
 
   /** DecimalFormat no es thread-safe: uno por llamada, con símbolos fijos y no los del servidor. */

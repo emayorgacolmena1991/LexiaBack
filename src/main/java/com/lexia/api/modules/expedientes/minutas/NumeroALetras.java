@@ -2,7 +2,9 @@ package com.lexia.api.modules.expedientes.minutas;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.StringJoiner;
 import java.util.regex.Pattern;
 
 /**
@@ -12,7 +14,9 @@ import java.util.regex.Pattern;
  */
 public final class NumeroALetras {
 
-  private static final long MAXIMO = 999_999_999_999L;
+  private static final long BILLON = 1_000_000_000_000L;
+  private static final long MAXIMO = 999_999 * BILLON + (BILLON - 1);
+  private static final Locale ES = Locale.forLanguageTag("es");
 
   private static final String[] UNIDADES = {
     "", "un", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve",
@@ -46,6 +50,29 @@ public final class NumeroALetras {
     int centavos = redondeado.remainder(BigDecimal.ONE).movePointRight(2).intValue();
     String letras = entero(entero);
     return centavos == 0 ? letras : letras + String.format(" con %02d/100", centavos);
+  }
+
+  private static final String[] DIGITOS = {
+    "CERO", "UNO", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"
+  };
+
+  /** Dígito a dígito, ignorando lo que no sea dígito: {@code "095-41" → "CERO NUEVE CINCO CUATRO UNO"}. */
+  public static String digitosALetras(String texto) {
+    StringJoiner out = new StringJoiner(" ");
+    if (texto != null) {
+      texto.chars().filter(c -> c >= '0' && c <= '9').forEach(c -> out.add(DIGITOS[c - '0']));
+    }
+    return out.toString();
+  }
+
+  /**
+   * Formato bancario, centavos siempre: {@code 120000 → "CIENTO VEINTE MIL CON 00/100"}. Sin
+   * "DÓLARES…": las plantillas ya lo escriben después del tag.
+   */
+  public static String montoBancario(BigDecimal valor) {
+    BigDecimal redondeado = valor.setScale(2, RoundingMode.HALF_UP);
+    int centavos = redondeado.remainder(BigDecimal.ONE).movePointRight(2).intValue();
+    return (entero(redondeado.longValue()) + String.format(" con %02d/100", centavos)).toUpperCase(ES);
   }
 
   /**
@@ -95,9 +122,18 @@ public final class NumeroALetras {
     if (n == 0) {
       return "cero";
     }
-    long millones = n / 1_000_000;
+    long billones = n / BILLON;
+    long millones = n % BILLON / 1_000_000;
     long resto = n % 1_000_000;
     StringBuilder out = new StringBuilder();
+    if (billones == 1) {
+      out.append("un billón");
+    } else if (billones > 1) {
+      out.append(hastaMillon(billones)).append(" billones");
+    }
+    if (millones > 0 && !out.isEmpty()) {
+      out.append(' ');
+    }
     if (millones == 1) {
       out.append("un millón");
     } else if (millones > 1) {

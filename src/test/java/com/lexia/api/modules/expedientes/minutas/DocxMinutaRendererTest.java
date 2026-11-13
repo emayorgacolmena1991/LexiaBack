@@ -178,7 +178,8 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("{{"), "Quedaron placeholders");
     assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
     assertTrue(text.contains("V_nombre_conyuge_1"));
-    assertTrue(text.contains("V_cedula_conyuge_2"));
+    assertTrue(text.contains(CEDULA_LETRAS));
+    assertFalse(text.contains(CEDULA));
     assertTrue(text.contains("V_nombre_afiliado"));
     assertTrue(text.contains("Plazo 300 meses,"));
     assertFalse(text.contains("meses meses"));
@@ -230,8 +231,21 @@ class DocxMinutaRendererTest {
     assertTrue(text.contains("5.99%"));
     assertFalse(text.contains("5.99%%"));
     assertTrue(text.contains("Plazo 300 meses,"));
-    assertTrue(text.contains("V_monto_prestamo_letras"));
-    assertTrue(text.contains("V_cedula_apoderado_biess"));
+    assertTrue(text.contains("OCHENTA Y CINCO MIL CON 00/100"), "Letras en formato bancario");
+    assertTrue(text.contains(CEDULA_LETRAS));
+  }
+
+  @Test
+  void hipotecadaEscribeElCelularDelCompradorEnLetras() throws Exception {
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS, "MINUTA_COMPRAVENTA");
+    MinutaViviendaData data =
+        new ObjectMapper().updateValue(datosCompletos(), Map.of("celular_comprador", "0954656732"));
+    String text = renderYLeer(descriptor, data, "hipotecada_minuta_compraventa.docx");
+
+    assertTrue(
+        text.contains("celular CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS"), text);
+    assertFalse(text.contains("0954656732"));
   }
 
   @Test
@@ -281,11 +295,26 @@ class DocxMinutaRendererTest {
     }
   }
 
-  /** Cada campo con el valor {@code V_<tag>} para rastrear dónde cae en el documento. */
+  private static final List<String> DIGITO_A_DIGITO =
+      List.of(
+          "cedula_conyuge_1",
+          "cedula_conyuge_2",
+          "cedula_apoderado_biess",
+          "telefono_vendedor",
+          "telefono_deudor",
+          "celular_vendedor",
+          "celular_comprador");
+  private static final String CEDULA = "0912345678";
+  private static final String CEDULA_LETRAS = "CERO NUEVE UNO DOS TRES CUATRO CINCO SEIS SIETE OCHO";
+
+  /**
+   * Cada campo con el valor {@code V_<tag>} para rastrear dónde cae en el documento; los que se
+   * leen dígito a dígito llevan una cédula.
+   */
   private static MinutaViviendaData datosCompletos() {
     Map<String, String> values = new LinkedHashMap<>();
     for (String key : new MinutaViviendaData().toTemplateMap().keySet()) {
-      values.put(key, "V_" + key);
+      values.put(key, DIGITO_A_DIGITO.contains(key) ? CEDULA : "V_" + key);
     }
     return new ObjectMapper().convertValue(values, MinutaViviendaData.class);
   }
