@@ -26,6 +26,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mock.web.MockMultipartFile;
 
 /** El tipo que manda el cliente se guarda como código del catálogo, nunca como etiqueta. */
@@ -67,7 +68,8 @@ class TipoDocumentoCodigoTest {
             mock(DocumentoTextoOcrRepository.class),
             productos,
             borradores,
-            caseDocs);
+            caseDocs,
+            mock(ObjectProvider.class));
   }
 
   @AfterEach

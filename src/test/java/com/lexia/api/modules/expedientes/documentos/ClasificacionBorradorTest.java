@@ -131,7 +131,8 @@ class ClasificacionBorradorTest {
             mock(DocumentoTextoOcrRepository.class),
             productos,
             borradores,
-            caseDocs);
+            caseDocs,
+            mock(ObjectProvider.class));
     ObjectProvider<AnalisisDocumentoService> proveedor = mock(ObjectProvider.class);
     doReturn(llm).when(proveedor).getIfAvailable();
     clasificador = new ClasificacionDocumentoService(caseDocs, carga, proveedor, 0.8, 5000);

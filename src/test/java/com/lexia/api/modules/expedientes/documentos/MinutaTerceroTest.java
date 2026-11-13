@@ -56,7 +56,13 @@ class MinutaTerceroTest {
     AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), TENANT, UUID.randomUUID()));
     carga =
         new CargaDocumentoService(
-            null, null, mock(DocumentoTextoOcrRepository.class), productos, null, caseDocs);
+            null,
+            null,
+            mock(DocumentoTextoOcrRepository.class),
+            productos,
+            null,
+            caseDocs,
+            mock(ObjectProvider.class));
     when(productos.detalle(eq(COMPANIA), any()))
         .thenReturn(
             detalle(COMPANIA, "RUC", "NOMBRAMIENTO_RL", TIPO, LegalDocument.TIPO_SOPORTE_INGRESOS));

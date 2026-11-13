@@ -160,7 +160,8 @@ class ReemplazoValidadoTest {
             ocrRows,
             productos,
             mock(ExpedienteBorradorStore.class),
-            caseDocs);
+            caseDocs,
+            mock(ObjectProvider.class));
     ObjectProvider<AnalisisDocumentoService> proveedor = mock(ObjectProvider.class);
     doReturn(llm).when(proveedor).getIfAvailable();
     ClasificacionDocumentoService clasificador =
