@@ -41,7 +41,13 @@ public final class NotaryDtos {
       String observacionesBufete) {}
 
   public record RemisionDocumentDto(
-      UUID id, String displayName, Long sizeBytes, String statusLabel, int sortOrder) {}
+      UUID id,
+      String displayName,
+      Long sizeBytes,
+      String statusLabel,
+      int sortOrder,
+      /** {@code doc_type} del snapshot (p. ej. SOPORTE_INGRESOS); null sin tipo. */
+      String tipoDocumento) {}
 
   public record RemisionDto(
       UUID id,

@@ -1,11 +1,13 @@
 package com.lexia.api.modules.notary;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import java.time.LocalDate;
 import java.time.Period;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -24,6 +26,7 @@ final class NotaryAlertas {
   static final String TARIFA_DISCAPACIDAD = "TARIFA_DISCAPACIDAD";
   static final String IMPUESTOS_TERCERA_EDAD = "IMPUESTOS_TERCERA_EDAD";
   static final String DATO_EDAD_NO_DISPONIBLE = "DATO_EDAD_NO_DISPONIBLE";
+  static final String FONDOS_SIN_SOPORTE = "FONDOS_SIN_SOPORTE";
   static final String NIVEL_AVISO = "AVISO";
   static final String NIVEL_INFO = "INFO";
   static final String ROL_COMPRADOR = "COMPRADOR";
@@ -50,8 +53,25 @@ final class NotaryAlertas {
   /**
    * @param referencia fecha a la que se calcula la edad; solo se pide si alguien trae fecha de
    *     nacimiento legible.
+   * @param tiposDocumento {@code doc_type} de los documentos de la versión vigente.
    */
-  static List<NotaryDtos.AlertaDto> calcular(JsonNode payload, Supplier<LocalDate> referencia) {
+  static List<NotaryDtos.AlertaDto> calcular(
+      JsonNode payload, Supplier<LocalDate> referencia, Collection<String> tiposDocumento) {
+    List<NotaryDtos.AlertaDto> alertas = new ArrayList<>(personas(payload, referencia));
+    // Solo se avisa que falta el soporte: si los ingresos alcanzan lo decide el cliente.
+    if (tiposDocumento.stream().noneMatch(LegalDocument.TIPO_SOPORTE_INGRESOS::equals)) {
+      alertas.add(
+          new NotaryDtos.AlertaDto(
+              FONDOS_SIN_SOPORTE,
+              NIVEL_AVISO,
+              "Debida diligencia de fondos",
+              "El bufete no adjuntó soportes de ingresos; verifique el origen de los fondos",
+              List.of()));
+    }
+    return alertas;
+  }
+
+  private static List<NotaryDtos.AlertaDto> personas(JsonNode payload, Supplier<LocalDate> referencia) {
     if (payload == null || !payload.isObject() || payload.isEmpty()) {
       return List.of();
     }

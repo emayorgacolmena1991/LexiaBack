@@ -628,7 +628,8 @@ public class NotaryCrossTenantService {
                     d.getDisplayName(),
                     d.getSizeBytes(),
                     d.getStatusLabel(),
-                    d.getSortOrder()))
+                    d.getSortOrder(),
+                    d.getDocType()))
         .toList();
   }
 
@@ -708,7 +709,9 @@ public class NotaryCrossTenantService {
               size > 0 ? size : null,
               status,
               // Snapshot: las claves no se sobrescriben, reemplazar en el bufete no la toca.
-              version.get().getStorageKey()));
+              version.get().getStorageKey(),
+              // Tipo al enviar: la notaría filtra (p. ej. SOPORTE_INGRESOS) sin leer app.document.
+              doc.getDocType()));
     }
     return order;
   }
@@ -771,9 +774,14 @@ public class NotaryCrossTenantService {
         actual.map(v -> NotaryAlertas.conTarifaOImpuestos(alertasDe(v))).orElse(false));
   }
 
+  /** Payload y documentos de esta versión: los soportes de versiones anteriores no cuentan. */
   private List<NotaryDtos.AlertaDto> alertasDe(NotaryRemisionVersion version) {
+    List<String> tipos =
+        remisionDocuments.findByVersionIdOrderBySortOrderAsc(version.getId()).stream()
+            .map(NotaryRemisionDocument::getDocType)
+            .toList();
     return NotaryAlertas.calcular(
-        payload(version), () -> fechaReferencia(version.getRemisionId()));
+        payload(version), () -> fechaReferencia(version.getRemisionId()), tipos);
   }
 
   /** Payload ilegible: sin alertas. Solo se registra la versión, nunca el contenido. */
