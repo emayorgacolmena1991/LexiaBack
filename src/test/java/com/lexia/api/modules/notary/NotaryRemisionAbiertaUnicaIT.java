@@ -21,7 +21,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 
-/** Postgres 16 embebido. Ejecutar con {@code mvnw test -Dtest=NotaryRemisionAbiertaUnicaIT}. */
+/** Postgres 18 embebido. Ejecutar con {@code mvnw test -Dtest=NotaryRemisionAbiertaUnicaIT}. */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class NotaryRemisionAbiertaUnicaIT {
 

@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
 /**
- * V101: {@code storage_key} del snapshot con backfill desde {@code app.document_version}. Postgres 16
+ * V101: {@code storage_key} del snapshot con backfill desde {@code app.document_version}. Postgres 18
  * embebido, nunca la base remota: {@code mvnw test -Dtest=NotaryRemisionDocumentStorageKeyMigrationIT}.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

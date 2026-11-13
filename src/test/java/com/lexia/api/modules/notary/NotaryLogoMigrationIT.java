@@ -19,7 +19,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
-/** Postgres 16 embebido. Ejecutar con {@code mvnw test -Dtest=NotaryLogoMigrationIT}. */
+/** Postgres 18 embebido. Ejecutar con {@code mvnw test -Dtest=NotaryLogoMigrationIT}. */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class NotaryLogoMigrationIT {
 

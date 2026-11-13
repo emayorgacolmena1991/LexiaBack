@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
 /**
- * Corre sobre un Postgres 16 embebido, nunca sobre la base remota. Surefire no incluye {@code *IT}
+ * Corre sobre un Postgres 18 embebido, nunca sobre la base remota. Surefire no incluye {@code *IT}
  * por defecto: ejecutar con {@code mvnw test -Dtest=NotaryRemisionVersionMigrationIT}.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -58,7 +58,7 @@ class NotaryRemisionVersionMigrationIT {
 
     flyway(ANTERIOR).migrate();
     try (Connection db = conectar()) {
-      assertEquals(16, db.getMetaData().getDatabaseMajorVersion());
+      assertEquals(18, db.getMetaData().getDatabaseMajorVersion());
       assertEquals(ANTERIOR, versionAplicada(db));
       sembrarRemision(db, CON_DOCUMENTOS);
       sembrarRemision(db, SIN_DOCUMENTOS);
