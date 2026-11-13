@@ -138,7 +138,15 @@ public class NotaryRemision implements Persistable<UUID> {
     return true;
   }
 
+  static final String DEBE_ESTAR_RECIBIDA = "La remisión debe estar recibida para avanzar";
+  static final String FALTA_OBSERVACION = "Indique qué debe corregir el bufete";
+
+  /** Solo con la remisión recibida o en trámite; enviada, devuelta o completada → 409. */
   public void advanceStep() {
+    if (!NotaryRemisionEstado.RECIBIDO.name().equals(estado)
+        && !NotaryRemisionEstado.EN_TRAMITE.name().equals(estado)) {
+      throw NotaryBusinessException.conflict(DEBE_ESTAR_RECIBIDA);
+    }
     int next = Math.min(pasoNotarial + 1, NotaryProcessSteps.COUNT - 1);
     pasoNotarial = (short) next;
     if (next == 0) {
@@ -151,7 +159,23 @@ public class NotaryRemision implements Persistable<UUID> {
     touch();
   }
 
+  /**
+   * Desde recibido, en trámite o completada. Antes de completar es para que el bufete corrija: la
+   * observación es obligatoria (400). Enviada o ya devuelta → 409.
+   */
   public void devolverAlBufete(String observaciones) {
+    boolean completada = NotaryRemisionEstado.NOTARIA_COMPLETADA.name().equals(estado);
+    if (NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name().equals(estado)) {
+      throw NotaryBusinessException.conflict("La remisión ya fue devuelta al bufete.");
+    }
+    if (!completada
+        && !NotaryRemisionEstado.RECIBIDO.name().equals(estado)
+        && !NotaryRemisionEstado.EN_TRAMITE.name().equals(estado)) {
+      throw NotaryBusinessException.conflict("La remisión debe estar recibida para devolverla");
+    }
+    if (!completada && (observaciones == null || observaciones.isBlank())) {
+      throw NotaryBusinessException.badRequest(FALTA_OBSERVACION);
+    }
     estado = NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name();
     if (observaciones != null && !observaciones.isBlank()) {
       observacionesNotaria = observaciones.trim();

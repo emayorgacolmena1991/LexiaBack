@@ -461,7 +461,7 @@ class NotaryEscrituraServiceTest {
         NotaryRemision.create(FIRMA, NOTARIA, UUID.randomUUID(), null, "X", "Y", null, 0, USUARIO, null);
     remisionesGuardadas.put(sinRecibir.getId(), sinRecibir);
     UUID devuelta = remisionCompleta();
-    remisionesGuardadas.get(devuelta).devolverAlBufete(null);
+    remisionesGuardadas.get(devuelta).devolverAlBufete("Falta el avalúo");
     UUID completada = remisionCompleta();
     for (int i = 0; i < NotaryProcessSteps.COUNT - 1; i++) {
       remisionesGuardadas.get(completada).advanceStep();

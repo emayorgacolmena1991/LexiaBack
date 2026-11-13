@@ -501,6 +501,7 @@ class NotaryRemisionVersionTest {
   void editarNotariaCompletadaResponde409() {
     UUID id = enviada().id();
     NotaryRemision remision = remisionesGuardadas.get(id);
+    remision.acknowledgeReceipt();
     for (int i = 0; i < NotaryProcessSteps.COUNT - 1; i++) {
       remision.advanceStep();
     }
@@ -532,7 +533,8 @@ class NotaryRemisionVersionTest {
   @Test
   void noReabreUnaDevueltaSiHayOtraRemisionAbierta() {
     UUID id = enviada().id();
-    remisionesGuardadas.get(id).devolverAlBufete(null);
+    remisionesGuardadas.get(id).acknowledgeReceipt();
+    remisionesGuardadas.get(id).devolverAlBufete("Falta el avalúo");
     NotaryRemision otra =
         NotaryRemision.create(FIRMA, NOTARIA, CASO, FICHA, "X", "Y", "Acta", 0, USUARIO, null);
     when(remisiones.findFirstByFirmTenantIdAndFirmLegalCaseIdAndEstadoNotInOrderByEmitidoEnDesc(
@@ -885,15 +887,78 @@ class NotaryRemisionVersionTest {
   }
 
   @Test
-  void laNotariaDestinoAvanzaYDevuelve() {
+  void laNotariaDestinoRecibeAvanzaYDevuelveConObservacion() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+    service.getRemisionAndAcknowledge(id);
+
+    assertEquals(1, service.advanceRemision(id).pasoNotarial());
+    NotaryDtos.RemisionDto devuelta =
+        service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("Falta el avalúo"));
+    assertEquals(NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name(), devuelta.estado());
+    assertEquals("Falta el avalúo", devuelta.observacionesNotaria());
+    verify(authorization, atLeastOnce()).requirePermission("notaria:remision:actuar");
+  }
+
+  @Test
+  void avanzarSinRecibirResponde409() {
     UUID id = enviada().id();
     sesion(NOTARIA);
 
-    assertEquals(1, service.advanceRemision(id).pasoNotarial());
+    ApiException error = assertThrows(ApiException.class, () -> service.advanceRemision(id));
+
+    assertEstado(HttpStatus.CONFLICT, error);
+    assertEquals(NotaryRemision.DEBE_ESTAR_RECIBIDA, error.getMessage());
+    assertEquals(0, remisionesGuardadas.get(id).getPasoNotarial());
+    assertEquals(NotaryRemisionEstado.ENVIADO_A_NOTARIA.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void devolverSinRecibirResponde409() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+
+    assertEstado(
+        HttpStatus.CONFLICT,
+        assertThrows(
+            ApiException.class,
+            () -> service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("Falta el avalúo"))));
+    assertEquals(NotaryRemisionEstado.ENVIADO_A_NOTARIA.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void devolverAntesDeCompletarSinObservacionResponde400() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+    service.getRemisionAndAcknowledge(id);
+
+    ApiException error =
+        assertThrows(
+            ApiException.class,
+            () -> service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("  ")));
+
+    assertEstado(HttpStatus.BAD_REQUEST, error);
+    assertEquals(NotaryRemision.FALTA_OBSERVACION, error.getMessage());
+    assertEquals(NotaryRemisionEstado.RECIBIDO.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void devolverCompletadaSinObservacionYLuegoDevueltaResponde409() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+    service.getRemisionAndAcknowledge(id);
+    for (int i = 0; i < NotaryProcessSteps.COUNT - 1; i++) {
+      service.advanceRemision(id);
+    }
+
     assertEquals(
         NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name(),
         service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody(null)).estado());
-    verify(authorization, atLeastOnce()).requirePermission("notaria:remision:actuar");
+    assertEstado(
+        HttpStatus.CONFLICT,
+        assertThrows(
+            ApiException.class,
+            () -> service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("Otra vez"))));
   }
 
   @Test
