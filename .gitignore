@@ -35,6 +35,7 @@ build/
 ### VS Code ###
 .vscode/
 .tokensave/
+.claude/
 .cursorignore
 instrucciones/
 

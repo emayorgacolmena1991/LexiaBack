@@ -306,6 +306,72 @@ class NotaryEscrituraServiceTest {
   }
 
   @Test
+  void generarEscribeLasCifrasTambienEnLetras() throws Exception {
+    ObjectNode payload = (ObjectNode) mapper.readTree(payloadCompleto());
+    payload.put("cedula_conyuge_1", "092255248-4");
+    payload.put("precio_compraventa_numero", "120000");
+    payload.put("precio_compraventa_letras", "ciento veinte mil");
+    payload.put("monto_prestamo", "85.000,50");
+    payload.put("monto_prestamo_letras", "");
+    payload.put("superficie_m2", "84");
+    payload.put("clave_catastral", "60-2387-013-0-0-0");
+    payload.put("fecha_escritura_antecedente", "31/03/2026");
+    UUID id = remision(payload.toString(), PRODUCTO);
+    Map<String, String> valores = new LinkedHashMap<>();
+    campos(id).keySet().forEach(clave -> valores.put(clave, "Valor " + clave));
+    valores.put("fecha_otorgamiento", "2026-08-20");
+
+    NotaryDtos.EscrituraDto escritura =
+        service.generar(id, new NotaryDtos.GenerarEscrituraBody(valores));
+
+    assertThat(escritura.camposVacios()).isEmpty();
+    assertThat(escritura.camposSinConvertir()).isEmpty();
+    String texto = textoXml(partes(docx(escritura)));
+    assertThat(texto)
+        .doesNotContain("{{")
+        .contains("cero nueve dos dos cinco cinco dos cuatro ocho – cuatro (092255248-4)")
+        .contains(
+            "CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
+        .contains(
+            "OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
+        .contains("CUANTÍA: USD 120.000,00")
+        .contains("ochenta y cuatro metros cuadrados (84,00 m²)")
+        .contains("sesenta – dos mil trescientos ochenta y siete – cero trece – cero – cero – cero")
+        .contains("otorgada el treinta y uno de marzo de dos mil veintiséis (31/03/2026)")
+        .contains("a los veinte días del mes de agosto de dos mil veintiséis")
+        .contains("C.C. 092255248-4");
+  }
+
+  @Test
+  void cifraNoInterpretableQuedaTalCualYSeAvisaAparte() throws Exception {
+    ObjectNode payload = (ObjectNode) mapper.readTree(payloadCompleto());
+    payload.put("cedula_conyuge_1", "0922/552484");
+    UUID id = remision(payload.toString(), PRODUCTO);
+
+    NotaryDtos.EscrituraDto escritura = generarCompleta(id);
+
+    assertThat(escritura.camposSinConvertir()).containsExactly("Cédula del comprador / deudor");
+    assertThat(escritura.camposVacios()).isEmpty();
+    assertThat(textoXml(partes(docx(escritura)))).contains("número 0922/552484,");
+    assertThat(service.historial(id).get(0).camposSinConvertir()).isEmpty();
+  }
+
+  @Test
+  void cifraVaciaSePideEnElFormularioYSeReportaComoVacia() throws Exception {
+    ObjectNode payload = (ObjectNode) mapper.readTree(payloadCompleto());
+    payload.put("superficie_m2", "");
+    UUID id = remision(payload.toString(), PRODUCTO);
+
+    assertThat(campos(id)).containsKey("superficie_m2").doesNotContainKey("superficie_m2_completo");
+    NotaryDtos.EscrituraDto escritura =
+        service.generar(id, new NotaryDtos.GenerarEscrituraBody(Map.of()));
+
+    assertThat(escritura.camposVacios()).contains("superficie_m2").doesNotContain("superficie_m2_completo");
+    assertThat(escritura.camposSinConvertir()).isEmpty();
+    assertThat(textoXml(partes(docx(escritura)))).doesNotContain("{{");
+  }
+
+  @Test
   void camposVaciosSeRenderizanEnBlancoYSeListan() throws Exception {
     UUID id = remisionCompleta();
     List<String> formulario = List.copyOf(campos(id).keySet());

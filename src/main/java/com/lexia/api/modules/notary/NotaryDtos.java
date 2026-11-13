@@ -100,5 +100,7 @@ public final class NotaryDtos {
       Instant generatedAt,
       String generatedBy,
       List<String> camposVacios,
-      java.util.Map<String, String> valores) {}
+      java.util.Map<String, String> valores,
+      /** Etiquetas de los datos que no se pudieron pasar a letras; solo en la respuesta de generar. */
+      List<String> camposSinConvertir) {}
 }

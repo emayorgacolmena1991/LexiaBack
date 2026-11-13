@@ -167,6 +167,8 @@ public class NotaryEscrituraService {
                 ruta,
                 nombre,
                 principal.userId()));
+    List<String> sinConvertir =
+        render.sinConvertir().stream().map(MinutaViviendaData::etiquetaCorta).toList();
     auditEvents.save(
         AuditEvent.of(
             remision.getNotaryTenantId(),
@@ -177,7 +179,7 @@ public class NotaryEscrituraService {
             "OK",
             null,
             null));
-    return toDto(escritura);
+    return toDto(escritura, sinConvertir);
   }
 
   /**
@@ -226,21 +228,28 @@ public class NotaryEscrituraService {
       Map<String, Object> cubiertos,
       List<String> formulario) {}
 
-  private record Render(byte[] docx, Map<String, String> enviados, List<String> vacios) {}
+  private record Render(
+      byte[] docx, Map<String, String> enviados, List<String> vacios, List<String> sinConvertir) {}
 
+  /**
+   * Los {@code x_completo} se arman al final, sobre lo del bufete y lo del formulario. Un {@code
+   * x_completo} vacío se reporta como {@code x}, que es el campo que hay que llenar.
+   */
   private Render renderDocx(Preparacion p, Map<String, String> enviados) {
     Map<String, Object> datos = new LinkedHashMap<>(p.cubiertos());
     datos.putAll(enviados);
-    List<String> vacios = new ArrayList<>();
+    LetrasNotariales.Resultado letras = LetrasNotariales.completar(datos, p.tags());
+    datos.putAll(letras.completos());
+    Set<String> vacios = new LinkedHashSet<>();
     for (String tag : p.tags()) {
       Object valor = datos.get(tag);
       if (valor == null || (valor instanceof String texto && texto.isBlank())) {
         datos.put(tag, "");
-        vacios.add(tag);
+        vacios.add(LetrasNotariales.origen(tag));
       }
     }
     byte[] docx = renderer.renderPlantilla(p.plantilla().classpathResource(), datos);
-    return new Render(docx, enviados, vacios);
+    return new Render(docx, enviados, List.copyOf(vacios), letras.sinConvertir());
   }
 
   private Preparacion preparar(UUID remisionId) {
@@ -280,8 +289,13 @@ public class NotaryEscrituraService {
     cubiertos.put("logo_notaria", logo(remision.getNotaryTenantId()));
 
     List<String> tags = renderer.tags(plantilla.classpathResource());
+    // x_completo se deriva de x: el formulario pide x.
     List<String> formulario =
-        tags.stream().filter(tag -> !cubiertos.containsKey(tag)).toList();
+        tags.stream()
+            .map(LetrasNotariales::origen)
+            .distinct()
+            .filter(tag -> !cubiertos.containsKey(tag))
+            .toList();
     return new Preparacion(remision, version, plantilla, perfil, tags, cubiertos, formulario);
   }
 
@@ -391,6 +405,11 @@ public class NotaryEscrituraService {
   }
 
   private NotaryDtos.EscrituraDto toDto(NotaryEscritura escritura) {
+    return toDto(escritura, List.of());
+  }
+
+  /** {@code sinConvertir} solo existe al generar: no se persiste. */
+  private NotaryDtos.EscrituraDto toDto(NotaryEscritura escritura, List<String> sinConvertir) {
     return new NotaryDtos.EscrituraDto(
         escritura.getId(),
         escritura.getVersionNo(),
@@ -400,7 +419,8 @@ public class NotaryEscrituraService {
             ? null
             : usuarios.findById(escritura.getGeneratedBy()).map(AppUser::getDisplayName).orElse(null),
         leerLista(escritura.getCamposVacios()),
-        leerMapa(escritura.getDatosFormulario()));
+        leerMapa(escritura.getDatosFormulario()),
+        sinConvertir);
   }
 
   private List<String> leerLista(String json) {

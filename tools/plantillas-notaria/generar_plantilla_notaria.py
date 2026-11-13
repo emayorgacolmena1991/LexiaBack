@@ -42,8 +42,10 @@ RUTA_SALIDA = RAIZ_BACKEND / "src/main/resources/templates/notaria/COMPRAVENTA_H
 
 PATRON_X = re.compile(r"[Xx]{4,}")
 
-# cifra() quita la moneda del valor: la plantilla debe traerla.
-PRECIO = "USD {{precio_compraventa_numero}} ({{precio_compraventa_letras}} DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)"
+# Cifras del cuerpo como «letras (número)»: NotaryEscrituraService arma cada x_completo
+# (LetrasNotariales). La cuantía del encabezado y las firmas quedan solo en número.
+# x_completo de un monto ya trae «USD» y «DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA».
+PRECIO = "{{precio_compraventa_numero_completo}}"
 # Un solo bloque XXXX nombra a los dos cónyuges: toTemplateMap() los tiene por separado.
 CONYUGES = "{{nombre_conyuge_1}} y {{nombre_conyuge_2}}"
 CONYUGES_MAYUS = "{{nombre_conyuge_1}} Y {{nombre_conyuge_2}}"
@@ -75,42 +77,42 @@ MAPPING = {
     "P2#11": "{{linderos_generales_sur}}",
     "P2#12": "{{linderos_generales_este}}",
     "P2#13": "{{linderos_generales_oeste}}",
-    "P2#14": "{{superficie_general}}",
-    "P2#15": "{{clave_catastral}}",
-    "P2#16": "{{area_construccion}}",
+    "P2#14": "{{superficie_general_completo}}",
+    "P2#15": "{{clave_catastral_completo}}",
+    "P2#16": "{{area_construccion_completo}}",
     "P2#17": "{{nombre_vendedor}}",
     "P2#18": "{{nombre_adquirente_anterior}}",
     "P2#19": "{{notaria_antecedente}}",
     "P2#20": "",  # "Notario XXXX": notaria_antecedente ya nombra la notaría (ver AJUSTES)
-    "P2#21": "{{fecha_inscripcion_antecedente}}",
+    "P2#21": "{{fecha_inscripcion_antecedente_completo}}",
     # --- P2: compraventa, cláusulas tercera y cuarta ---
     "P2#22": "{{nombre_vendedor}}",
     "P2#23": CONYUGES,
     "P2#24": PRECIO,
-    "P2#25": "USD {{valor_entrada_numero}}",
-    "P2#26": "USD {{monto_prestamo}}",
+    "P2#25": "{{valor_entrada_numero_completo}}",
+    "P2#26": "{{monto_prestamo_completo}}",
     "P2#27": "{{nombre_entidad_crediticia}}",  # SIN ORIGEN: DERIVADO (producto BIESS)
     # --- P2: compraventa, cláusula undécima (notificaciones) ---
     "P2#28": "{{direccion_vendedor}}",
     "P2#29": "{{ciudad_notificacion_vendedor}}",  # SIN ORIGEN: BUFETE_JSON
-    "P2#30": "{{telefono_vendedor}}",
+    "P2#30": "{{telefono_vendedor_completo}}",
     "P2#31": "{{correo_vendedor}}",
     "P2#32": "{{direccion_deudor}}",
-    "P2#33": "{{telefono_deudor}}",
+    "P2#33": "{{telefono_deudor_completo}}",
     "P2#34": "{{correo_deudor}}",
     # --- P2: hipoteca, cláusula primera (comparecientes) ---
     "P2#35": "{{nombre_conyuge_1}}",
-    "P2#36": "{{cedula_conyuge_1}}",
+    "P2#36": "{{cedula_conyuge_1_completo}}",
     "P2#37": "{{nombre_conyuge_2}}",
-    "P2#38": "{{cedula_conyuge_2}}",
+    "P2#38": "{{cedula_conyuge_2_completo}}",
     # --- P2: hipoteca, cláusula segunda (antecedentes) ---
     "P2#39": "{{nombre_conyuge_1}}",
     "P2#40": "{{nombre_conyuge_2}}",
     # --- P2: hipoteca, cláusula décima quinta (declaración juramentada) ---
     "P2#41": "{{nombre_conyuge_1}}",
-    "P2#42": "{{cedula_conyuge_1}}",
+    "P2#42": "{{cedula_conyuge_1_completo}}",
     "P2#43": "{{nombre_conyuge_2}}",
-    "P2#44": "{{cedula_conyuge_2}}",
+    "P2#44": "{{cedula_conyuge_2_completo}}",
     # --- Bloque de firmas ---
     "P4#1": "{{nombre_vendedor}}",
     "P5#1": "{{ruc_vendedor}}",  # SIN ORIGEN: BUFETE_JSON (cedula_vendedor es otro campo)
@@ -146,10 +148,11 @@ TEXTOS_VARIABLES = [
     ("P2", "ANDRE DANIEL LEON NAVEDA", "{{apoderado_biess}}"),
     ("P2", "ANDRÉ DANIEL LEÓN NAVEDA", "{{apoderado_biess}}"),
     ("P38", "ANDRE DANIEL LEON NAVEDA", "{{apoderado_biess}}"),
-    ("P2", "cero nueve dos dos cinco cinco dos cuatro ocho – cuatro (092255248 - 4)", "{{cedula_apoderado_biess}}"),
+    ("P2", "cero nueve dos dos cinco cinco dos cuatro ocho – cuatro (092255248 - 4)", "{{cedula_apoderado_biess_completo}}"),
     ("P40", "0922552484", "{{cedula_apoderado_biess}}"),
     # Comparecencia ante notaria
-    ("P2", "veinte días del mes de agosto de dos mil veintiséis", "{{fecha_otorgamiento}}"),  # SIN ORIGEN: NOTARIA_FORMULARIO
+    # El derivado trae la preposición: «a los veinte días…» / «al primer día…».
+    ("P2", "a los veinte días del mes de agosto de dos mil veintiséis", "{{fecha_otorgamiento_completo}}"),  # SIN ORIGEN: NOTARIA_FORMULARIO
     # La frase describe al representante, no a la compañía: estado_civil_vendedor es otro dato.
     ("P2", "de estado civil casado, mayor de edad, licenciado",
      "de estado civil {{estado_civil_representante_vendedor}}, mayor de edad, {{profesion_representante_vendedor}}"),  # SIN ORIGEN: BUFETE_JSON
@@ -161,7 +164,7 @@ TEXTOS_VARIABLES = [
     ("P2", "cantón Guayaquil", "cantón {{canton_inmueble}}"),
     ("P2", "Gerente General, el señor licenciado",
      "{{cargo_representante_vendedor}}, el señor {{profesion_representante_vendedor}}"),
-    ("P2", "el treinta y uno de marzo de dos mil veintiséis", "el {{fecha_escritura_antecedente}}"),
+    ("P2", "el treinta y uno de marzo de dos mil veintiséis", "el {{fecha_escritura_antecedente_completo}}"),
     ("P2", "ante el abogado ", "ante "),
     ("P2", "Registro de la Propiedad de Guayaquil el", "Registro de la Propiedad de {{canton_inmueble}} el"),
     ("P2", "Abogada Verónica Valdivieso Rodríguez", "{{abogado_patrocinador_compraventa}}"),  # SIN ORIGEN: BUFETE_JSON
@@ -178,10 +181,10 @@ TEXTOS_VARIABLES = [
     ("P2", "solar catorce (14), con doce metros (12,00 m)", "{{lindero_sur}}"),
     ("P2", "calle pública, con siete metros (7,00 m)", "{{lindero_este}}"),
     ("P2", "solar seis (6), con siete metros (7,00 m)", "{{lindero_oeste}}"),
-    ("P2", "ochenta y cuatro metros cuadrados (84,00m²)", "{{superficie_m2}}"),
+    ("P2", "ochenta y cuatro metros cuadrados (84,00m²)", "{{superficie_m2_completo}}"),
     ("P2", "sesenta – dos mil trescientos ochenta y siete – cero trece – cero – cero – cero "
-           "(60 – 2387 – 013 – 0 – 0 - 0)", "{{clave_catastral}}"),
-    ("P2", "ochenta metros cuadrados con ochenta decímetros cuadrados (80,80m²)", "{{area_construccion}}"),
+           "(60 – 2387 – 013 – 0 – 0 - 0)", "{{clave_catastral_completo}}"),
+    ("P2", "ochenta metros cuadrados con ochenta decímetros cuadrados (80,80m²)", "{{area_construccion_completo}}"),
     # Hipoteca: firma de minuta BIESS
     ("P2", "Abogada Mishell Guillen Triana", "{{abogado_patrocinador_biess}}"),  # SIN ORIGEN: BUFETE_JSON
     ("P2", "cero nueve – dos mil dieciocho – cero setecientos noventa y nueve (09- 2018- 0799)",
@@ -196,9 +199,9 @@ TEXTOS_VARIABLES = [
 # ----------------------------------------------------------------------------------------
 AJUSTES = [
     ("P1", "{{nombre_vendedor}} FAVOR", "{{nombre_vendedor}} A FAVOR"),     # el XXXX se comió la "A"
-    ("P2", "número cero {{cedula_conyuge_1}}", "número {{cedula_conyuge_1}}"),  # "cero" fijo antes de la cédula
-    ("P2", "{{cedula_conyuge_2}}, de estado civil casados,",                    # declaración juramentada
-     "{{cedula_conyuge_2}}, de estado civil {{estado_civil}},"),
+    ("P2", "número cero {{cedula_conyuge_1_completo}}", "número {{cedula_conyuge_1_completo}}"),  # "cero" fijo antes de la cédula
+    ("P2", "{{cedula_conyuge_2_completo}}, de estado civil casados,",                    # declaración juramentada
+     "{{cedula_conyuge_2_completo}}, de estado civil {{estado_civil}},"),
     ("P2", ", Notario , e inscrita", ", e inscrita"),                          # queda sin P2#20
 ]
 
