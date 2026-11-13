@@ -43,7 +43,7 @@ RUTA_SALIDA = RAIZ_BACKEND / "src/main/resources/templates/notaria/COMPRAVENTA_H
 PATRON_X = re.compile(r"[Xx]{4,}")
 
 # Cifras del cuerpo como «letras (número)»: NotaryEscrituraService arma cada x_completo
-# (LetrasNotariales). La cuantía del encabezado y las firmas quedan solo en número.
+# (LetrasNotariales), también la cuantía del encabezado. Las firmas (C.C., RUC) quedan solo en número.
 # x_completo de un monto ya trae «USD» y «DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA».
 PRECIO = "{{precio_compraventa_numero_completo}}"
 # Un solo bloque XXXX nombra a los dos cónyuges: toTemplateMap() los tiene por separado.
@@ -58,9 +58,9 @@ MAPPING = {
     # --- P1: encabezado de la escritura ---
     "P1#1": "{{nombre_vendedor}}",
     "P1#2": CONYUGES_MAYUS,
-    "P1#3": "USD {{precio_compraventa_numero}}",
+    "P1#3": "{{precio_compraventa_numero_completo}}",  # CUANTÍA
     "P1#4": CONYUGES_MAYUS,
-    "P1#5": "USD {{monto_prestamo}}",
+    "P1#5": "{{monto_prestamo_completo}}",  # CUANTÍA
     # --- P2: comparecencia ante notaria ---
     "P2#1": "{{nombre_vendedor}}",
     "P2#2": "{{representante_vendedor}}",  # SIN ORIGEN: BUFETE_JSON

@@ -61,7 +61,14 @@ public final class NotaryDtos {
       Instant actualizadoEn,
       String observacionesBufete,
       String observacionesNotaria,
-      List<RemisionDocumentDto> documentos) {}
+      List<RemisionDocumentDto> documentos,
+      /** Hay alertas de tarifa o impuestos en la versión vigente (ícono de la bandeja). */
+      boolean alertasTarifaImpuestos) {}
+
+  public record AlertaPersonaDto(String rol, String nombre) {}
+
+  public record AlertaDto(
+      String codigo, String nivel, String titulo, String detalle, List<AlertaPersonaDto> personas) {}
 
   public record CrearVersionBody(String observacionesBufete) {}
 

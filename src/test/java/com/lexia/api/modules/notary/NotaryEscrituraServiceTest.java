@@ -334,7 +334,11 @@ class NotaryEscrituraServiceTest {
             "CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
         .contains(
             "OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
-        .contains("CUANTÍA: USD 120.000,00")
+        .contains(
+            "CUANTÍA: CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
+        .contains(
+            "CUANTÍA: OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
+        .doesNotContain("CUANTÍA: USD")
         .contains("ochenta y cuatro metros cuadrados (84,00 m²)")
         .contains("sesenta – dos mil trescientos ochenta y siete – cero trece – cero – cero – cero")
         .contains("otorgada el treinta y uno de marzo de dos mil veintiséis (31/03/2026)")

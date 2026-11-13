@@ -154,6 +154,11 @@ public class NotaryController {
     return notary.getRemision(id);
   }
 
+  @GetMapping("/remisiones/{id}/alertas")
+  public List<NotaryDtos.AlertaDto> alertas(@PathVariable UUID id) {
+    return notary.alertas(id);
+  }
+
   @GetMapping("/remisiones/{remisionId}/documentos/{documentId}/contenido")
   public ResponseEntity<byte[]> remisionDocumentoContenido(
       @PathVariable UUID remisionId, @PathVariable UUID documentId) {

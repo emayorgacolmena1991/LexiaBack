@@ -14,6 +14,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.common.api.ApiExceptionHandler;
@@ -88,6 +89,7 @@ class NotaryRemisionVersionTest {
   private final LegalDocumentRepository documentosCaso = mock(LegalDocumentRepository.class);
   private final DocumentVersionRepository versionesDocumento = mock(DocumentVersionRepository.class);
   private final AppUserRepository usuarios = mock(AppUserRepository.class);
+  private final NotaryEscrituraRepository escrituras = mock(NotaryEscrituraRepository.class);
   private final List<NotaryRemisionVersion> versionesGuardadas = new ArrayList<>();
   private final List<NotaryRemisionDocument> documentosGuardados = new ArrayList<>();
   private final Map<UUID, NotaryRemision> remisionesGuardadas = new HashMap<>();
@@ -203,7 +205,9 @@ class NotaryRemisionVersionTest {
             auditoria,
             mock(EmailNotificationService.class),
             usuarios,
-            mock(BrevoProperties.class));
+            mock(BrevoProperties.class),
+            escrituras,
+            new ObjectMapper());
   }
 
   @AfterEach
@@ -608,6 +612,73 @@ class NotaryRemisionVersionTest {
 
     assertEstado(
         HttpStatus.NOT_FOUND, assertThrows(ApiException.class, () -> service.getRemision(id)));
+  }
+
+  /** Envío cuya minuta trae fecha de nacimiento del comprador. */
+  private UUID enviadaConPayload(String payload) {
+    estudio("APPROVED");
+    documentosDelCaso("escritura.pdf");
+    MinutaDraft minuta = draft("MINUTA_COMPRAVENTA", payload, MINUTA);
+    when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
+        .thenReturn(List.of(minuta));
+    return enviar().id();
+  }
+
+  @Test
+  void alertasLasLeenElBufeteDuenoYLaNotariaDestino() {
+    UUID id =
+        enviadaConPayload(
+            "{\"nombre_conyuge_1\":\"Ana\",\"fecha_nacimiento_conyuge_1\":\"01/01/1940\"}");
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .containsExactly(NotaryAlertas.TARIFA_TERCERA_EDAD, NotaryAlertas.IMPUESTOS_TERCERA_EDAD);
+    assertThat(service.getRemision(id).alertasTarifaImpuestos()).isTrue();
+    sesion(NOTARIA);
+    assertThat(service.alertas(id)).hasSize(2);
+    verify(authorization, atLeastOnce()).requirePermission("notaria:remision:leer");
+  }
+
+  @Test
+  void alertasSinFechaDeNacimientoSoloAvisanQueFaltaElDato() {
+    UUID id = enviada().id();
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .containsExactly(NotaryAlertas.DATO_EDAD_NO_DISPONIBLE);
+    assertThat(service.getRemision(id).alertasTarifaImpuestos()).isFalse();
+  }
+
+  @Test
+  void alertasUsanLaFechaDeOtorgamientoDeLaUltimaEscritura() {
+    UUID id =
+        enviadaConPayload(
+            "{\"nombre_conyuge_1\":\"Ana\",\"fecha_nacimiento_conyuge_1\":\"2000-08-20\"}");
+    NotaryEscritura escritura =
+        NotaryEscritura.of(
+            UUID.randomUUID(),
+            id,
+            1,
+            "{\"fecha_otorgamiento\":\"2065-08-20\"}",
+            "[]",
+            "ruta",
+            "e.docx",
+            USUARIO);
+    when(escrituras.findFirstByRemisionIdOrderByGeneratedAtDesc(id)).thenReturn(Optional.of(escritura));
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .contains(NotaryAlertas.TARIFA_TERCERA_EDAD);
+  }
+
+  @Test
+  void alertasATenantAjenoResponden404() {
+    UUID id = enviada().id();
+
+    for (UUID ajeno : List.of(UUID.randomUUID(), UUID.randomUUID())) {
+      sesion(ajeno);
+      assertEstado(HttpStatus.NOT_FOUND, assertThrows(ApiException.class, () -> service.alertas(id)));
+    }
   }
 
   /** Documento del bufete con su v1 en disco; la "última versión" del caso apunta a ella. */

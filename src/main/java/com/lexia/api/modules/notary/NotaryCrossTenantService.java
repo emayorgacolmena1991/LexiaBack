@@ -1,5 +1,8 @@
 package com.lexia.api.modules.notary;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
@@ -25,6 +28,7 @@ import com.lexia.api.modules.notifications.BrevoProperties;
 import com.lexia.api.modules.notifications.EmailNotificationService;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantRepository;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -32,6 +36,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
 public class NotaryCrossTenantService {
 
+  private static final Logger LOG = LoggerFactory.getLogger(NotaryCrossTenantService.class);
   private static final List<String> TERMINAL_ESTADOS =
       List.of(
           NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name(),
@@ -69,6 +76,8 @@ public class NotaryCrossTenantService {
   private final EmailNotificationService emails;
   private final AppUserRepository users;
   private final BrevoProperties brevoProperties;
+  private final NotaryEscrituraRepository escrituras;
+  private final ObjectMapper mapper;
 
   public NotaryCrossTenantService(
       AuthorizationService authorization,
@@ -90,7 +99,9 @@ public class NotaryCrossTenantService {
       AuditEventRepository auditEvents,
       EmailNotificationService emails,
       AppUserRepository users,
-      BrevoProperties brevoProperties) {
+      BrevoProperties brevoProperties,
+      NotaryEscrituraRepository escrituras,
+      ObjectMapper mapper) {
     this.authorization = authorization;
     this.tenants = tenants;
     this.profiles = profiles;
@@ -111,6 +122,8 @@ public class NotaryCrossTenantService {
     this.emails = emails;
     this.users = users;
     this.brevoProperties = brevoProperties;
+    this.escrituras = escrituras;
+    this.mapper = mapper;
   }
 
   @Transactional(readOnly = true)
@@ -396,6 +409,16 @@ public class NotaryCrossTenantService {
   @Transactional(readOnly = true)
   public String leerPayloadVersion(UUID id, int numero) {
     return versionLegible(id, numero).getPayload();
+  }
+
+  /** Alertas de tarifa e impuestos de la versión vigente: bufete dueño o notaría destino. */
+  @Transactional(readOnly = true)
+  public List<NotaryDtos.AlertaDto> alertas(UUID id) {
+    NotaryRemision remision = remisionLegible(id);
+    return remisionVersions
+        .findFirstByRemisionIdOrderByVersionNoDesc(remision.getId())
+        .map(this::alertasDe)
+        .orElse(List.of());
   }
 
   @Transactional
@@ -744,7 +767,51 @@ public class NotaryCrossTenantService {
         remision.getUpdatedAt(),
         remision.getObservacionesBufete(),
         remision.getObservacionesNotaria(),
-        docs);
+        docs,
+        actual.map(v -> NotaryAlertas.conTarifaOImpuestos(alertasDe(v))).orElse(false));
+  }
+
+  private List<NotaryDtos.AlertaDto> alertasDe(NotaryRemisionVersion version) {
+    return NotaryAlertas.calcular(
+        payload(version), () -> fechaReferencia(version.getRemisionId()));
+  }
+
+  /** Payload ilegible: sin alertas. Solo se registra la versión, nunca el contenido. */
+  private JsonNode payload(NotaryRemisionVersion version) {
+    String json = version.getPayload();
+    if (json == null || json.isBlank()) {
+      return null;
+    }
+    try {
+      return mapper.readTree(json);
+    } catch (JsonProcessingException ex) {
+      LOG.warn(
+          "Payload ilegible en la versión {} de la remisión {}: sin alertas",
+          version.getVersionNo(),
+          version.getRemisionId());
+      return null;
+    }
+  }
+
+  /** Otorgamiento de la última escritura generada; si no hay o no se lee, hoy en Guayaquil. */
+  private LocalDate fechaReferencia(UUID remisionId) {
+    return escrituras
+        .findFirstByRemisionIdOrderByGeneratedAtDesc(remisionId)
+        .map(NotaryEscritura::getDatosFormulario)
+        .flatMap(this::fechaOtorgamiento)
+        .orElseGet(() -> LocalDate.now(NotaryAlertas.ZONA));
+  }
+
+  private Optional<LocalDate> fechaOtorgamiento(String datosFormulario) {
+    if (datosFormulario == null || datosFormulario.isBlank()) {
+      return Optional.empty();
+    }
+    try {
+      return LetrasNotariales.parsearFecha(
+          mapper.readTree(datosFormulario).path("fecha_otorgamiento").asText(""));
+    } catch (JsonProcessingException ex) {
+      return Optional.empty();
+    }
   }
 
   private NotaryDtos.PartnershipDto toPartnershipDto(
