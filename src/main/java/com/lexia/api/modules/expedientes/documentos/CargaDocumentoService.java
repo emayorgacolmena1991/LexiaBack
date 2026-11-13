@@ -32,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -56,6 +57,7 @@ public class CargaDocumentoService {
   private final ProductoBiessService productos;
   private final ExpedienteBorradorStore borradores;
   private final CaseDocumentoStore caseDocs;
+  private final ObjectProvider<RevisionMinutaTerceroService> revisionMinutaTercero;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
 
   public CargaDocumentoService(
@@ -64,13 +66,15 @@ public class CargaDocumentoService {
       DocumentoTextoOcrRepository ocrRepository,
       ProductoBiessService productos,
       ExpedienteBorradorStore borradores,
-      CaseDocumentoStore caseDocs) {
+      CaseDocumentoStore caseDocs,
+      ObjectProvider<RevisionMinutaTerceroService> revisionMinutaTercero) {
     this.actoNotarialService = actoNotarialService;
     this.procesamientoDocumentalService = procesamientoDocumentalService;
     this.ocrRepository = ocrRepository;
     this.productos = productos;
     this.borradores = borradores;
     this.caseDocs = caseDocs;
+    this.revisionMinutaTercero = revisionMinutaTercero;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
@@ -184,8 +188,22 @@ public class CargaDocumentoService {
       }
       byte[] bytes = readBytes(file, official.ingestionMode());
       String original = originalName(file);
-      return caseDocs.subir(
-          official, original, file.getContentType(), bytes, conTipo ? codigoTipo.trim() : null, observacion);
+      String mime = file.getContentType();
+      String tipoFijo = conTipo ? codigoTipo.trim() : null;
+      DocumentoCargadoDTO subido = caseDocs.subir(official, original, mime, bytes, tipoFijo, observacion);
+      // EJ-3: solo minuta de tercero (no SOPORTE_INGRESOS). Tras commit de la carga.
+      if (LegalDocument.TIPO_MINUTA_TERCERO.equals(subido.codigoTipoDocumento())) {
+        RevisionMinutaTerceroService revision = revisionMinutaTercero.getIfAvailable();
+        if (revision != null) {
+          revision.revisarTrasSubida(
+              official.tenantId(),
+              official.caseId(),
+              UUID.fromString(subido.idDocumento()),
+              bytes,
+              mime);
+        }
+      }
+      return subido;
     }
     if (conTipo) {
       throw ApiException.badRequest("Guarda el expediente antes de cargar en esta casilla.");

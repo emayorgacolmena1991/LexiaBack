@@ -551,6 +551,18 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     ObjectNode checklist = props.putObject("checklist_cumplido");
     checklist.put("type", "array");
     checklist.putObject("items").put("type", "string");
+    // EJ-3 / revisiones con hallazgos: opcional; coactivas puede dejarlo vacío.
+    ObjectNode obs = props.putObject("observaciones");
+    obs.put("type", "array");
+    ObjectNode obsItem = obs.putObject("items");
+    obsItem.put("type", "object");
+    ObjectNode obsProps = obsItem.putObject("properties");
+    obsProps.putObject("codigo").put("type", "string");
+    ObjectNode sev = obsProps.putObject("severidad");
+    sev.put("type", "string");
+    sev.putArray("enum").add("HIGH").add("MEDIUM").add("LOW");
+    obsProps.putObject("mensaje").put("type", "string");
+    obsItem.putArray("required").add("codigo").add("severidad").add("mensaje");
     schema.putArray("required").add("estado").add("confianza").add("razon_rechazo").add("checklist_cumplido");
 
     ObjectNode body = objectMapper.createObjectNode();

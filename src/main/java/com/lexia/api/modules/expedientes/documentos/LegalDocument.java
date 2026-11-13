@@ -65,13 +65,19 @@ public class LegalDocument implements Persistable<UUID> {
   @Column(length = 500)
   private String observacion;
 
-  /** EJ-2: la trae el tercero (vendedor persona jurídica); no pasa por OCR ni IA. */
+  /**
+   * EJ-2: la trae el tercero (vendedor persona jurídica). No entra al consolidado del expediente;
+   * EJ-3 la revisa aparte ({@code RevisionMinutaTerceroService}).
+   */
   public static final String TIPO_MINUTA_TERCERO = "MINUTA_COMPRAVENTA_TERCERO";
 
   /** EJ-4: roles de pago / soportes de ingresos; opcional en productos con compraventa. */
   public static final String TIPO_SOPORTE_INGRESOS = "SOPORTE_INGRESOS";
 
-  /** Se guardan y viajan a la notaría, pero no pasan por OCR, prevalidación ni IA. */
+  /**
+   * Se guardan y viajan a la notaría; no entran al OCR/IA del cotejo del expediente. La minuta de
+   * tercero tiene revisión IA dedicada (EJ-3); SOPORTE_INGRESOS no.
+   */
   public static boolean esSoloSoporte(String codigo) {
     return TIPO_MINUTA_TERCERO.equals(codigo) || TIPO_SOPORTE_INGRESOS.equals(codigo);
   }

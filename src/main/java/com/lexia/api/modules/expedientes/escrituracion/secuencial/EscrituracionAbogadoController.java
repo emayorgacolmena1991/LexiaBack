@@ -86,7 +86,11 @@ public class EscrituracionAbogadoController {
     return productos.detalle(code, canton);
   }
 
-  /** Índice de etapa y paso del wizard para retomar el flujo. Acepta UUID o código LEX-…. */
+  /**
+   * Índice de etapa y paso del wizard para retomar el flujo. Acepta UUID o código LEX-….
+   * Incluye observaciones abiertas de {@code title_observation} (cotejo E3 y EJ-3 minuta de
+   * tercero). GET documentos no las trae.
+   */
   @GetMapping("/expedientes/{id}/escrituracion/estado")
   public EstadoEscrituracion estado(@PathVariable String id) {
     return estado.estadoFlujo(id);

@@ -95,7 +95,8 @@ public class CargaDocumentoController {
     requirePermission(PERMISO_ESCRITURA);
     DocumentoCargadoDTO subido =
         cargaDocumentoService.subir(idExpediente, file, codigoTipoDocumento, observacion);
-    // Sin OCR no entra al consolidado del expediente (la revisión IA de la minuta de tercero es EJ-3).
+    // Soporte (minuta tercero / ingresos): no entra al consolidado OCR del expediente.
+    // EJ-3 dispara la revisión IA de la minuta de tercero desde CargaDocumentoService.subir.
     if (LegalDocument.esSoloSoporte(subido.codigoTipoDocumento())) {
       return ResponseEntity.status(HttpStatus.CREATED).body(DocumentoSubidoDTO.de(subido, null));
     }
