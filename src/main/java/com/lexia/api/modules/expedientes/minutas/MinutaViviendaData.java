@@ -913,9 +913,9 @@ public class MinutaViviendaData {
   public Map<String, Object> toTemplateMap() {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put("nombre_conyuge_1", blankToNodata(nombreConyuge1));
-    map.put("cedula_conyuge_1", blankToNodata(NumeroALetras.digitosALetras(cedulaConyuge1)));
+    map.put("cedula_conyuge_1", digitosConLetras(cedulaConyuge1));
     map.put("nombre_conyuge_2", blankToNodata(nombreConyuge2));
-    map.put("cedula_conyuge_2", blankToNodata(NumeroALetras.digitosALetras(cedulaConyuge2)));
+    map.put("cedula_conyuge_2", digitosConLetras(cedulaConyuge2));
     map.put("profesion_conyuge_1", blankToNodata(profesionConyuge1));
     map.put("profesion_conyuge_2", blankToNodata(profesionConyuge2));
     map.put("canton_domicilio", blankToNodata(cantonDomicilio));
@@ -947,12 +947,12 @@ public class MinutaViviendaData {
     map.put("cuota_credito", blankToNodata(cifra("cuota_credito", cuotaCredito)));
     map.put("institucion_financiera_original", blankToNodata(institucionFinancieraOriginal));
     map.put("direccion_deudor", blankToNodata(direccionDeudor));
-    map.put("telefono_deudor", blankToNodata(NumeroALetras.digitosALetras(telefonoDeudor)));
+    map.put("telefono_deudor", digitosConLetras(telefonoDeudor));
     map.put("correo_deudor", blankToNodata(correoDeudor));
     map.put("ciudad_firma", blankToNodata(ciudadFirma));
     map.put("fecha_firma", blankToNodata(fechaFirma));
     map.put("apoderado_biess", blankToNodata(apoderadoBiess));
-    map.put("cedula_apoderado_biess", blankToNodata(NumeroALetras.digitosALetras(cedulaApoderadoBiess)));
+    map.put("cedula_apoderado_biess", digitosConLetras(cedulaApoderadoBiess));
     map.put("nombre_vendedor", blankToNodata(nombreVendedor));
     map.put("cedula_vendedor", blankToNodata(cedulaVendedor));
     map.put("estado_civil_vendedor", blankToNodata(estadoCivilVendedor));
@@ -961,7 +961,7 @@ public class MinutaViviendaData {
     map.put("profesion_vendedor", blankToNodata(profesionVendedor));
     map.put("profesion_vendedor_2", blankToNodata(profesionVendedor2));
     map.put("direccion_vendedor", blankToNodata(direccionVendedor));
-    map.put("telefono_vendedor", blankToNodata(NumeroALetras.digitosALetras(telefonoVendedor)));
+    map.put("telefono_vendedor", digitosConLetras(telefonoVendedor));
     map.put("correo_vendedor", blankToNodata(correoVendedor));
     map.put("clave_catastral", blankToNodata(claveCatastral));
     map.put("avaluo_inmueble", blankToNodata(cifra("avaluo_inmueble", avaluoInmueble)));
@@ -981,8 +981,8 @@ public class MinutaViviendaData {
     map.put(
         "representacion_sociedad_conyugal_comprador",
         blankToNodata(representacionSociedadConyugalComprador));
-    map.put("celular_vendedor", blankToNodata(NumeroALetras.digitosALetras(celularVendedor)));
-    map.put("celular_comprador", blankToNodata(NumeroALetras.digitosALetras(celularComprador)));
+    map.put("celular_vendedor", digitosConLetras(celularVendedor));
+    map.put("celular_comprador", digitosConLetras(celularComprador));
     map.put("canton_notario_adquisicion", blankToNodata(cantonNotarioAdquisicion));
     map.put("nombre_adquirente_anterior", blankToNodata(nombreAdquirenteAnterior));
     map.put("estado_civil_adquirente_anterior", blankToNodata(estadoCivilAdquirenteAnterior));
@@ -1029,6 +1029,16 @@ public class MinutaViviendaData {
       return NODATA;
     }
     return t;
+  }
+
+  /** {@code 0954 (CERO NUEVE CINCO CUATRO)}; sin dígitos → nodata o el valor tal cual. */
+  static String digitosConLetras(String value) {
+    String t = nullToEmpty(value);
+    String letras = NumeroALetras.digitosALetras(t);
+    if (letras.isEmpty()) {
+      return blankToNodata(t);
+    }
+    return t + " (" + letras + ")";
   }
 
   /**

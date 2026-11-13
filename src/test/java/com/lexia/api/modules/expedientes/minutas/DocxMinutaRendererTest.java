@@ -178,8 +178,7 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("{{"), "Quedaron placeholders");
     assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
     assertTrue(text.contains("V_nombre_conyuge_1"));
-    assertTrue(text.contains(CEDULA_LETRAS));
-    assertFalse(text.contains(CEDULA));
+    assertTrue(text.contains(CEDULA + " (" + CEDULA_LETRAS + ")"));
     assertTrue(text.contains("V_nombre_afiliado"));
     assertTrue(text.contains("Plazo 300 meses,"));
     assertFalse(text.contains("meses meses"));
@@ -244,8 +243,9 @@ class DocxMinutaRendererTest {
     String text = renderYLeer(descriptor, data, "hipotecada_minuta_compraventa.docx");
 
     assertTrue(
-        text.contains("celular CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS"), text);
-    assertFalse(text.contains("0954656732"));
+        text.contains(
+            "celular 0954656732 (CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS)"),
+        text);
   }
 
   @Test
