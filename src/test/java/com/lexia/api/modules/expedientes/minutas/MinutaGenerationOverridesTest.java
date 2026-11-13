@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -228,8 +229,6 @@ class MinutaGenerationOverridesTest {
     assertEquals(VENDEDOR, mapper.readTree(nuevo.getOverrides()).path("nombre_vendedor").asText());
     assertEquals("", mapper.readTree(nuevo.getDatosExtraidos()).path("nombre_vendedor").asText());
 
-    ArgumentCaptor<DatosBiessMinuta> biess = ArgumentCaptor.forClass(DatosBiessMinuta.class);
-    verify(datosBiess).guardar(eq(TENANT), eq(CASO), biess.capture());
-    assertTrue(biess.getValue().monto().isEmpty(), "un override no debe escribirse como captura BIESS");
+    verify(datosBiess, never()).guardar(any(), any(), any());
   }
 }

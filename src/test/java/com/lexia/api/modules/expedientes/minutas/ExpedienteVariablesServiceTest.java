@@ -124,6 +124,19 @@ class ExpedienteVariablesServiceTest {
   }
 
   @Test
+  void camposDelActoSiempreIncluyeCapturaBiess() {
+    MinutaTemplateDescriptor preferencial =
+        plantillas.require(MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_PREF, "MINUTA_COMPRAVENTA");
+    var campos = service.camposDelActo(preferencial);
+    assertTrue(campos.contains("monto_prestamo"));
+    assertTrue(campos.contains("tasa_interes_inicial"));
+    assertTrue(campos.contains("plazo_credito"));
+    assertTrue(campos.contains("cuota_credito"));
+    assertTrue(campos.contains("apoderado_biess"));
+    assertTrue(campos.contains("monto_prestamo_letras"));
+  }
+
+  @Test
   void consolidadoListaPendientesSoloDeTagsEnPlantilla() {
     MinutaViviendaData data = new MinutaViviendaData();
     data.setNombreConyuge1("JUAN PEREZ");
@@ -156,8 +169,8 @@ class ExpedienteVariablesServiceTest {
 
     assertEquals("6.5", out.get("tasa_interes_inicial"));
     assertEquals("85000", out.get("monto_prestamo"), "alias → canónico");
+    assertEquals("450.5", out.get("cuota_credito"), "campo BIESS siempre permitido");
     assertFalse(out.containsKey("campo_inventado"));
-    assertFalse(out.containsKey("cuota_credito"), "tag válido pero ajeno a este acto");
   }
 
   @Test

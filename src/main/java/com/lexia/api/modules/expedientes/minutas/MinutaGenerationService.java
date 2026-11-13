@@ -414,8 +414,8 @@ public class MinutaGenerationService {
     byte[] docx = renderer.renderVivienda(descriptor, data);
     MinutaDraft draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
     guardarRender(draft, descriptor, docx, base, data, overrides);
-    // Los overrides no entran a la tienda BIESS: solo guarda la captura.
-    datosBiess.guardar(tenantId, caseId, DatosBiessMinuta.from(base));
+    // La captura BIESS vive solo en extracted_data (grupo biess). No reescribirla desde
+    // la extracción del expediente: eso borraba monto/tasa/plazo/cuota/apoderado al generar.
 
     List<String> pendientes = pendientes(descriptor, data);
     LOG.info(

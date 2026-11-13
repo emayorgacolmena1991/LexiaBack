@@ -33,6 +33,8 @@ public final class NumeroALetras {
   };
 
   private static final Pattern PREFIJO_MONEDA = Pattern.compile("(?i)^(USD|US\\$|\\$)+");
+  /** Capturas BIESS traen sufijo: {@code $ 84,500.00 USD}. */
+  private static final Pattern SUFIJO_MONEDA = Pattern.compile("(?i)(USD|US\\$|D[OÓ]LARES?)$");
   private static final Pattern SOLO_CIFRA = Pattern.compile("[0-9.,]+");
   private static final Pattern ENTERO_SIN_GRUPOS = Pattern.compile("\\d+");
   private static final Pattern ENTERO_AGRUPADO = Pattern.compile("\\d{1,3}(?:([.,])\\d{3})(?:\\1\\d{3})*");
@@ -85,6 +87,7 @@ public final class NumeroALetras {
     }
     String s = raw.replaceAll("[\\s\\u00A0]", "");
     s = PREFIJO_MONEDA.matcher(s).replaceFirst("");
+    s = SUFIJO_MONEDA.matcher(s).replaceFirst("");
     if (s.isEmpty() || !SOLO_CIFRA.matcher(s).matches() || !s.matches(".*\\d.*")) {
       return Optional.empty();
     }

@@ -77,6 +77,8 @@ class NumeroALetrasTest {
     assertEquals(new BigDecimal("85000.00"), NumeroALetras.parsearMonto("85,000.00").orElseThrow());
     assertEquals(new BigDecimal("85000.50"), NumeroALetras.parsearMonto("85.000,50").orElseThrow());
     assertEquals(new BigDecimal("85000"), NumeroALetras.parsearMonto("85.000").orElseThrow());
+    assertEquals(new BigDecimal("84500.00"), NumeroALetras.parsearMonto("$ 84,500.00 USD").orElseThrow());
+    assertEquals(new BigDecimal("498.50"), NumeroALetras.parsearMonto("$ 498.50 USD").orElseThrow());
     assertTrue(NumeroALetras.parsearMonto(null).isEmpty());
   }
 }
