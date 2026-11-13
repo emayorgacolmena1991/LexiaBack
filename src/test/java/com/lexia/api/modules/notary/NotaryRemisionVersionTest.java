@@ -268,6 +268,15 @@ class NotaryRemisionVersionTest {
         .thenReturn(docs);
   }
 
+  /** Escritura sin tipo y roles de pago SOPORTE_INGRESOS. */
+  private void documentosConSoporteDeIngresos() {
+    when(documentosCaso.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(CASO, FIRMA))
+        .thenReturn(
+            List.of(
+                LegalDocument.create(FIRMA, CASO, "escritura.pdf", null),
+                LegalDocument.create(FIRMA, CASO, "roles.pdf", LegalDocument.TIPO_SOPORTE_INGRESOS)));
+  }
+
   /** Primer envío con minuta generada y un documento. */
   private NotaryDtos.RemisionDto enviada() {
     estudio("APPROVED");
@@ -619,7 +628,7 @@ class NotaryRemisionVersionTest {
   /** Envío cuya minuta trae fecha de nacimiento del comprador. */
   private UUID enviadaConPayload(String payload) {
     estudio("APPROVED");
-    documentosDelCaso("escritura.pdf");
+    documentosConSoporteDeIngresos();
     MinutaDraft minuta = draft("MINUTA_COMPRAVENTA", payload, MINUTA);
     when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
         .thenReturn(List.of(minuta));
@@ -642,13 +651,44 @@ class NotaryRemisionVersionTest {
   }
 
   @Test
-  void alertasSinFechaDeNacimientoSoloAvisanQueFaltaElDato() {
+  void alertasSinFechaNiSoporteAvisanDatoYFondos() {
     UUID id = enviada().id();
 
     assertThat(service.alertas(id))
         .extracting(NotaryDtos.AlertaDto::codigo)
-        .containsExactly(NotaryAlertas.DATO_EDAD_NO_DISPONIBLE);
+        .containsExactly(NotaryAlertas.DATO_EDAD_NO_DISPONIBLE, NotaryAlertas.FONDOS_SIN_SOPORTE);
     assertThat(service.getRemision(id).alertasTarifaImpuestos()).isFalse();
+  }
+
+  @Test
+  void elSnapshotGuardaElTipoDeCadaDocumentoYLoExpone() {
+    UUID id = enviadaConPayload(PAYLOAD);
+
+    assertThat(documentosGuardados)
+        .extracting(NotaryRemisionDocument::getDocType)
+        .containsExactly(null, LegalDocument.TIPO_SOPORTE_INGRESOS);
+    sesion(NOTARIA);
+    assertThat(service.getRemision(id).documentos())
+        .extracting(NotaryDtos.RemisionDocumentDto::tipoDocumento)
+        .containsExactly(null, LegalDocument.TIPO_SOPORTE_INGRESOS);
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .doesNotContain(NotaryAlertas.FONDOS_SIN_SOPORTE);
+  }
+
+  @Test
+  void fondosSoloCuentanLosSoportesDeLaVersionVigente() {
+    UUID id = enviadaConPayload(PAYLOAD);
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .doesNotContain(NotaryAlertas.FONDOS_SIN_SOPORTE);
+
+    borradorCorregido();
+    editar(id);
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .contains(NotaryAlertas.FONDOS_SIN_SOPORTE);
   }
 
   @Test
@@ -748,7 +788,7 @@ class NotaryRemisionVersionTest {
     UUID id = enviar().id();
     NotaryRemisionDocument anterior =
         NotaryRemisionDocument.of(
-            id, versionGuardada().getId(), FIRMA, v1.getId(), "cedula.pdf", 0, null, "Incluido", null);
+            id, versionGuardada().getId(), FIRMA, v1.getId(), "cedula.pdf", 0, null, "Incluido", null, null);
     leible(id, anterior);
 
     sesion(NOTARIA);

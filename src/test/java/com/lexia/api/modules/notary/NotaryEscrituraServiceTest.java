@@ -22,6 +22,7 @@ import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
 import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.expedientes.minutas.MinutaTemplateCatalog;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
+import com.lexia.api.modules.expedientes.minutas.NumeroALetras;
 import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
@@ -329,19 +330,20 @@ class NotaryEscrituraServiceTest {
     String texto = textoXml(partes(docx(escritura)));
     assertThat(texto)
         .doesNotContain("{{")
-        .contains("cero nueve dos dos cinco cinco dos cuatro ocho – cuatro (092255248-4)")
+        .contains("092255248-4 (" + NumeroALetras.digitosALetras("092255248-4") + ")")
         .contains(
-            "CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
+            "es de USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
         .contains(
-            "OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
+            "b) USD 85.000,50 (OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
         .contains(
-            "CUANTÍA: CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
+            "CUANTÍA: USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
         .contains(
-            "CUANTÍA: OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
-        .doesNotContain("CUANTÍA: USD")
-        .contains("ochenta y cuatro metros cuadrados (84,00 m²)")
-        .contains("sesenta – dos mil trescientos ochenta y siete – cero trece – cero – cero – cero")
-        .contains("otorgada el treinta y uno de marzo de dos mil veintiséis (31/03/2026)")
+            "CUANTÍA: USD 85.000,50 (OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+        .contains("84,00 m² (OCHENTA Y CUATRO METROS CUADRADOS)")
+        .contains(
+            "60-2387-013-0-0-0 (SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE – CERO"
+                + " – CERO – CERO)")
+        .contains("otorgada el 31/03/2026 (TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS)")
         .contains("a los veinte días del mes de agosto de dos mil veintiséis")
         .contains("C.C. 092255248-4");
   }

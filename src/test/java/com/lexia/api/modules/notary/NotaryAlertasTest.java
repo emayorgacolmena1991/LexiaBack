@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.Test;
 class NotaryAlertasTest {
 
   private static final LocalDate OTORGAMIENTO = LocalDate.of(2026, 8, 20);
+  /** Versión con soporte de ingresos: las pruebas de edad no ven FONDOS_SIN_SOPORTE. */
+  private static final List<String> CON_SOPORTE = List.of("CEDULA", LegalDocument.TIPO_SOPORTE_INGRESOS);
 
   private final ObjectMapper mapper = new ObjectMapper();
 
@@ -33,7 +36,7 @@ class NotaryAlertasTest {
   }
 
   private static List<NotaryDtos.AlertaDto> calcular(ObjectNode payload) {
-    return NotaryAlertas.calcular(payload, () -> OTORGAMIENTO);
+    return NotaryAlertas.calcular(payload, () -> OTORGAMIENTO, CON_SOPORTE);
   }
 
   private static List<String> codigos(List<NotaryDtos.AlertaDto> alertas) {
@@ -142,14 +145,40 @@ class NotaryAlertasTest {
         () -> {
           consultas.incrementAndGet();
           return OTORGAMIENTO;
-        });
+        },
+        CON_SOPORTE);
 
     assertEquals(0, consultas.get());
   }
 
   @Test
-  void payloadVacioOMigradoNoTieneAlertas() {
-    assertThat(NotaryAlertas.calcular(mapper.createObjectNode(), () -> OTORGAMIENTO)).isEmpty();
-    assertThat(NotaryAlertas.calcular(null, () -> OTORGAMIENTO)).isEmpty();
+  void payloadVacioOMigradoNoTieneAlertasDePersonas() {
+    assertThat(NotaryAlertas.calcular(mapper.createObjectNode(), () -> OTORGAMIENTO, CON_SOPORTE))
+        .isEmpty();
+    assertThat(NotaryAlertas.calcular(null, () -> OTORGAMIENTO, CON_SOPORTE)).isEmpty();
+  }
+
+  @Test
+  void sinSoporteDeIngresosAvisaFondosSinJuzgarSiAlcanzan() {
+    List<String> sinSoporte = new java.util.ArrayList<>(List.of("CEDULA"));
+    sinSoporte.add(null);
+
+    List<NotaryDtos.AlertaDto> alertas =
+        NotaryAlertas.calcular(conFechas("1990-01-01", "1991-01-01"), () -> OTORGAMIENTO, sinSoporte);
+
+    assertThat(codigos(alertas)).containsExactly(NotaryAlertas.FONDOS_SIN_SOPORTE);
+    NotaryDtos.AlertaDto fondos = alertas.get(0);
+    assertEquals(NotaryAlertas.NIVEL_AVISO, fondos.nivel());
+    assertEquals(
+        "El bufete no adjuntó soportes de ingresos; verifique el origen de los fondos",
+        fondos.detalle());
+    assertThat(fondos.personas()).isEmpty();
+    assertThat(NotaryAlertas.conTarifaOImpuestos(alertas)).isFalse();
+  }
+
+  @Test
+  void fondosSinSoporteTambienSinPayloadNiDocumentos() {
+    assertThat(codigos(NotaryAlertas.calcular(null, () -> OTORGAMIENTO, List.of())))
+        .containsExactly(NotaryAlertas.FONDOS_SIN_SOPORTE);
   }
 }

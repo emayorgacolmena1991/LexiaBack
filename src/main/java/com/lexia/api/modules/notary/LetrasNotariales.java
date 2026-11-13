@@ -19,10 +19,11 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * Cifras de la escritura notarial también en letras, con el formato del texto notarial: {@code
- * letras (número)}. Completa a {@link NumeroALetras} (solo montos, con apócope) con lo que la
- * escritura necesita: dígito por dígito, cardinales sin apócope, fechas, superficies y clave
- * catastral. Cada tag numérico {@code x} de la plantilla tiene su derivado {@code x_completo}.
+ * Cifras de la escritura notarial también en letras, con el formato de la minuta del bufete:
+ * {@code número (letras)}. Cédulas, teléfonos y montos usan el mismo conversor que el bufete
+ * ({@link NumeroALetras#digitosALetras}, {@link NumeroALetras#montoBancario}); superficies, fechas
+ * y clave catastral, que el bufete no convierte, usan la lógica de esta clase. Cada tag numérico
+ * {@code x} de la plantilla tiene su derivado {@code x_completo}.
  */
 final class LetrasNotariales {
 
@@ -76,9 +77,7 @@ final class LetrasNotariales {
     CONVERSIONES.put("fecha_otorgamiento", Tipo.FECHA_OTORGAMIENTO);
   }
 
-  private static final String[] DIGITO = {
-    "cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"
-  };
+  private static final Locale ES = Locale.forLanguageTag("es");
   private static final String[] MESES = {
     "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
     "octubre", "noviembre", "diciembre"
@@ -86,7 +85,9 @@ final class LetrasNotariales {
   private static final Pattern LETRA = Pattern.compile("\\p{L}");
   private static final Pattern NUMERO_DIGITOS =
       Pattern.compile("\\+?\\d[\\d ]*(?:\\s*[-–]\\s*\\d[\\d ]*)*");
-  private static final Pattern SEPARADOR_DIGITOS = Pattern.compile("\\s*[-–]\\s*");
+  /** Formato de {@code MinutaViviendaData.digitosConLetras}: «número (LETRAS EN MAYÚSCULAS)». */
+  private static final Pattern CON_LETRAS_DEL_BUFETE =
+      Pattern.compile("(.*\\d.*?) \\(([A-ZÁÉÍÓÚÑ ]+)\\)");
   private static final Pattern CLAVE =
       Pattern.compile("\\d+(?:\\s*[-–—./]\\s*\\d+|\\s+\\d+)*");
   private static final Pattern SEPARADOR_CLAVE = Pattern.compile("\\s*[-–—./]\\s*|\\s+");
@@ -158,29 +159,22 @@ final class LetrasNotariales {
     };
   }
 
-  /** «cero nueve dos … ocho – cuatro (092255248-4)»: el guion se conserva. */
+  /**
+   * Igual que la minuta del bufete ({@code MinutaViviendaData.digitosConLetras}): el número tal
+   * cual y sus dígitos con {@link NumeroALetras#digitosALetras}: «0956856306 (CERO NUEVE …)».
+   */
   static Optional<String> digitos(String valor) {
     String t = valor.trim();
     if (!NUMERO_DIGITOS.matcher(t).matches()) {
       return Optional.empty();
     }
-    List<String> grupos = new ArrayList<>();
-    for (String grupo : SEPARADOR_DIGITOS.split(t.replace("+", ""))) {
-      List<String> palabras = new ArrayList<>();
-      for (char c : grupo.toCharArray()) {
-        if (Character.isDigit(c)) {
-          palabras.add(DIGITO[c - '0']);
-        }
-      }
-      grupos.add(String.join(" ", palabras));
-    }
-    String letras = (t.startsWith("+") ? "más " : "") + String.join(" – ", grupos);
-    return Optional.of(letras + " (" + t + ")");
+    return Optional.of(t + " (" + NumeroALetras.digitosALetras(t) + ")");
   }
 
   /**
-   * «CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)». Las
-   * letras son las del payload; si no vienen, las de {@link NumeroALetras#monto(BigDecimal)}.
+   * «USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)». Las
+   * letras son las del payload (el bufete las arma con {@link NumeroALetras#montoBancario}); si no
+   * vienen, las mismas de {@code montoBancario}.
    */
   static Optional<String> monto(String valor, String letrasPayload) {
     Optional<BigDecimal> cifra = NumeroALetras.parsearMonto(valor);
@@ -190,17 +184,32 @@ final class LetrasNotariales {
     BigDecimal monto = cifra.get().setScale(2, RoundingMode.HALF_UP);
     String letras =
         letrasPayload == null || letrasPayload.isBlank()
-            ? NumeroALetras.monto(monto)
+            ? NumeroALetras.montoBancario(monto)
             : letrasPayload.trim();
     letras = SUFIJO_DOLARES.matcher(letras).replaceFirst("").trim();
     if (!letras.contains("/100")) {
       letras += String.format(" con %02d/100", centesimos(monto));
     }
     return Optional.of(
-        letras.toUpperCase(Locale.ROOT) + " " + DOLARES + " (USD " + cifra(monto) + ")");
+        "USD " + cifra(monto) + " (" + letras.toUpperCase(Locale.ROOT) + " " + DOLARES + ")");
   }
 
-  /** «ochenta metros cuadrados con ochenta decímetros cuadrados (80,80 m²)». */
+  /**
+   * Cédula o teléfono que {@code toTemplateMap()} ya trae como «0956 (CERO NUEVE CINCO SEIS)»:
+   * devuelve solo el número, para las firmas y para armar su {@code _completo}. Otro valor, igual.
+   */
+  static Object soloNumero(String tag, Object valor) {
+    if (CONVERSIONES.get(tag) != Tipo.DIGITOS || !(valor instanceof String texto)) {
+      return valor;
+    }
+    var partes = CON_LETRAS_DEL_BUFETE.matcher(texto.trim());
+    if (partes.matches() && partes.group(2).equals(NumeroALetras.digitosALetras(partes.group(1)))) {
+      return partes.group(1).trim();
+    }
+    return valor;
+  }
+
+  /** «84,00 m² (OCHENTA METROS CUADRADOS CON OCHENTA DECÍMETROS CUADRADOS)». */
   static Optional<String> superficie(String valor) {
     String numero = UNIDAD_SUPERFICIE.matcher(valor.trim()).replaceFirst("").trim();
     Optional<BigDecimal> cifra = NumeroALetras.parsearMonto(numero);
@@ -219,37 +228,34 @@ final class LetrasNotariales {
           .append(NumeroALetras.entero(decimetros))
           .append(decimetros == 1 ? " decímetro cuadrado" : " decímetros cuadrados");
     }
-    return Optional.of(letras + " (" + cifra(area) + " m²)");
+    return Optional.of(cifra(area) + " m² (" + mayusculas(letras.toString()) + ")");
   }
 
-  /** «sesenta – dos mil trescientos ochenta y siete – cero trece (60-2387-013)». */
+  /** «60-2387-013 (SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE)». */
   static Optional<String> claveCatastral(String valor) {
     String t = valor.trim();
     if (!CLAVE.matcher(t).matches()) {
       return Optional.empty();
     }
     String[] segmentos = SEPARADOR_CLAVE.split(t);
-    if (segmentos.length == 1) {
-      return digitos(t);
-    }
     List<String> letras = new ArrayList<>();
-    for (String segmento : segmentos) {
-      letras.add(segmento(segmento));
+    if (segmentos.length == 1) {
+      // Sin separadores: dígito por dígito, no un cardinal de doce cifras.
+      letras.add(NumeroALetras.digitosALetras(t));
+    } else {
+      for (String segmento : segmentos) {
+        letras.add(segmento(segmento));
+      }
     }
-    return Optional.of(String.join(" – ", letras) + " (" + t + ")");
+    return Optional.of(t + " (" + mayusculas(String.join(" – ", letras)) + ")");
   }
 
-  /** «treinta y uno de marzo de dos mil veintiséis (31/03/2026)»; el día 1 es «primero». */
+  /** «31/03/2026 (TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS)»; el día 1 es «PRIMERO». */
   static String fecha(LocalDate fecha) {
     String dia = fecha.getDayOfMonth() == 1 ? "primero" : cardinal(fecha.getDayOfMonth());
-    return dia
-        + " de "
-        + MESES[fecha.getMonthValue() - 1]
-        + " de "
-        + cardinal(fecha.getYear())
-        + " ("
-        + FECHA_CORTA.format(fecha)
-        + ")";
+    String letras =
+        dia + " de " + MESES[fecha.getMonthValue() - 1] + " de " + cardinal(fecha.getYear());
+    return FECHA_CORTA.format(fecha) + " (" + mayusculas(letras) + ")";
   }
 
   /**
@@ -297,10 +303,15 @@ final class LetrasNotariales {
     return letras;
   }
 
+  /** Letras en mayúsculas, como las del bufete ({@link NumeroALetras#montoBancario}). */
+  private static String mayusculas(String letras) {
+    return letras.toUpperCase(ES);
+  }
+
   /** Ceros a la izquierda uno por uno: «013» → «cero trece». */
   private static String segmento(String segmento) {
     if (segmento.length() > 12) {
-      return digitos(segmento).map(s -> s.substring(0, s.indexOf(" ("))).orElse(segmento);
+      return NumeroALetras.digitosALetras(segmento);
     }
     int ceros = 0;
     while (ceros < segmento.length() && segmento.charAt(ceros) == '0') {

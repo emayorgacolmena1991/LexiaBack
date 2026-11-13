@@ -321,7 +321,9 @@ public class NotaryEscrituraService {
         .forEach(
             (clave, valor) -> {
               if (!MinutaViviendaData.isMissing(valor)) {
-                base.put(clave, valor);
+                // Cédulas y teléfonos llegan «número (LETRAS)»: firmas solo número, x_completo
+                // vuelve a armar las letras con el mismo conversor del bufete.
+                base.put(clave, LetrasNotariales.soloNumero(clave, valor));
               }
             });
     return base;

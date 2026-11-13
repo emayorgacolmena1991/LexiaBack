@@ -41,6 +41,10 @@ public class NotaryRemisionDocument {
   @Column(name = "storage_key", length = 512)
   private String storageKey;
 
+  /** {@code app.document.doc_type} al enviar (V105); {@code null} sin tipo o fila sin backfill. */
+  @Column(name = "doc_type", length = 80)
+  private String docType;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -55,7 +59,8 @@ public class NotaryRemisionDocument {
       int sortOrder,
       Long sizeBytes,
       String statusLabel,
-      String storageKey) {
+      String storageKey,
+      String docType) {
     NotaryRemisionDocument d = new NotaryRemisionDocument();
     d.id = UUID.randomUUID();
     d.remisionId = remisionId;
@@ -67,6 +72,7 @@ public class NotaryRemisionDocument {
     d.sizeBytes = sizeBytes;
     d.statusLabel = statusLabel;
     d.storageKey = storageKey;
+    d.docType = docType;
     d.createdAt = Instant.now();
     return d;
   }
@@ -109,5 +115,9 @@ public class NotaryRemisionDocument {
 
   public String getStorageKey() {
     return storageKey;
+  }
+
+  public String getDocType() {
+    return docType;
   }
 }
