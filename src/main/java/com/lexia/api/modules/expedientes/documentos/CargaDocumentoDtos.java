@@ -51,11 +51,35 @@ public final class CargaDocumentoDtos {
       String codigoTipoDocumento,
       String tipoSugerido,
       String clasificacionEstado,
-      String clasificacionOrigen) {
+      String clasificacionOrigen,
+      String subidoPor,
+      java.time.Instant subidoEn,
+      String observacion) {
 
     public DocumentoCargadoDTO(
         String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {
       this(idDocumento, nombreOriginal, tamano, codigoTipoDocumento, null, null, null);
+    }
+
+    public DocumentoCargadoDTO(
+        String idDocumento,
+        String nombreOriginal,
+        String tamano,
+        String codigoTipoDocumento,
+        String tipoSugerido,
+        String clasificacionEstado,
+        String clasificacionOrigen) {
+      this(
+          idDocumento,
+          nombreOriginal,
+          tamano,
+          codigoTipoDocumento,
+          tipoSugerido,
+          clasificacionEstado,
+          clasificacionOrigen,
+          null,
+          null,
+          null);
     }
 
     /** Mismo valor que {@code codigoTipoDocumento}, con el nombre que usa el resto del API. */

@@ -164,11 +164,31 @@ public class CargaDocumentoService {
   }
 
   public DocumentoCargadoDTO subir(String idExpediente, MultipartFile file) {
+    return subir(idExpediente, file, null, null);
+  }
+
+  /**
+   * {@code codigoTipo}: casilla con tipo fijo (p. ej. minuta de tercero); solo en expediente
+   * persistido y si el producto lo admite. Se valida antes de leer el archivo.
+   */
+  public DocumentoCargadoDTO subir(
+      String idExpediente, MultipartFile file, String codigoTipo, String observacion) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    boolean conTipo = StringUtils.hasText(codigoTipo);
+    if (observacion != null && observacion.trim().length() > 500) {
+      throw ApiException.badRequest("La observación admite hasta 500 caracteres.");
+    }
     if (official != null) {
+      if (conTipo) {
+        exigirTipoPermitido(idExpediente, codigoTipo.trim());
+      }
       byte[] bytes = readBytes(file, official.ingestionMode());
       String original = originalName(file);
-      return caseDocs.subir(official, original, file.getContentType(), bytes);
+      return caseDocs.subir(
+          official, original, file.getContentType(), bytes, conTipo ? codigoTipo.trim() : null, observacion);
+    }
+    if (conTipo) {
+      throw ApiException.badRequest("Guarda el expediente antes de cargar en esta casilla.");
     }
     DraftExpediente draft = requireDraft(idExpediente);
     if (draft.locked()) {
@@ -522,13 +542,7 @@ public class CargaDocumentoService {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
     if (official != null) {
       String codigo = body.codigoTipoDocumento().trim();
-      Set<String> permitidos =
-          tiposPermitidos(idExpediente).stream()
-              .map(TipoPermitidoDTO::codigo)
-              .collect(java.util.stream.Collectors.toSet());
-      if (!permitidos.isEmpty() && !permitidos.contains(codigo)) {
-        throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
-      }
+      exigirTipoPermitido(idExpediente, codigo);
       return caseDocs.actualizarTipo(official, idDocumento, codigo);
     }
     DraftExpediente draft = requireDraft(idExpediente);
@@ -540,17 +554,35 @@ public class CargaDocumentoService {
       throw ApiException.notFound("Documento no encontrado: " + idDocumento);
     }
     String codigo = body.codigoTipoDocumento().trim();
-    Set<String> permitidos =
-        tiposPermitidos(idExpediente).stream()
-            .map(TipoPermitidoDTO::codigo)
-            .collect(java.util.stream.Collectors.toSet());
-    if (!permitidos.isEmpty() && !permitidos.contains(codigo)) {
-      throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
-    }
+    exigirTipoPermitido(idExpediente, codigo);
     StoredDoc updated = doc.withTipo(codigo);
     draft.documentos().put(idDocumento, updated);
     draft.marcarManual(idDocumento);
     return new TipoActualizadoDTO(idDocumento, codigo, "CLASIFICADO");
+  }
+
+  /**
+   * La minuta de tercero solo existe en productos con vendedor persona jurídica: fuera del
+   * catálogo del producto se rechaza aunque el catálogo esté vacío. SOPORTE_INGRESOS va como
+   * requisito opcional de productos con compraventa (V104); si no está en el catálogo, se rechaza.
+   */
+  private void exigirTipoPermitido(String idExpediente, String codigo) {
+    Set<String> permitidos =
+        tiposPermitidos(idExpediente).stream()
+            .map(TipoPermitidoDTO::codigo)
+            .collect(java.util.stream.Collectors.toSet());
+    boolean libre = permitidos.isEmpty() && !LegalDocument.TIPO_MINUTA_TERCERO.equals(codigo);
+    if (!libre && !permitidos.contains(codigo)) {
+      throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
+    }
+  }
+
+  /** Lectura del contenido por el bufete: solo se auditan los documentos de soporte. */
+  public void registrarVista(String idExpediente, StoredDoc doc) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null && LegalDocument.esSoloSoporte(doc.codigoTipoDocumento())) {
+      caseDocs.registrarVista(official, doc.idDocumento());
+    }
   }
 
   public void eliminar(String idExpediente, String idDocumento) {

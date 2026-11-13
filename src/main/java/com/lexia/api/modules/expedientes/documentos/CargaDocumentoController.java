@@ -88,9 +88,17 @@ public class CargaDocumentoController {
       value = "/{idExpediente}/documentos/upload",
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public ResponseEntity<DocumentoSubidoDTO> subir(
-      @PathVariable String idExpediente, @RequestParam("file") MultipartFile file) {
+      @PathVariable String idExpediente,
+      @RequestParam("file") MultipartFile file,
+      @RequestParam(value = "codigoTipoDocumento", required = false) String codigoTipoDocumento,
+      @RequestParam(value = "observacion", required = false) String observacion) {
     requirePermission(PERMISO_ESCRITURA);
-    DocumentoCargadoDTO subido = cargaDocumentoService.subir(idExpediente, file);
+    DocumentoCargadoDTO subido =
+        cargaDocumentoService.subir(idExpediente, file, codigoTipoDocumento, observacion);
+    // Sin OCR no entra al consolidado del expediente (la revisión IA de la minuta de tercero es EJ-3).
+    if (LegalDocument.esSoloSoporte(subido.codigoTipoDocumento())) {
+      return ResponseEntity.status(HttpStatus.CREATED).body(DocumentoSubidoDTO.de(subido, null));
+    }
     // El archivo ya quedó guardado: si el OCR falla, el upload igual responde 201 con ocrOk=false.
     Boolean ocrOk = ocr.ocrTrasSubir(idExpediente, subido.idDocumento());
     return ResponseEntity.status(HttpStatus.CREATED).body(DocumentoSubidoDTO.de(subido, ocrOk));
@@ -102,6 +110,7 @@ public class CargaDocumentoController {
       @PathVariable String idExpediente, @PathVariable String idDocumento) {
     requirePermission(PERMISO_LECTURA);
     StoredDoc doc = cargaDocumentoService.requireStoredDoc(idExpediente, idDocumento);
+    cargaDocumentoService.registrarVista(idExpediente, doc);
     ContentDisposition disposition =
         ContentDisposition.attachment()
             .filename(doc.nombreOriginal(), StandardCharsets.UTF_8)

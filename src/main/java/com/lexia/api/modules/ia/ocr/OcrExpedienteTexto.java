@@ -1,5 +1,6 @@
 package com.lexia.api.modules.ia.ocr;
 
+import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
 import java.util.ArrayList;
 import java.util.List;
@@ -10,6 +11,7 @@ import org.springframework.util.StringUtils;
 /**
  * Une el texto OCR ya extraído por archivo. No fusiona PDFs.
  * Cada archivo sigue siendo un {@code <documento id="...">} dentro del payload a Claude.
+ * Los tipos {@link LegalDocument#esSoloSoporte} (minuta de tercero, SOPORTE_INGRESOS) no entran.
  */
 public final class OcrExpedienteTexto {
 
@@ -45,6 +47,7 @@ public final class OcrExpedienteTexto {
     List<DocOcr> docs =
         results.stream()
             .filter(r -> r != null && r.legible() && StringUtils.hasText(r.textoExtraido()))
+            .filter(r -> !LegalDocument.esSoloSoporte(r.tipoDocumento()))
             .map(
                 r ->
                     new DocOcr(
@@ -62,6 +65,10 @@ public final class OcrExpedienteTexto {
     int n = 0;
     for (DocOcr doc : docs) {
       if (doc == null || !StringUtils.hasText(doc.texto())) {
+        continue;
+      }
+      // EJ-4 / EJ-2: no mandar soportes de notaría al análisis IA (también vía loadOcrMarcado).
+      if (LegalDocument.esSoloSoporte(doc.tipo())) {
         continue;
       }
       n++;

@@ -59,6 +59,23 @@ public class LegalDocument implements Persistable<UUID> {
   @Column(name = "clasificado_en")
   private Instant clasificadoEn;
 
+  @Column(name = "uploaded_by")
+  private UUID uploadedBy;
+
+  @Column(length = 500)
+  private String observacion;
+
+  /** EJ-2: la trae el tercero (vendedor persona jurídica); no pasa por OCR ni IA. */
+  public static final String TIPO_MINUTA_TERCERO = "MINUTA_COMPRAVENTA_TERCERO";
+
+  /** EJ-4: roles de pago / soportes de ingresos; opcional en productos con compraventa. */
+  public static final String TIPO_SOPORTE_INGRESOS = "SOPORTE_INGRESOS";
+
+  /** Se guardan y viajan a la notaría, pero no pasan por OCR, prevalidación ni IA. */
+  public static boolean esSoloSoporte(String codigo) {
+    return TIPO_MINUTA_TERCERO.equals(codigo) || TIPO_SOPORTE_INGRESOS.equals(codigo);
+  }
+
   public static final String ORIGEN_AUTO = "AUTO";
   public static final String ORIGEN_MANUAL = "MANUAL";
   public static final String ESTADO_PENDIENTE = "PENDIENTE";
@@ -215,6 +232,19 @@ public class LegalDocument implements Persistable<UUID> {
 
   public Instant getClasificadoEn() {
     return clasificadoEn;
+  }
+
+  public UUID getUploadedBy() {
+    return uploadedBy;
+  }
+
+  public String getObservacion() {
+    return observacion;
+  }
+
+  public void registrarCarga(UUID uploadedBy, String observacion) {
+    this.uploadedBy = uploadedBy;
+    this.observacion = observacion;
   }
 
   public void softDelete() {

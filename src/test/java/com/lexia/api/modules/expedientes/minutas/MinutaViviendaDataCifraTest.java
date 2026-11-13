@@ -48,6 +48,15 @@ class MinutaViviendaDataCifraTest {
   }
 
   @Test
+  void digitosConLetrasConcatenaNumeroYLectura() {
+    assertEquals(
+        "0954656732 (CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS)",
+        MinutaViviendaData.digitosConLetras("0954656732"));
+    assertEquals("nodata", MinutaViviendaData.digitosConLetras(""));
+    assertEquals("abc", MinutaViviendaData.digitosConLetras("abc"));
+  }
+
+  @Test
   void elLocaleDelServidorNoCambiaElResultado() {
     Locale anterior = Locale.getDefault();
     try {

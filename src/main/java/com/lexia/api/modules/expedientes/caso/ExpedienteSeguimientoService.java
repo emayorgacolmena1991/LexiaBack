@@ -143,6 +143,21 @@ public class ExpedienteSeguimientoService {
   }
 
   @Transactional
+  public void documentoVisto(UUID caseId, UUID tenantId, UUID documentId) {
+    AuthPrincipal auth = AuthContext.get();
+    auditEvents.save(
+        AuditEvent.of(
+            tenantId,
+            auth == null ? null : auth.userId(),
+            "DOCUMENTO_VISTO:" + documentId,
+            OBJETO,
+            caseId,
+            "OK",
+            null,
+            null));
+  }
+
+  @Transactional
   public void registrarAnalisisSiExpediente(String rawId) {
     CaseFileContext ctx = caseDocs.context(rawId);
     if (ctx == null) {
@@ -308,7 +323,7 @@ public class ExpedienteSeguimientoService {
     return ctx;
   }
 
-  private String actor(UUID userId) {
+  public String actor(UUID userId) {
     if (userId == null) {
       return "Sistema";
     }

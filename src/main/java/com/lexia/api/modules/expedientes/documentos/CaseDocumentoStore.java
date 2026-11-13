@@ -92,11 +92,17 @@ public class CaseDocumentoStore {
   @Transactional(readOnly = true)
   public List<DocumentoCargadoDTO> listar(CaseFileContext ctx) {
     List<DocumentoCargadoDTO> rows = new ArrayList<>();
+    ExpedienteSeguimientoService nombres = seguimiento.getIfAvailable();
+    Map<UUID, String> autores = new java.util.HashMap<>();
     for (LegalDocument doc :
         documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
             ctx.caseId(), ctx.tenantId())) {
       DocumentVersion version = latest(doc.getId(), ctx.tenantId());
       long bytes = version == null ? 0 : storage.size(version.getStorageKey());
+      String autor =
+          doc.getUploadedBy() == null || nombres == null
+              ? null
+              : autores.computeIfAbsent(doc.getUploadedBy(), nombres::actor);
       rows.add(
           new DocumentoCargadoDTO(
               doc.getId().toString(),
@@ -105,13 +111,28 @@ public class CaseDocumentoStore {
               doc.getDocType(),
               doc.getTipoSugerido(),
               doc.getClasificacionEstado(),
-              doc.getClasificacionOrigen()));
+              doc.getClasificacionOrigen(),
+              autor,
+              doc.getCreatedAt(),
+              doc.getObservacion()));
     }
     return rows;
   }
 
   @Transactional
   public DocumentoCargadoDTO subir(CaseFileContext ctx, String original, String mime, byte[] bytes) {
+    return subir(ctx, original, mime, bytes, null, null);
+  }
+
+  /** {@code tipoElegido}: casilla de la UI, ya validado contra los tipos del producto; queda MANUAL. */
+  @Transactional
+  public DocumentoCargadoDTO subir(
+      CaseFileContext ctx,
+      String original,
+      String mime,
+      byte[] bytes,
+      String tipoElegido,
+      String observacion) {
     String tipo =
         ctx.ingestionMode().isFisicoEscaneado() ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO : null;
     // Físico = un solo PDF: si ya hay, reemplaza (regularización / re-carga).
@@ -126,6 +147,13 @@ public class CaseDocumentoStore {
       }
     }
     LegalDocument doc = LegalDocument.create(ctx.tenantId(), ctx.caseId(), original, tipo);
+    if (tipo == null && StringUtils.hasText(tipoElegido)) {
+      doc.classify(tipoElegido.trim());
+    }
+    AuthPrincipal auth = AuthContext.get();
+    doc.registrarCarga(
+        auth == null ? null : auth.userId(),
+        StringUtils.hasText(observacion) ? observacion.trim() : null);
     ExpedienteDocumentoStorage.Stored stored =
         storage.guardarVersion(ctx.tenantId(), ctx.caseId(), doc.getId(), 1, original, mime, bytes);
     storage.borrarSiHayRollback(stored.clave());
@@ -135,7 +163,14 @@ public class CaseDocumentoStore {
             ctx.tenantId(), doc.getId(), 1, mime, stored.sha256(), stored.clave()));
     seguimiento.ifAvailable(
         service -> service.documentoSubido(ctx.caseId(), ctx.tenantId(), original));
-    return new DocumentoCargadoDTO(doc.getId().toString(), original, formatSize(bytes.length), tipo);
+    return new DocumentoCargadoDTO(
+        doc.getId().toString(), original, formatSize(bytes.length), doc.getDocType());
+  }
+
+  /** Auditoría de lectura del bufete; la de la notaría vive en la remisión. */
+  public void registrarVista(CaseFileContext ctx, String idDocumento) {
+    seguimiento.ifAvailable(
+        service -> service.documentoVisto(ctx.caseId(), ctx.tenantId(), UUID.fromString(idDocumento)));
   }
 
   @Transactional
@@ -346,7 +381,10 @@ public class CaseDocumentoStore {
 
   @Transactional(readOnly = true)
   public PrevalidacionDTO prevalidacion(CaseFileContext ctx) {
-    List<DocumentoCargadoDTO> docs = listar(ctx);
+    List<DocumentoCargadoDTO> docs =
+        listar(ctx).stream()
+            .filter(d -> !LegalDocument.esSoloSoporte(d.codigoTipoDocumento()))
+            .toList();
     Map<String, DocumentoOcrResultadoDTO> ocr = new LinkedHashMap<>();
     for (DocumentoOcrResultadoDTO row : listarOcr(ctx)) {
       ocr.put(row.idDocumento(), row);

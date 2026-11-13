@@ -294,6 +294,26 @@ class NotaryRemisionVersionTest {
     AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), null, null));
   }
 
+  /** EJ-2: vendedor persona jurídica; la abogada genera la hipoteca y la compraventa la trae el tercero. */
+  @Test
+  void laMinutaDeTerceroViajaALaNotariaConElEnvio() {
+    estudio("APPROVED");
+    LegalDocument tercero =
+        LegalDocument.create(FIRMA, CASO, "minuta_inmobiliaria.pdf", LegalDocument.TIPO_MINUTA_TERCERO);
+    when(documentosCaso.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(CASO, FIRMA))
+        .thenReturn(List.of(tercero));
+    MinutaDraft hipoteca = draft("MINUTA_HIPOTECA", PAYLOAD, MINUTA);
+    when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
+        .thenReturn(List.of(hipoteca));
+
+    UUID id = enviar().id();
+
+    sesion(NOTARIA);
+    assertThat(service.getRemision(id).documentos())
+        .extracting(NotaryDtos.RemisionDocumentDto::displayName)
+        .containsExactly("minuta_inmobiliaria.pdf");
+  }
+
   @Test
   void leerRemisionSinOrganizacionActivaResponde403() {
     UUID id = enviada().id();
