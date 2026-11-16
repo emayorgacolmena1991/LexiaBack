@@ -39,7 +39,7 @@ class CargaDocumentoPermisosTest {
   void setUp() {
     ObjectProvider<AuthorizationService> provider = mock(ObjectProvider.class, CALLS_REAL_METHODS);
     doReturn(authorization).when(provider).getIfAvailable();
-    controller = new CargaDocumentoController(carga, mock(ValidacionIaService.class), provider);
+    controller = new CargaDocumentoController(carga, mock(ValidacionIaService.class), ocr, provider);
     reupload = new DocumentReuploadController(ocr, provider);
     doThrow(new AuthException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Sin permiso"))
         .when(authorization)
@@ -53,7 +53,9 @@ class CargaDocumentoPermisosTest {
 
   @Test
   void sinPermisoNoSeSubeNiSeClasificaNiSeElimina() {
-    assertProhibido(() -> controller.subir(CASO, archivo));
+    assertProhibido(() -> controller.subir(CASO, archivo, null, null));
+    assertProhibido(
+        () -> controller.subir(CASO, archivo, LegalDocument.TIPO_MINUTA_TERCERO, "De la inmobiliaria"));
     assertProhibido(
         () -> controller.actualizarTipo(CASO, "d1", new ActualizarTipoRequest("CEDULA")));
     assertProhibido(() -> controller.eliminar(CASO, "d1"));
@@ -62,14 +64,30 @@ class CargaDocumentoPermisosTest {
 
   @Test
   void sinPermisoNoSeReemplaza() {
-    assertProhibido(() -> reupload.reupload(CASO, "d1", "CEDULA", archivo));
+    assertProhibido(() -> reupload.reupload(CASO, "d1", "CEDULA", archivo, false));
     verifyNoInteractions(ocr);
   }
 
   @Test
   void conPermisoLlegaAlServicio() {
-    doThrow(new IllegalStateException("alcanzado")).when(carga).subir(any(), any());
+    doThrow(new IllegalStateException("alcanzado")).when(carga).subir(any(), any(), any(), any());
     org.mockito.Mockito.reset(authorization);
-    assertThrows(IllegalStateException.class, () -> controller.subir(CASO, archivo));
+    assertThrows(IllegalStateException.class, () -> controller.subir(CASO, archivo, null, null));
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(
+      strings = {LegalDocument.TIPO_MINUTA_TERCERO, LegalDocument.TIPO_SOPORTE_INGRESOS})
+  void losDocumentosDeSoporteSeGuardanSinOcr(String tipo) {
+    org.mockito.Mockito.reset(authorization);
+    doReturn(new CargaDocumentoDtos.DocumentoCargadoDTO("d1", "a.pdf", "1 B", tipo))
+        .when(carga)
+        .subir(CASO, archivo, tipo, "obs");
+
+    var respuesta = controller.subir(CASO, archivo, tipo, "obs");
+
+    assertEquals(HttpStatus.CREATED, respuesta.getStatusCode());
+    assertEquals(tipo, respuesta.getBody().codigoTipoDocumento());
+    verifyNoInteractions(ocr);
   }
 }

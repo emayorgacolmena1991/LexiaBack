@@ -2,6 +2,7 @@ package com.lexia.api.modules.notary;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public final class NotaryDtos {
@@ -41,7 +42,13 @@ public final class NotaryDtos {
       String observacionesBufete) {}
 
   public record RemisionDocumentDto(
-      UUID id, String displayName, Long sizeBytes, String statusLabel, int sortOrder) {}
+      UUID id,
+      String displayName,
+      Long sizeBytes,
+      String statusLabel,
+      int sortOrder,
+      /** {@code doc_type} del snapshot (p. ej. SOPORTE_INGRESOS); null sin tipo. */
+      String tipoDocumento) {}
 
   public record RemisionDto(
       UUID id,
@@ -61,7 +68,37 @@ public final class NotaryDtos {
       Instant actualizadoEn,
       String observacionesBufete,
       String observacionesNotaria,
-      List<RemisionDocumentDto> documentos) {}
+      List<RemisionDocumentDto> documentos,
+      /** Hay alertas de tarifa o impuestos en la versión vigente (ícono de la bandeja). */
+      boolean alertasTarifaImpuestos) {}
+
+  public record AlertaPersonaDto(String rol, String nombre) {}
+
+  /**
+   * Campo de la solicitud de exoneración. {@code tipo}: TEXTO, SI_NO, CHECK u OPCION ({@code
+   * opciones}). {@code valor} es el prellenado ("" si no hay); solo los {@code editable} los llena
+   * la notaría.
+   */
+  public record CampoExoneracionDto(
+      String clave,
+      String seccion,
+      String etiqueta,
+      String tipo,
+      List<String> opciones,
+      String valor,
+      boolean editable) {}
+
+  /** Valores que la notaría llenó en el panel; solo claves editables. */
+  public record ExoneracionBody(Map<String, String> valores) {}
+
+  /** {@code formularioExoneracion}: hay solicitud municipal prellenada para descargar. */
+  public record AlertaDto(
+      String codigo,
+      String nivel,
+      String titulo,
+      String detalle,
+      List<AlertaPersonaDto> personas,
+      boolean formularioExoneracion) {}
 
   public record CrearVersionBody(String observacionesBufete) {}
 
@@ -100,5 +137,7 @@ public final class NotaryDtos {
       Instant generatedAt,
       String generatedBy,
       List<String> camposVacios,
-      java.util.Map<String, String> valores) {}
+      java.util.Map<String, String> valores,
+      /** Etiquetas de los datos que no se pudieron pasar a letras; solo en la respuesta de generar. */
+      List<String> camposSinConvertir) {}
 }

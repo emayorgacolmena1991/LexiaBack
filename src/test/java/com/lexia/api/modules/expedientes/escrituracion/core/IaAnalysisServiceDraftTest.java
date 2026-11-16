@@ -78,7 +78,8 @@ class IaAnalysisServiceDraftTest {
             llm,
             documentos,
             authorization,
-            new ObjectMapper());
+            new ObjectMapper(),
+            org.mockito.Mockito.mock(ObservacionesPorDocumento.class));
   }
 
   @AfterEach

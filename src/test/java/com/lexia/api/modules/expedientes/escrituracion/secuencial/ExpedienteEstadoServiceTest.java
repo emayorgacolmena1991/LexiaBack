@@ -16,6 +16,7 @@ import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoMinutaBorrador;
 import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraft;
 import com.lexia.api.modules.expedientes.escrituracion.core.MinutaDraftRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.ObservacionesPorDocumento;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
@@ -101,7 +102,8 @@ class ExpedienteEstadoServiceTest {
             documentos,
             minutas,
             caseStages,
-            stageDefs);
+            stageDefs,
+            mock(ObservacionesPorDocumento.class));
 
     EstadoMinutaBorrador estado = service.hidratar(caseId);
 

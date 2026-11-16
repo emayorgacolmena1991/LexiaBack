@@ -9,6 +9,7 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcr;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorrador;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteBorradorStore;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.documentos.DocumentoTextoOcrRepository;
 import com.lexia.api.modules.expedientes.documentos.ExtractedData;
 import com.lexia.api.modules.expedientes.documentos.ExtractedDataRepository;
@@ -54,6 +55,7 @@ public class IaAnalysisService {
 
   private static final Logger LOG = LoggerFactory.getLogger(IaAnalysisService.class);
   private static final Set<String> GRUPOS = Set.of("comprador", "vendedor", "inmueble");
+  private static final String ID_CONSOLIDADO = "consolidado";
   private static final Pattern OBS =
       Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$");
   /** Líneas que la IA debe emitir en resumen para dar de baja una obs en regularización. */
@@ -68,6 +70,7 @@ public class IaAnalysisService {
   private final ExtractedDataRepository extractedData;
   private final DocumentoTextoOcrRepository documentoTextoOcr;
   private final OcrSessionCacheService ocrCache;
+  private final ObservacionesPorDocumento observacionesPorDocumento;
   private final ExpedienteCompletoLlmService llm;
   private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
@@ -85,7 +88,9 @@ public class IaAnalysisService {
       ExpedienteCompletoLlmService llm,
       DocumentosExtraidosStore documentos,
       AuthorizationService authorization,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      ObservacionesPorDocumento observacionesPorDocumento) {
+    this.observacionesPorDocumento = observacionesPorDocumento;
     this.legalCases = legalCases;
     this.borradores = borradores;
     this.writingFiles = writingFiles;
@@ -164,15 +169,18 @@ public class IaAnalysisService {
         enRegularizacion && force
             ? pendientesDeWriting(writingFile, tenantId)
             : List.of();
+    boolean persistido = legalCase != null;
     String ocrText =
         force
-            ? ocrParaReanalisis(
-                expedienteId, legalCase == null ? null : legalCase.getCode(), request)
-            : loadOcrMarcado(
-                expedienteId, legalCase == null ? null : legalCase.getCode(), request);
-    if (!pendientesPrevias.isEmpty()) {
-      ocrText = ocrText + contextoRegularizacion(pendientesPrevias);
+            ? ocrParaReanalisis(expedienteId, persistido, request)
+            : loadOcrMarcado(expedienteId, persistido, request);
+    List<DocOcr> reemplazados =
+        documentosReemplazados(ocrText, request == null ? List.of() : request.documentosReemplazados());
+    if (!pendientesPrevias.isEmpty() || !reemplazados.isEmpty()) {
+      ocrText = ocrText + contextoRegularizacion(pendientesPrevias, reemplazados);
     }
+    List<TipoPermitidoDTO> tiposProducto = observacionesPorDocumento.tiposDelProducto(expedienteId.toString());
+    ocrText = ocrText + contextoTipos(tiposProducto);
     Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
@@ -267,7 +275,7 @@ public class IaAnalysisService {
                   null,
                   documentos.cargar(expedienteId, tenantId),
                   loadDatos(expedienteId, tenantId),
-                  new Dictamen(study.getStatus(), study.getSummary(), obs));
+                  new Dictamen(study.getStatus(), study.getSummary(), obs, study.getValidaciones()));
             })
         .orElse(null);
   }
@@ -345,6 +353,8 @@ public class IaAnalysisService {
         : dictamen.estado().trim();
     String resumen = dictamen == null ? "" : dictamen.resumen();
     study.applyResult(estado, resumen);
+    // Lo correcto se guarda aparte: nunca es observación ni llega a E3.
+    study.registrarValidaciones(dictamen == null ? List.of() : dictamen.validaciones());
     titleStudies.save(study);
     List<ObservacionesCotejo.Entrada> entradas = new java.util.ArrayList<>();
     if (dictamen != null && dictamen.observaciones() != null) {
@@ -352,16 +362,35 @@ public class IaAnalysisService {
         if (item == null || !StringUtils.hasText(item.mensaje())) {
           continue;
         }
-        entradas.add(new ObservacionesCotejo.Entrada(item.codigo(), item.severidad(), item.mensaje()));
+        entradas.add(
+            new ObservacionesCotejo.Entrada(
+                item.codigo(),
+                item.severidad(),
+                item.mensaje(),
+                item.documentoId(),
+                item.documentosRelacionados(),
+                item.tipoDocumentoFaltante()));
       }
     }
-    ObservacionesCotejo.reemplazar(titleObservations, tenantId, study.getId(), entradas);
+    Set<String> tipos = new LinkedHashSet<>();
+    for (TipoPermitidoDTO tipo : observacionesPorDocumento.tiposDelProducto(writingFile.getCaseId().toString())) {
+      if (tipo != null && StringUtils.hasText(tipo.codigo())) {
+        tipos.add(tipo.codigo().trim());
+      }
+    }
+    ObservacionesCotejo.reemplazar(
+        titleObservations,
+        tenantId,
+        study.getId(),
+        entradas,
+        observacionesPorDocumento.documentosDelExpediente(writingFile.getCaseId(), tenantId),
+        tipos);
   }
 
   /** Reanálisis: OCR por archivo/sesión si existe; si no, consolidado del worker. */
-  private String ocrParaReanalisis(UUID expedienteId, String caseCode, AnalysisRequestDTO request) {
+  private String ocrParaReanalisis(UUID expedienteId, boolean persistido, AnalysisRequestDTO request) {
     try {
-      return loadOcrMarcado(expedienteId, caseCode, request);
+      return loadOcrMarcado(expedienteId, persistido, request);
     } catch (ApiException ignored) {
       return ocrConsolidado(expedienteId);
     }
@@ -387,17 +416,96 @@ public class IaAnalysisService {
         .map(study -> ObservacionesCotejo.pendientes(titleObservations, tenantId, study.getId()))
         .orElse(List.of())
         .stream()
-        .map(item -> new ObservacionesCotejo.Entrada(item.code(), item.severidad(), item.mensaje()))
+        .map(
+            item ->
+                new ObservacionesCotejo.Entrada(
+                    item.code(),
+                    item.severidad(),
+                    item.mensaje(),
+                    item.documentoId() == null ? null : item.documentoId().toString(),
+                    item.documentosRelacionados().stream()
+                        .map(rel -> rel.documentId().toString())
+                        .toList(),
+                    item.tipoDocumentoFaltante()))
         .toList();
   }
 
   /**
-   * Inyecta las observaciones abiertas para que el LLM las evalúe una a una. Subir un PDF no
-   * implica resolución: debe confirmar con {@code [RESUELTA] codigo} en el resumen.
+   * Documentos que el cliente marca como reemplazados y que sí están en el OCR enviado. Un id que no
+   * está en el texto no se nombra al LLM: puede ser de otro expediente o de un documento eliminado.
    */
-  private static String contextoRegularizacion(List<ObservacionesCotejo.Entrada> pendientes) {
+  static List<DocOcr> documentosReemplazados(String ocrText, List<String> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    Set<String> pedidos = new LinkedHashSet<>();
+    ids.stream().filter(StringUtils::hasText).map(String::trim).forEach(pedidos::add);
+    List<DocOcr> presentes =
+        OcrExpedienteTexto.cabeceras(ocrText).stream()
+            .filter(doc -> doc.id() != null && pedidos.contains(doc.id()))
+            .toList();
+    if (presentes.size() < pedidos.size()) {
+      LOG.warn(
+          "analizar-ia: {} de {} documentosReemplazados no están en el OCR enviado; se ignoran",
+          pedidos.size() - presentes.size(),
+          pedidos.size());
+    }
+    return presentes;
+  }
+
+  /**
+   * Catálogo del producto para {@code tipoDocumentoFaltante}. Sin etiquetas {@code <documento>}:
+   * no se confunde con el OCR al leer las cabeceras.
+   */
+  static String contextoTipos(List<TipoPermitidoDTO> tipos) {
+    if (tipos == null || tipos.isEmpty()) {
+      return "";
+    }
+    StringBuilder sb = new StringBuilder("\n\n<tipos_documento>\n");
+    for (TipoPermitidoDTO tipo : tipos) {
+      if (tipo == null || !StringUtils.hasText(tipo.codigo())) {
+        continue;
+      }
+      sb.append("- ").append(plano(tipo.codigo()));
+      if (StringUtils.hasText(tipo.nombre())) {
+        sb.append(": ").append(plano(tipo.nombre()));
+      }
+      sb.append('\n');
+    }
+    return sb.append("</tipos_documento>\n").toString();
+  }
+
+  /**
+   * Inyecta las observaciones abiertas para que el LLM las evalúe una a una. Subir un PDF no
+   * implica resolución: debe confirmar con {@code [RESUELTA] codigo} en el resumen. Si hubo
+   * documentos reemplazados, los nombra y pide reevaluar sus observaciones con el texto nuevo.
+   */
+  static String contextoRegularizacion(
+      List<ObservacionesCotejo.Entrada> pendientes, List<DocOcr> reemplazados) {
     StringBuilder sb = new StringBuilder();
     sb.append("\n\n<regularizacion_pendiente>\n");
+    if (!reemplazados.isEmpty()) {
+      sb.append(
+          """
+          Documentos REEMPLAZADOS desde el último análisis. Su texto en <expediente_ocr> ya es el de
+          la versión nueva; la anterior ya no existe. Reevalúa toda observación que se apoyaba en
+          ellos usando solo su texto nuevo, y no repitas hallazgos de la versión anterior.
+          """);
+      for (DocOcr doc : reemplazados) {
+        sb.append("- id=\"").append(plano(doc.id())).append('"');
+        if (StringUtils.hasText(doc.tipo())) {
+          sb.append(" tipo=\"").append(plano(doc.tipo())).append('"');
+        }
+        if (StringUtils.hasText(doc.nombre())) {
+          sb.append(" nombre=\"").append(plano(doc.nombre())).append('"');
+        }
+        sb.append('\n');
+      }
+    }
+    if (pendientes.isEmpty()) {
+      sb.append("</regularizacion_pendiente>\n");
+      return sb.toString();
+    }
     sb.append(
         """
         El expediente está en regularización. Evalúa CADA observación abierta con la evidencia OCR.
@@ -416,13 +524,21 @@ public class IaAnalysisService {
           .append(". [")
           .append(sev)
           .append("] ")
-          .append(code)
-          .append(": ")
+          .append(code);
+      if (StringUtils.hasText(e.documentoId())) {
+        sb.append(" (documento id=\"").append(plano(e.documentoId())).append("\")");
+      }
+      sb.append(": ")
           .append(e.mensaje() == null ? "" : e.mensaje().trim())
           .append('\n');
     }
     sb.append("</regularizacion_pendiente>\n");
     return sb.toString();
+  }
+
+  /** Nombres del usuario dentro de un atributo del prompt: sin comillas, saltos ni etiquetas. */
+  private static String plano(String value) {
+    return value.replaceAll("[\"<>\\r\\n]", " ").trim();
   }
 
   /**
@@ -444,7 +560,7 @@ public class IaAnalysisService {
         continue;
       }
       String code = StringUtils.hasText(item.codigo()) ? item.codigo().trim() : "OBS";
-      keysIa.add(ObservacionesCotejo.clave(code, item.mensaje()));
+      keysIa.add(ObservacionesCotejo.clave(item.documentoId(), code, item.mensaje()));
       codesIa.add(code.toUpperCase(Locale.ROOT));
       merged.add(item);
     }
@@ -453,7 +569,7 @@ public class IaAnalysisService {
         continue;
       }
       String code = StringUtils.hasText(prev.code()) ? prev.code().trim() : "OBS";
-      String key = ObservacionesCotejo.clave(code, prev.mensaje());
+      String key = ObservacionesCotejo.clave(prev.documentoId(), code, prev.mensaje());
       String codeUp = code.toUpperCase(Locale.ROOT);
       if (keysIa.contains(key) || codesIa.contains(codeUp)) {
         continue;
@@ -462,7 +578,7 @@ public class IaAnalysisService {
         continue;
       }
       // Sin confirmación explícita: sigue pendiente.
-      merged.add(new Observacion(code, prev.severidad(), prev.mensaje()));
+      merged.add(aObservacion(code, prev));
     }
     String estado =
         dictamen == null || !StringUtils.hasText(dictamen.estado())
@@ -476,16 +592,24 @@ public class IaAnalysisService {
       for (ObservacionesCotejo.Entrada prev : previas) {
         if (prev != null && StringUtils.hasText(prev.mensaje())) {
           merged.add(
-              new Observacion(
-                  StringUtils.hasText(prev.code()) ? prev.code() : "OBS",
-                  prev.severidad(),
-                  prev.mensaje()));
+              aObservacion(StringUtils.hasText(prev.code()) ? prev.code() : "OBS", prev));
         }
       }
       estado = "WITH_OBSERVATIONS";
     }
     String resumen = dictamen == null ? "" : dictamen.resumen();
-    return new Dictamen(estado, resumen, List.copyOf(merged));
+    return new Dictamen(
+        estado, resumen, List.copyOf(merged), dictamen == null ? List.of() : dictamen.validaciones());
+  }
+
+  private static Observacion aObservacion(String code, ObservacionesCotejo.Entrada prev) {
+    return new Observacion(
+        code,
+        prev.severidad(),
+        prev.mensaje(),
+        prev.documentoId(),
+        prev.documentosRelacionados(),
+        prev.tipoDocumentoFaltante());
   }
 
   private static Set<String> parseResueltas(String resumen) {
@@ -505,20 +629,30 @@ public class IaAnalysisService {
 
   /**
    * OCR por archivo (caché de sesión o {@code documento_texto_ocr}). No une binarios.
+   *
+   * <p>Expediente persistido: solo su {@code caseId}, nunca el {@code sessionId} de un borrador
+   * (sus filas {@code DOC-xxxx} ya se copiaron al caso con el id del {@code LegalDocument}). Primero
+   * la BD, que tiene todos los documentos; la caché del caso puede tener solo los subidos desde el
+   * último reinicio. Borrador: caché de sesión y luego BD, como siempre.
    */
-  String loadOcrMarcado(UUID expedienteId, String caseCode, AnalysisRequestDTO request) {
+  String loadOcrMarcado(UUID expedienteId, boolean persistido, AnalysisRequestDTO request) {
     List<String> candidates = new ArrayList<>();
-    if (request != null && StringUtils.hasText(request.sessionId())) {
+    if (!persistido && request != null && StringUtils.hasText(request.sessionId())) {
       candidates.add(request.sessionId().trim());
-    }
-    if (StringUtils.hasText(caseCode)) {
-      candidates.add(caseCode.trim());
     }
     candidates.add(expedienteId.toString());
 
-    String marcado = OcrExpedienteTexto.paraClaude(ocrCache, candidates);
-    if (!StringUtils.hasText(marcado)) {
+    String marcado;
+    if (persistido) {
       marcado = ocrDesdeDb(candidates);
+      if (!StringUtils.hasText(marcado)) {
+        marcado = OcrExpedienteTexto.paraClaude(ocrCache, candidates);
+      }
+    } else {
+      marcado = OcrExpedienteTexto.paraClaude(ocrCache, candidates);
+      if (!StringUtils.hasText(marcado)) {
+        marcado = ocrDesdeDb(candidates);
+      }
     }
     if (!StringUtils.hasText(marcado)) {
       throw ApiException.badRequest(
@@ -541,12 +675,24 @@ public class IaAnalysisService {
       if (rows == null || rows.isEmpty()) {
         continue;
       }
+      // "consolidado" es la unión de las filas por documento: mandar ambas duplica cada documento.
+      // Solo se usa si no hay ninguna fila por documento, como en ocrConsolidado().
       List<DocOcr> docs = new ArrayList<>();
+      DocOcr consolidado = null;
       for (DocumentoTextoOcr row : rows) {
         if (row == null || !StringUtils.hasText(row.getTextoOcr())) {
           continue;
         }
-        docs.add(new DocOcr(row.getIdDocumento(), row.getTipoDocumento(), null, row.getTextoOcr()));
+        DocOcr doc =
+            new DocOcr(row.getIdDocumento(), row.getTipoDocumento(), null, row.getTextoOcr());
+        if (ID_CONSOLIDADO.equals(row.getIdDocumento())) {
+          consolidado = doc;
+        } else {
+          docs.add(doc);
+        }
+      }
+      if (docs.isEmpty() && consolidado != null) {
+        docs.add(consolidado);
       }
       String marcado = OcrExpedienteTexto.documentos(docs);
       if (StringUtils.hasText(marcado)) {

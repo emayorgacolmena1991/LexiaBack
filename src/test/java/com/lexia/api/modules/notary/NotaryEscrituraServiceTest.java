@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,14 +12,17 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.documentos.ExpedienteDocumentoStorage;
 import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
 import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.expedientes.minutas.MinutaTemplateCatalog;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
+import com.lexia.api.modules.expedientes.minutas.NumeroALetras;
 import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
@@ -109,7 +113,7 @@ class NotaryEscrituraServiceTest {
                     .filter(e -> e.getRemisionId().equals(llamada.getArgument(1)))
                     .findFirst());
 
-    storage = new ExpedienteDocumentoStorage(almacenamiento.toString());
+    storage = new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento));
     AuditEventRepository auditoria = mock(AuditEventRepository.class);
     logos = new NotaryLogoService(authorization, perfiles, storage, auditoria);
     service =
@@ -121,7 +125,7 @@ class NotaryEscrituraServiceTest {
             perfiles,
             logos,
             new DocxMinutaRenderer(),
-            new DocxPdfConverter("", "target/notary-escritura-test"),
+            new DocxPdfConverter(""),
             new MinutaTemplateCatalog(),
             storage,
             mock(AppUserRepository.class),
@@ -303,6 +307,77 @@ class NotaryEscrituraServiceTest {
   }
 
   @Test
+  void generarEscribeLasCifrasTambienEnLetras() throws Exception {
+    ObjectNode payload = (ObjectNode) mapper.readTree(payloadCompleto());
+    payload.put("cedula_conyuge_1", "092255248-4");
+    payload.put("precio_compraventa_numero", "120000");
+    payload.put("precio_compraventa_letras", "ciento veinte mil");
+    payload.put("monto_prestamo", "85.000,50");
+    payload.put("monto_prestamo_letras", "");
+    payload.put("superficie_m2", "84");
+    payload.put("clave_catastral", "60-2387-013-0-0-0");
+    payload.put("fecha_escritura_antecedente", "31/03/2026");
+    UUID id = remision(payload.toString(), PRODUCTO);
+    Map<String, String> valores = new LinkedHashMap<>();
+    campos(id).keySet().forEach(clave -> valores.put(clave, "Valor " + clave));
+    valores.put("fecha_otorgamiento", "2026-08-20");
+
+    NotaryDtos.EscrituraDto escritura =
+        service.generar(id, new NotaryDtos.GenerarEscrituraBody(valores));
+
+    assertThat(escritura.camposVacios()).isEmpty();
+    assertThat(escritura.camposSinConvertir()).isEmpty();
+    String texto = textoXml(partes(docx(escritura)));
+    assertThat(texto)
+        .doesNotContain("{{")
+        .contains("092255248-4 (" + NumeroALetras.digitosALetras("092255248-4") + ")")
+        .contains(
+            "es de USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+        .contains(
+            "b) USD 85.000,50 (OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+        .contains(
+            "CUANTÍA: USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+        .contains(
+            "CUANTÍA: USD 85.000,50 (OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+        .contains("84,00 m² (OCHENTA Y CUATRO METROS CUADRADOS)")
+        .contains(
+            "60-2387-013-0-0-0 (SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE – CERO"
+                + " – CERO – CERO)")
+        .contains("otorgada el 31/03/2026 (TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS)")
+        .contains("a los veinte días del mes de agosto de dos mil veintiséis")
+        .contains("C.C. 092255248-4");
+  }
+
+  @Test
+  void cifraNoInterpretableQuedaTalCualYSeAvisaAparte() throws Exception {
+    ObjectNode payload = (ObjectNode) mapper.readTree(payloadCompleto());
+    payload.put("cedula_conyuge_1", "0922/552484");
+    UUID id = remision(payload.toString(), PRODUCTO);
+
+    NotaryDtos.EscrituraDto escritura = generarCompleta(id);
+
+    assertThat(escritura.camposSinConvertir()).containsExactly("Cédula del comprador / deudor");
+    assertThat(escritura.camposVacios()).isEmpty();
+    assertThat(textoXml(partes(docx(escritura)))).contains("número 0922/552484,");
+    assertThat(service.historial(id).get(0).camposSinConvertir()).isEmpty();
+  }
+
+  @Test
+  void cifraVaciaSePideEnElFormularioYSeReportaComoVacia() throws Exception {
+    ObjectNode payload = (ObjectNode) mapper.readTree(payloadCompleto());
+    payload.put("superficie_m2", "");
+    UUID id = remision(payload.toString(), PRODUCTO);
+
+    assertThat(campos(id)).containsKey("superficie_m2").doesNotContainKey("superficie_m2_completo");
+    NotaryDtos.EscrituraDto escritura =
+        service.generar(id, new NotaryDtos.GenerarEscrituraBody(Map.of()));
+
+    assertThat(escritura.camposVacios()).contains("superficie_m2").doesNotContain("superficie_m2_completo");
+    assertThat(escritura.camposSinConvertir()).isEmpty();
+    assertThat(textoXml(partes(docx(escritura)))).doesNotContain("{{");
+  }
+
+  @Test
   void camposVaciosSeRenderizanEnBlancoYSeListan() throws Exception {
     UUID id = remisionCompleta();
     List<String> formulario = List.copyOf(campos(id).keySet());
@@ -322,6 +397,30 @@ class NotaryEscrituraServiceTest {
             id, new NotaryDtos.GenerarEscrituraBody(Map.of("fecha_otorgamiento", "   ")));
 
     assertThat(escritura.camposVacios()).contains("fecha_otorgamiento");
+  }
+
+  @Test
+  void generarSinActuarResponde403() {
+    UUID id = remisionCompleta();
+    doThrow(new AuthException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Sin permiso"))
+        .when(authorization)
+        .requirePermission("notaria:remision:actuar");
+
+    AuthException error =
+        assertThrows(AuthException.class, () -> service.generar(id, new NotaryDtos.GenerarEscrituraBody(Map.of())));
+
+    assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
+    verify(escrituras, never()).save(any());
+  }
+
+  @Test
+  void payloadIlegibleResponde409() {
+    UUID id = remision("{", PRODUCTO);
+
+    ApiException error = assertThrows(ApiException.class, () -> service.formulario(id));
+
+    assertEquals(HttpStatus.CONFLICT, error.getStatus());
+    assertEquals("Los datos de la minuta de esta versión no se pueden leer.", error.getMessage());
   }
 
   @Test
@@ -364,7 +463,7 @@ class NotaryEscrituraServiceTest {
         NotaryRemision.create(FIRMA, NOTARIA, UUID.randomUUID(), null, "X", "Y", null, 0, USUARIO, null);
     remisionesGuardadas.put(sinRecibir.getId(), sinRecibir);
     UUID devuelta = remisionCompleta();
-    remisionesGuardadas.get(devuelta).devolverAlBufete(null);
+    remisionesGuardadas.get(devuelta).devolverAlBufete("Falta el avalúo");
     UUID completada = remisionCompleta();
     for (int i = 0; i < NotaryProcessSteps.COUNT - 1; i++) {
       remisionesGuardadas.get(completada).advanceStep();
@@ -462,7 +561,7 @@ class NotaryEscrituraServiceTest {
     TransactionSynchronizationManager.initSynchronization();
     try {
       NotaryDtos.EscrituraDto escritura = generarCompleta(id);
-      Path archivo = Path.of(escrituraGuardada(escritura).getStorageRef());
+      Path archivo = almacenamiento.resolve(escrituraGuardada(escritura).getStorageRef());
       assertThat(Files.exists(archivo)).isTrue();
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
@@ -485,7 +584,8 @@ class NotaryEscrituraServiceTest {
         .containsExactlyInAnyOrder(primera.id(), segunda.id());
     assertThat(service.archivo(id, segunda.id()).bytes()).isEqualTo(docx(segunda));
     assertThat(escrituraGuardada(primera).getStorageRef())
-        .isNotEqualTo(escrituraGuardada(segunda).getStorageRef());
+        .isNotEqualTo(escrituraGuardada(segunda).getStorageRef())
+        .startsWith(NOTARIA + "/escrituras/" + primera.id() + "_");
 
     sesion(OTRA_NOTARIA);
     assertEstado(

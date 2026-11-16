@@ -9,5 +9,7 @@ public interface NotaryEscrituraRepository extends JpaRepository<NotaryEscritura
 
   List<NotaryEscritura> findByRemisionIdOrderByGeneratedAtDesc(UUID remisionId);
 
+  Optional<NotaryEscritura> findFirstByRemisionIdOrderByGeneratedAtDesc(UUID remisionId);
+
   Optional<NotaryEscritura> findByIdAndRemisionId(UUID id, UUID remisionId);
 }

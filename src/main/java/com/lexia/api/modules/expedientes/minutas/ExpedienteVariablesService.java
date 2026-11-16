@@ -57,11 +57,18 @@ public class ExpedienteVariablesService {
     this.mapper = mapper;
   }
 
-  /** Variables del acto: catálogo del prompt en su orden + tags de la plantilla no catalogados. */
+  /**
+   * Variables del acto: catálogo del prompt + tags de la plantilla + campos de captura BIESS (para
+   * que monto/tasa/plazo/cuota/apoderado aparezcan aunque el prompt del producto no los liste).
+   */
   public List<String> camposDelActo(MinutaTemplateDescriptor descriptor) {
     LinkedHashSet<String> campos =
         new LinkedHashSet<>(
             catalogo.resolve(descriptor.productCode(), descriptor.templateKind()).campos());
+    for (CampoPlantilla campo : CampoPlantilla.values()) {
+      campos.add(campo.tag());
+    }
+    campos.add(MONTO_LETRAS);
     Set<String> conocidos = new MinutaViviendaData().toTemplateMap().keySet();
     for (String tag : renderer.tags(descriptor)) {
       String campo = MinutaTagAliases.canonico(tag);

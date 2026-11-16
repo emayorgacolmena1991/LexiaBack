@@ -5,13 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.common.api.ApiExceptionHandler;
 import com.lexia.api.modules.auth.AuthContext;
@@ -33,6 +37,7 @@ import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepositor
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.identity.AppUser;
 import com.lexia.api.modules.identity.AppUserRepository;
+import com.lexia.api.modules.identity.AuditEvent;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import com.lexia.api.modules.notifications.BrevoProperties;
@@ -84,20 +89,24 @@ class NotaryRemisionVersionTest {
   private final LegalDocumentRepository documentosCaso = mock(LegalDocumentRepository.class);
   private final DocumentVersionRepository versionesDocumento = mock(DocumentVersionRepository.class);
   private final AppUserRepository usuarios = mock(AppUserRepository.class);
+  private final NotaryEscrituraRepository escrituras = mock(NotaryEscrituraRepository.class);
   private final List<NotaryRemisionVersion> versionesGuardadas = new ArrayList<>();
   private final List<NotaryRemisionDocument> documentosGuardados = new ArrayList<>();
   private final Map<UUID, NotaryRemision> remisionesGuardadas = new HashMap<>();
   private ExpedienteDocumentoStorage storage;
+  private AuditEventRepository auditoria;
   private NotaryCrossTenantService service;
+  private TenantNotaryPartnershipRepository vinculos;
 
   @BeforeEach
   void setUp() {
     AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), FIRMA, UUID.randomUUID()));
-    storage = new ExpedienteDocumentoStorage(almacenamiento.toString());
+    storage = new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento));
+    auditoria = mock(AuditEventRepository.class);
 
     TenantNotaryPartnership vinculo = mock(TenantNotaryPartnership.class);
     when(vinculo.isActive()).thenReturn(true);
-    TenantNotaryPartnershipRepository vinculos = mock(TenantNotaryPartnershipRepository.class);
+    vinculos = mock(TenantNotaryPartnershipRepository.class);
     when(vinculos.findByFirmTenantIdAndNotaryTenantId(FIRMA, NOTARIA))
         .thenReturn(Optional.of(vinculo));
     NotaryFirmAssignment asignacion = mock(NotaryFirmAssignment.class);
@@ -178,7 +187,6 @@ class NotaryRemisionVersionTest {
     service =
         new NotaryCrossTenantService(
             authorization,
-            mock(NotaryAccessGuard.class),
             tenants,
             perfiles,
             vinculos,
@@ -194,10 +202,12 @@ class NotaryRemisionVersionTest {
             documentosCaso,
             versionesDocumento,
             storage,
-            mock(AuditEventRepository.class),
+            auditoria,
             mock(EmailNotificationService.class),
             usuarios,
-            mock(BrevoProperties.class));
+            mock(BrevoProperties.class),
+            escrituras,
+            new ObjectMapper());
   }
 
   @AfterEach
@@ -258,6 +268,15 @@ class NotaryRemisionVersionTest {
         .thenReturn(docs);
   }
 
+  /** Escritura sin tipo y roles de pago SOPORTE_INGRESOS. */
+  private void documentosConSoporteDeIngresos() {
+    when(documentosCaso.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(CASO, FIRMA))
+        .thenReturn(
+            List.of(
+                LegalDocument.create(FIRMA, CASO, "escritura.pdf", null),
+                LegalDocument.create(FIRMA, CASO, "roles.pdf", LegalDocument.TIPO_SOPORTE_INGRESOS)));
+  }
+
   /** Primer envío con minuta generada y un documento. */
   private NotaryDtos.RemisionDto enviada() {
     estudio("APPROVED");
@@ -282,6 +301,86 @@ class NotaryRemisionVersionTest {
 
   private static void assertEstado(HttpStatus esperado, ApiException error) {
     assertEquals(esperado, error.getStatus());
+  }
+
+  private static void sesionSinOrganizacion() {
+    AuthContext.set(new AuthPrincipal(USUARIO, UUID.randomUUID(), null, null));
+  }
+
+  /** EJ-2: vendedor persona jurídica; la abogada genera la hipoteca y la compraventa la trae el tercero. */
+  @Test
+  void laMinutaDeTerceroViajaALaNotariaConElEnvio() {
+    estudio("APPROVED");
+    LegalDocument tercero =
+        LegalDocument.create(FIRMA, CASO, "minuta_inmobiliaria.pdf", LegalDocument.TIPO_MINUTA_TERCERO);
+    when(documentosCaso.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(CASO, FIRMA))
+        .thenReturn(List.of(tercero));
+    MinutaDraft hipoteca = draft("MINUTA_HIPOTECA", PAYLOAD, MINUTA);
+    when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
+        .thenReturn(List.of(hipoteca));
+
+    UUID id = enviar().id();
+
+    sesion(NOTARIA);
+    assertThat(service.getRemision(id).documentos())
+        .extracting(NotaryDtos.RemisionDocumentDto::displayName)
+        .containsExactly("minuta_inmobiliaria.pdf");
+  }
+
+  @Test
+  void leerRemisionSinOrganizacionActivaResponde403() {
+    UUID id = enviada().id();
+    sesionSinOrganizacion();
+
+    ApiException error = assertThrows(ApiException.class, () -> service.getRemision(id));
+
+    assertEstado(HttpStatus.FORBIDDEN, error);
+    assertEquals(RemisionesVisibles.SIN_ORGANIZACION, error.getMessage());
+  }
+
+  @Test
+  void recibirSinOrganizacionActivaResponde403() {
+    UUID id = enviada().id();
+    sesionSinOrganizacion();
+
+    ApiException error =
+        assertThrows(ApiException.class, () -> service.getRemisionAndAcknowledge(id));
+
+    assertEstado(HttpStatus.FORBIDDEN, error);
+    assertEquals(RemisionesVisibles.SIN_ORGANIZACION, error.getMessage());
+    assertEquals(NotaryRemisionEstado.ENVIADO_A_NOTARIA.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void aprobarVinculoDeOtraNotariaResponde404ComoUnoInexistente() {
+    TenantNotaryPartnership deOtra = TenantNotaryPartnership.request(FIRMA, UUID.randomUUID(), null);
+    when(vinculos.findById(deOtra.getId())).thenReturn(Optional.of(deOtra));
+    UUID inexistente = UUID.randomUUID();
+    when(vinculos.findById(inexistente)).thenReturn(Optional.empty());
+    sesion(NOTARIA);
+
+    ApiException ajeno =
+        assertThrows(ApiException.class, () -> service.approvePartnership(deOtra.getId()));
+    ApiException noExiste =
+        assertThrows(ApiException.class, () -> service.approvePartnership(inexistente));
+
+    assertEstado(HttpStatus.NOT_FOUND, ajeno);
+    assertEquals(noExiste.getStatus(), ajeno.getStatus());
+    assertEquals(noExiste.getMessage(), ajeno.getMessage());
+    assertEquals(NotaryPartnershipStatus.PENDING.name(), deOtra.getStatus());
+    verify(vinculos, never()).save(any());
+  }
+
+  @Test
+  void laNotariaDestinoApruebaSuVinculo() {
+    TenantNotaryPartnership propio = TenantNotaryPartnership.request(FIRMA, NOTARIA, null);
+    when(vinculos.findById(propio.getId())).thenReturn(Optional.of(propio));
+    sesion(NOTARIA);
+
+    service.approvePartnership(propio.getId());
+
+    assertEquals(NotaryPartnershipStatus.ACTIVE.name(), propio.getStatus());
+    verify(vinculos).save(propio);
   }
 
   @Test
@@ -354,7 +453,7 @@ class NotaryRemisionVersionTest {
     assertEquals("minuta_compraventa.docx", version.getMinutaFileName());
     assertThat(storage.read(version.getMinutaStorageRef())).isEqualTo(MINUTA);
     assertThat(version.getMinutaStorageRef())
-        .startsWith(almacenamiento.toString())
+        .startsWith(FIRMA + "/remisiones/" + remision.id() + "/v1/")
         .doesNotContain(minuta.getId().toString());
     assertEquals("Urgente", version.getObservacionesBufete());
     assertEquals(USUARIO, version.getCreatedBy());
@@ -411,6 +510,7 @@ class NotaryRemisionVersionTest {
   void editarNotariaCompletadaResponde409() {
     UUID id = enviada().id();
     NotaryRemision remision = remisionesGuardadas.get(id);
+    remision.acknowledgeReceipt();
     for (int i = 0; i < NotaryProcessSteps.COUNT - 1; i++) {
       remision.advanceStep();
     }
@@ -442,7 +542,8 @@ class NotaryRemisionVersionTest {
   @Test
   void noReabreUnaDevueltaSiHayOtraRemisionAbierta() {
     UUID id = enviada().id();
-    remisionesGuardadas.get(id).devolverAlBufete(null);
+    remisionesGuardadas.get(id).acknowledgeReceipt();
+    remisionesGuardadas.get(id).devolverAlBufete("Falta el avalúo");
     NotaryRemision otra =
         NotaryRemision.create(FIRMA, NOTARIA, CASO, FICHA, "X", "Y", "Acta", 0, USUARIO, null);
     when(remisiones.findFirstByFirmTenantIdAndFirmLegalCaseIdAndEstadoNotInOrderByEmitidoEnDesc(
@@ -522,6 +623,179 @@ class NotaryRemisionVersionTest {
 
     assertEstado(
         HttpStatus.NOT_FOUND, assertThrows(ApiException.class, () -> service.getRemision(id)));
+  }
+
+  /** Envío cuya minuta trae fecha de nacimiento del comprador. */
+  private UUID enviadaConPayload(String payload) {
+    estudio("APPROVED");
+    documentosConSoporteDeIngresos();
+    MinutaDraft minuta = draft("MINUTA_COMPRAVENTA", payload, MINUTA);
+    when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
+        .thenReturn(List.of(minuta));
+    return enviar().id();
+  }
+
+  @Test
+  void alertasLasLeenElBufeteDuenoYLaNotariaDestino() {
+    UUID id =
+        enviadaConPayload(
+            "{\"nombre_conyuge_1\":\"Ana\",\"fecha_nacimiento_conyuge_1\":\"01/01/1940\"}");
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .containsExactly(NotaryAlertas.TARIFA_TERCERA_EDAD, NotaryAlertas.IMPUESTOS_TERCERA_EDAD);
+    assertThat(service.getRemision(id).alertasTarifaImpuestos()).isTrue();
+    sesion(NOTARIA);
+    assertThat(service.alertas(id)).hasSize(2);
+    verify(authorization, atLeastOnce()).requirePermission("notaria:remision:leer");
+  }
+
+  @Test
+  void alertasSinFechaNiSoporteAvisanDatoYFondos() {
+    UUID id = enviada().id();
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .containsExactly(NotaryAlertas.DATO_EDAD_NO_DISPONIBLE, NotaryAlertas.FONDOS_SIN_SOPORTE);
+    assertThat(service.getRemision(id).alertasTarifaImpuestos()).isFalse();
+  }
+
+  @Test
+  void elSnapshotGuardaElTipoDeCadaDocumentoYLoExpone() {
+    UUID id = enviadaConPayload(PAYLOAD);
+
+    assertThat(documentosGuardados)
+        .extracting(NotaryRemisionDocument::getDocType)
+        .containsExactly(null, LegalDocument.TIPO_SOPORTE_INGRESOS);
+    sesion(NOTARIA);
+    assertThat(service.getRemision(id).documentos())
+        .extracting(NotaryDtos.RemisionDocumentDto::tipoDocumento)
+        .containsExactly(null, LegalDocument.TIPO_SOPORTE_INGRESOS);
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .doesNotContain(NotaryAlertas.FONDOS_SIN_SOPORTE);
+  }
+
+  @Test
+  void fondosSoloCuentanLosSoportesDeLaVersionVigente() {
+    UUID id = enviadaConPayload(PAYLOAD);
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .doesNotContain(NotaryAlertas.FONDOS_SIN_SOPORTE);
+
+    borradorCorregido();
+    editar(id);
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .contains(NotaryAlertas.FONDOS_SIN_SOPORTE);
+  }
+
+  @Test
+  void alertasUsanLaFechaDeOtorgamientoDeLaUltimaEscritura() {
+    UUID id =
+        enviadaConPayload(
+            "{\"nombre_conyuge_1\":\"Ana\",\"fecha_nacimiento_conyuge_1\":\"2000-08-20\"}");
+    NotaryEscritura escritura =
+        NotaryEscritura.of(
+            UUID.randomUUID(),
+            id,
+            1,
+            "{\"fecha_otorgamiento\":\"2065-08-20\"}",
+            "[]",
+            "ruta",
+            "e.docx",
+            USUARIO);
+    when(escrituras.findFirstByRemisionIdOrderByGeneratedAtDesc(id)).thenReturn(Optional.of(escritura));
+
+    assertThat(service.alertas(id))
+        .extracting(NotaryDtos.AlertaDto::codigo)
+        .contains(NotaryAlertas.TARIFA_TERCERA_EDAD);
+  }
+
+  @Test
+  void alertasATenantAjenoResponden404() {
+    UUID id = enviada().id();
+
+    for (UUID ajeno : List.of(UUID.randomUUID(), UUID.randomUUID())) {
+      sesion(ajeno);
+      assertEstado(HttpStatus.NOT_FOUND, assertThrows(ApiException.class, () -> service.alertas(id)));
+    }
+  }
+
+  /** Documento del bufete con su v1 en disco; la "última versión" del caso apunta a ella. */
+  private DocumentVersion documentoEnviado(byte[] bytes) {
+    estudio("APPROVED");
+    LegalDocument doc = LegalDocument.create(FIRMA, CASO, "cedula.pdf", "CEDULA");
+    when(documentosCaso.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(CASO, FIRMA))
+        .thenReturn(List.of(doc));
+    String clave =
+        storage.guardarVersion(FIRMA, CASO, doc.getId(), 1, "cedula.pdf", "application/pdf", bytes).clave();
+    DocumentVersion v1 = DocumentVersion.upload(FIRMA, doc.getId(), 1, "application/pdf", "sha1", clave);
+    when(versionesDocumento.findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(doc.getId(), FIRMA))
+        .thenReturn(Optional.of(v1));
+    when(versionesDocumento.findById(v1.getId())).thenReturn(Optional.of(v1));
+    MinutaDraft minuta = draft("MINUTA_COMPRAVENTA", PAYLOAD, MINUTA);
+    when(drafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(FICHA, FIRMA))
+        .thenReturn(List.of(minuta));
+    return v1;
+  }
+
+  private void leible(UUID remisionId, NotaryRemisionDocument fila) {
+    when(documentos.findByRemisionIdAndId(remisionId, fila.getId())).thenReturn(Optional.of(fila));
+  }
+
+  @Test
+  void reemplazarElDocumentoTrasElEnvioNoCambiaLoQueLeeLaNotaria() {
+    byte[] original = {11, 12};
+    DocumentVersion v1 = documentoEnviado(original);
+    UUID id = enviar().id();
+    NotaryRemisionDocument fila = documentosGuardados.get(0);
+    leible(id, fila);
+    assertEquals(v1.getStorageKey(), fila.getStorageKey(), "snapshot con la clave enviada");
+
+    // El bufete reemplaza: v2 con clave nueva; v1 y su archivo quedan intactos.
+    String claveV2 =
+        storage.guardarVersion(FIRMA, CASO, v1.getDocumentId(), 2, "cedula.pdf", "application/pdf", new byte[] {99})
+            .clave();
+    when(versionesDocumento.findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(v1.getDocumentId(), FIRMA))
+        .thenReturn(Optional.of(DocumentVersion.upload(FIRMA, v1.getDocumentId(), 2, "application/pdf", "sha2", claveV2)));
+
+    sesion(NOTARIA);
+    assertThat(service.readRemisionDocument(id, fila.getId()).bytes()).isEqualTo(original);
+  }
+
+  @Test
+  void laClaveDelSnapshotTienePrioridadSobreLaDeLaVersion() {
+    byte[] original = {21};
+    DocumentVersion v1 = documentoEnviado(original);
+    UUID id = enviar().id();
+    NotaryRemisionDocument fila = documentosGuardados.get(0);
+    leible(id, fila);
+    DocumentVersion movida = mock(DocumentVersion.class);
+    when(movida.getTenantId()).thenReturn(FIRMA);
+    when(movida.getStorageKey()).thenReturn(FIRMA + "/expedientes/otra-clave.pdf");
+    when(versionesDocumento.findById(v1.getId())).thenReturn(Optional.of(movida));
+
+    sesion(NOTARIA);
+    assertThat(service.readRemisionDocument(id, fila.getId()).bytes()).isEqualTo(original);
+  }
+
+  @Test
+  void filaSinStorageKeyLeeLaClaveDeLaVersion() {
+    byte[] original = {31, 32};
+    DocumentVersion v1 = documentoEnviado(original);
+    UUID id = enviar().id();
+    NotaryRemisionDocument anterior =
+        NotaryRemisionDocument.of(
+            id, versionGuardada().getId(), FIRMA, v1.getId(), "cedula.pdf", 0, null, "Incluido", null, null);
+    leible(id, anterior);
+
+    sesion(NOTARIA);
+    NotaryDtos.RemisionDocumentContent contenido = service.readRemisionDocument(id, anterior.getId());
+
+    assertThat(contenido.bytes()).isEqualTo(original);
+    assertEquals("application/pdf", contenido.mimeType());
   }
 
   @Test
@@ -611,6 +885,22 @@ class NotaryRemisionVersionTest {
   }
 
   @Test
+  void recibirDosVecesSoloAuditaLaPrimera() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+
+    service.getRemisionAndAcknowledge(id);
+    service.getRemisionAndAcknowledge(id);
+
+    verify(auditoria, times(1)).save(argThat(this::esRecepcion));
+    assertEquals(NotaryRemisionEstado.RECIBIDO.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  private boolean esRecepcion(AuditEvent evento) {
+    return "NOTARY_REMISION_RECIBIDA".equals(evento.getEvent());
+  }
+
+  @Test
   void avanzarDesdeTenantAjenoOElBufeteResponde404() {
     UUID id = enviada().id();
 
@@ -637,15 +927,78 @@ class NotaryRemisionVersionTest {
   }
 
   @Test
-  void laNotariaDestinoAvanzaYDevuelve() {
+  void laNotariaDestinoRecibeAvanzaYDevuelveConObservacion() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+    service.getRemisionAndAcknowledge(id);
+
+    assertEquals(1, service.advanceRemision(id).pasoNotarial());
+    NotaryDtos.RemisionDto devuelta =
+        service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("Falta el avalúo"));
+    assertEquals(NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name(), devuelta.estado());
+    assertEquals("Falta el avalúo", devuelta.observacionesNotaria());
+    verify(authorization, atLeastOnce()).requirePermission("notaria:remision:actuar");
+  }
+
+  @Test
+  void avanzarSinRecibirResponde409() {
     UUID id = enviada().id();
     sesion(NOTARIA);
 
-    assertEquals(1, service.advanceRemision(id).pasoNotarial());
+    ApiException error = assertThrows(ApiException.class, () -> service.advanceRemision(id));
+
+    assertEstado(HttpStatus.CONFLICT, error);
+    assertEquals(NotaryRemision.DEBE_ESTAR_RECIBIDA, error.getMessage());
+    assertEquals(0, remisionesGuardadas.get(id).getPasoNotarial());
+    assertEquals(NotaryRemisionEstado.ENVIADO_A_NOTARIA.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void devolverSinRecibirResponde409() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+
+    assertEstado(
+        HttpStatus.CONFLICT,
+        assertThrows(
+            ApiException.class,
+            () -> service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("Falta el avalúo"))));
+    assertEquals(NotaryRemisionEstado.ENVIADO_A_NOTARIA.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void devolverAntesDeCompletarSinObservacionResponde400() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+    service.getRemisionAndAcknowledge(id);
+
+    ApiException error =
+        assertThrows(
+            ApiException.class,
+            () -> service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("  ")));
+
+    assertEstado(HttpStatus.BAD_REQUEST, error);
+    assertEquals(NotaryRemision.FALTA_OBSERVACION, error.getMessage());
+    assertEquals(NotaryRemisionEstado.RECIBIDO.name(), remisionesGuardadas.get(id).getEstado());
+  }
+
+  @Test
+  void devolverCompletadaSinObservacionYLuegoDevueltaResponde409() {
+    UUID id = enviada().id();
+    sesion(NOTARIA);
+    service.getRemisionAndAcknowledge(id);
+    for (int i = 0; i < NotaryProcessSteps.COUNT - 1; i++) {
+      service.advanceRemision(id);
+    }
+
     assertEquals(
         NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name(),
         service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody(null)).estado());
-    verify(authorization, atLeastOnce()).requirePermission("notaria:remision:actuar");
+    assertEstado(
+        HttpStatus.CONFLICT,
+        assertThrows(
+            ApiException.class,
+            () -> service.devolverRemision(id, new NotaryDtos.DevolverRemisionBody("Otra vez"))));
   }
 
   @Test
@@ -760,7 +1113,7 @@ class NotaryRemisionVersionTest {
     TransactionSynchronizationManager.initSynchronization();
     try {
       enviada();
-      Path copia = Path.of(versionGuardada().getMinutaStorageRef());
+      Path copia = almacenamiento.resolve(versionGuardada().getMinutaStorageRef());
       assertThat(Files.exists(copia)).isTrue();
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
@@ -775,12 +1128,12 @@ class NotaryRemisionVersionTest {
   @Test
   void rollbackAlEditarBorraSoloLaCopiaNueva() {
     UUID id = enviada().id();
-    Path v1 = Path.of(versionGuardada().getMinutaStorageRef());
+    Path v1 = almacenamiento.resolve(versionGuardada().getMinutaStorageRef());
     borradorCorregido();
     TransactionSynchronizationManager.initSynchronization();
     try {
       editar(id);
-      Path v2 = Path.of(versionesGuardadas.get(1).getMinutaStorageRef());
+      Path v2 = almacenamiento.resolve(versionesGuardadas.get(1).getMinutaStorageRef());
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
           TransactionSynchronization.STATUS_ROLLED_BACK);
@@ -797,7 +1150,7 @@ class NotaryRemisionVersionTest {
     TransactionSynchronizationManager.initSynchronization();
     try {
       enviada();
-      Path copia = Path.of(versionGuardada().getMinutaStorageRef());
+      Path copia = almacenamiento.resolve(versionGuardada().getMinutaStorageRef());
 
       TransactionSynchronizationUtils.triggerAfterCompletion(
           TransactionSynchronization.STATUS_COMMITTED);

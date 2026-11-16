@@ -30,6 +30,12 @@ spring:
       hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
+  # Almacenamiento de archivos (ArchivoStorage). Hoy solo `local`; en el futuro habrá `b2`.
+  # Claves nuevas: relativas a local-root ({tenant}/expedientes/{caso}/...). Las filas antiguas
+  # guardan rutas absolutas y se leen solo si caen dentro de los storage-dir de abajo.
+  storage:
+    provider: ${LEXIA_STORAGE_PROVIDER:local}
+    local-root: ${LEXIA_STORAGE_LOCAL_ROOT:./data}
   minutas:
     storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
     # Opcional: ejecutable de LibreOffice (soffice) para la vista previa PDF con máxima fidelidad.
@@ -50,6 +56,13 @@ lexia:
       zona-horaria: ${LEXIA_COACTIVAS_ZONA_HORARIA:America/Guayaquil}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
+  # Clasificación automática del tipo documental tras el OCR (expedientes persistidos).
+  clasificacion:
+    # Confianza mínima (0-1) para asignar el tipo; por debajo queda como sugerencia (POR_REVISAR).
+    umbral: ${LEXIA_CLASIFICACION_UMBRAL:0.8}
+    timeout-ms: ${LEXIA_CLASIFICACION_TIMEOUT_MS:8000}
+    # Vacío → el primero de anthropic.models.
+    modelo: ${LEXIA_CLASIFICACION_MODELO:}
   worker:
     id: ${LEXIA_WORKER_ID:${HOSTNAME:${COMPUTERNAME:local-dev-worker}}}
   prompts:
@@ -58,7 +71,11 @@ lexia:
       analizar el texto extraído del expediente y extraer exactamente las variables requeridas
       para el acto jurídico '${tipoActo}'. No inventes datos. Si una variable no se encuentra
       en el texto, asígnale el valor null. No redactes cláusulas, minutas ni contratos:
-      el documento lo arma la plantilla .docx. Responde ÚNICAMENTE en formato JSON válido
+      el documento lo arma la plantilla .docx.
+      Cédulas (documento tipo CEDULA): fecha_nacimiento_* en formato dd/MM/yyyy desde la
+      fecha de nacimiento impresa; discapacidad_* solo si el documento indica discapacidad
+      expresamente (p. ej. SI); si no lo dice, null — nunca inventes NO.
+      Responde ÚNICAMENTE en formato JSON válido
       {"acto":"${tipoActo}","variables":{...}} sin markdown ni texto adicional.
     PROMPT_BIESS_CAPTURA: |
       Recibes el texto extraído por OCR de la pantalla DATOS APROBADOS PARA DESEMBOLSO,
@@ -243,6 +260,23 @@ lexia:
       Cada archivo OCR va en <documento id="..."> dentro de <expediente_ocr>.
 
       Responde ÚNICAMENTE invocando la herramienta procesar_expediente_completo.
+    PROMPT_REVISION_MINUTA_TERCERO: |
+      Eres un auditor notarial. Revisas UNA minuta de compraventa entregada por un tercero
+      (vendedor persona jurídica). El texto OCR llega en <documento_ocr>. No inventes cláusulas.
+
+      REGLAS (genera una observación por cada incumplimiento):
+      1. La cláusula de pago debe indicar el método: transferencia, cheque o efectivo.
+      2. Los anticipos deben tener soporte (constancia de pago / comprobante referido en la minuta).
+      3. Debe existir la cláusula de declaraciones especiales.
+
+      Si una regla se cumple, no generes observación para ella.
+      estado = APROBADO si observaciones está vacío; RECHAZADO si hay al menos una.
+      confianza 0-100. razon_rechazo: resumen breve si RECHAZADO, vacío si APROBADO.
+      checklist_cumplido: códigos de reglas OK (PAGO_METODO, ANTICIPOS_SOPORTE, DECLARACIONES_ESPECIALES).
+
+      observaciones: array de { "codigo": "PAGO_METODO"|"ANTICIPOS_SOPORTE"|"DECLARACIONES_ESPECIALES",
+      "severidad": "HIGH"|"MEDIUM"|"LOW", "mensaje": "hallazgo concreto en español" }.
+      Responde invocando la herramienta de validación documental (o JSON equivalente).
   ocr:
     cache-ttl-hours: ${LEXIA_OCR_CACHE_TTL_HOURS:24}
     cache-cleanup-ms: ${LEXIA_OCR_CACHE_CLEANUP_MS:600000}

@@ -29,8 +29,10 @@ public class DocumentReuploadController {
       @RequestParam("sessionId") String sessionId,
       @RequestParam("fileId") String fileId,
       @RequestParam(value = "tipoDocumento", required = false) String tipoDocumento,
-      @RequestParam("file") MultipartFile file) {
+      @RequestParam("file") MultipartFile file,
+      // true: el usuario ya vio el aviso de tipo distinto y reemplaza igual.
+      @RequestParam(value = "confirmarTipoDistinto", defaultValue = "false") boolean confirmarTipoDistinto) {
     authorization.ifAvailable(service -> service.requirePermission("expedientes:caso:escribir"));
-    return batchService.reupload(sessionId, fileId, tipoDocumento, file);
+    return batchService.reupload(sessionId, fileId, tipoDocumento, file, confirmarTipoDistinto);
   }
 }

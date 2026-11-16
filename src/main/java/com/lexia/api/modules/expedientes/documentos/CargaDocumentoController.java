@@ -5,6 +5,8 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.BorradorR
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.CrearBorradorRequest;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoSubidoDTO;
+import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.IniciarProcesamientoResponse;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.PrevalidacionDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
@@ -52,14 +54,17 @@ public class CargaDocumentoController {
 
   private final CargaDocumentoService cargaDocumentoService;
   private final ValidacionIaService validacionIaService;
+  private final OcrAzureBatchService ocr;
   private final ObjectProvider<AuthorizationService> authorization;
 
   public CargaDocumentoController(
       CargaDocumentoService cargaDocumentoService,
       ValidacionIaService validacionIaService,
+      OcrAzureBatchService ocr,
       ObjectProvider<AuthorizationService> authorization) {
     this.cargaDocumentoService = cargaDocumentoService;
     this.validacionIaService = validacionIaService;
+    this.ocr = ocr;
     this.authorization = authorization;
   }
 
@@ -82,11 +87,22 @@ public class CargaDocumentoController {
   @PostMapping(
       value = "/{idExpediente}/documentos/upload",
       consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public ResponseEntity<DocumentoCargadoDTO> subir(
-      @PathVariable String idExpediente, @RequestParam("file") MultipartFile file) {
+  public ResponseEntity<DocumentoSubidoDTO> subir(
+      @PathVariable String idExpediente,
+      @RequestParam("file") MultipartFile file,
+      @RequestParam(value = "codigoTipoDocumento", required = false) String codigoTipoDocumento,
+      @RequestParam(value = "observacion", required = false) String observacion) {
     requirePermission(PERMISO_ESCRITURA);
-    return ResponseEntity.status(HttpStatus.CREATED)
-        .body(cargaDocumentoService.subir(idExpediente, file));
+    DocumentoCargadoDTO subido =
+        cargaDocumentoService.subir(idExpediente, file, codigoTipoDocumento, observacion);
+    // Soporte (minuta tercero / ingresos): no entra al consolidado OCR del expediente.
+    // EJ-3 dispara la revisión IA de la minuta de tercero desde CargaDocumentoService.subir.
+    if (LegalDocument.esSoloSoporte(subido.codigoTipoDocumento())) {
+      return ResponseEntity.status(HttpStatus.CREATED).body(DocumentoSubidoDTO.de(subido, null));
+    }
+    // El archivo ya quedó guardado: si el OCR falla, el upload igual responde 201 con ocrOk=false.
+    Boolean ocrOk = ocr.ocrTrasSubir(idExpediente, subido.idDocumento());
+    return ResponseEntity.status(HttpStatus.CREATED).body(DocumentoSubidoDTO.de(subido, ocrOk));
   }
 
   /** Última versión del archivo; el tenant y el expediente se validan al resolver el documento. */
@@ -95,6 +111,7 @@ public class CargaDocumentoController {
       @PathVariable String idExpediente, @PathVariable String idDocumento) {
     requirePermission(PERMISO_LECTURA);
     StoredDoc doc = cargaDocumentoService.requireStoredDoc(idExpediente, idDocumento);
+    cargaDocumentoService.registrarVista(idExpediente, doc);
     ContentDisposition disposition =
         ContentDisposition.attachment()
             .filename(doc.nombreOriginal(), StandardCharsets.UTF_8)

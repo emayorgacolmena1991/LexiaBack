@@ -18,6 +18,8 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Prevalida
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -30,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -54,6 +57,7 @@ public class CargaDocumentoService {
   private final ProductoBiessService productos;
   private final ExpedienteBorradorStore borradores;
   private final CaseDocumentoStore caseDocs;
+  private final ObjectProvider<RevisionMinutaTerceroService> revisionMinutaTercero;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
 
   public CargaDocumentoService(
@@ -62,13 +66,15 @@ public class CargaDocumentoService {
       DocumentoTextoOcrRepository ocrRepository,
       ProductoBiessService productos,
       ExpedienteBorradorStore borradores,
-      CaseDocumentoStore caseDocs) {
+      CaseDocumentoStore caseDocs,
+      ObjectProvider<RevisionMinutaTerceroService> revisionMinutaTercero) {
     this.actoNotarialService = actoNotarialService;
     this.procesamientoDocumentalService = procesamientoDocumentalService;
     this.ocrRepository = ocrRepository;
     this.productos = productos;
     this.borradores = borradores;
     this.caseDocs = caseDocs;
+    this.revisionMinutaTercero = revisionMinutaTercero;
   }
 
   public BorradorResponse crearBorrador(String idActo) {
@@ -156,15 +162,51 @@ public class CargaDocumentoService {
       return caseDocs.listar(official);
     }
     DraftExpediente draft = requireDraft(idExpediente);
-    return draft.documentos().values().stream().map(StoredDoc::toDto).toList();
+    return draft.documentos().values().stream()
+        .map(doc -> doc.toDto(draft.clasificaciones().get(doc.idDocumento())))
+        .toList();
   }
 
   public DocumentoCargadoDTO subir(String idExpediente, MultipartFile file) {
+    return subir(idExpediente, file, null, null);
+  }
+
+  /**
+   * {@code codigoTipo}: casilla con tipo fijo (p. ej. minuta de tercero); solo en expediente
+   * persistido y si el producto lo admite. Se valida antes de leer el archivo.
+   */
+  public DocumentoCargadoDTO subir(
+      String idExpediente, MultipartFile file, String codigoTipo, String observacion) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    boolean conTipo = StringUtils.hasText(codigoTipo);
+    if (observacion != null && observacion.trim().length() > 500) {
+      throw ApiException.badRequest("La observación admite hasta 500 caracteres.");
+    }
     if (official != null) {
+      if (conTipo) {
+        exigirTipoPermitido(idExpediente, codigoTipo.trim());
+      }
       byte[] bytes = readBytes(file, official.ingestionMode());
       String original = originalName(file);
-      return caseDocs.subir(official, original, file.getContentType(), bytes);
+      String mime = file.getContentType();
+      String tipoFijo = conTipo ? codigoTipo.trim() : null;
+      DocumentoCargadoDTO subido = caseDocs.subir(official, original, mime, bytes, tipoFijo, observacion);
+      // EJ-3: solo minuta de tercero (no SOPORTE_INGRESOS). Tras commit de la carga.
+      if (LegalDocument.TIPO_MINUTA_TERCERO.equals(subido.codigoTipoDocumento())) {
+        RevisionMinutaTerceroService revision = revisionMinutaTercero.getIfAvailable();
+        if (revision != null) {
+          revision.revisarTrasSubida(
+              official.tenantId(),
+              official.caseId(),
+              UUID.fromString(subido.idDocumento()),
+              bytes,
+              mime);
+        }
+      }
+      return subido;
+    }
+    if (conTipo) {
+      throw ApiException.badRequest("Guarda el expediente antes de cargar en esta casilla.");
     }
     DraftExpediente draft = requireDraft(idExpediente);
     if (draft.locked()) {
@@ -211,6 +253,107 @@ public class CargaDocumentoService {
     return stored.toDto();
   }
 
+  /**
+   * Estado de clasificación de un documento del borrador; vacío si {@code sessionId} no es un
+   * borrador, el documento no está o el modo es escaneado (tipo fijo).
+   */
+  public Optional<CaseDocumentoStore.ClasificacionActual> clasificacionActualBorrador(
+      String sessionId, String fileId) {
+    DraftExpediente draft = borradorONull(sessionId);
+    if (draft == null || draft.ingestionMode().isFisicoEscaneado()) {
+      return Optional.empty();
+    }
+    StoredDoc doc = draft.documentos().get(fileId);
+    if (doc == null) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        new CaseDocumentoStore.ClasificacionActual(
+            doc.codigoTipoDocumento(), draft.tipoFijadoPorUsuario(doc)));
+  }
+
+  /**
+   * Mismo criterio que {@link LegalDocument#registrarClasificacionAuto}: asigna solo si
+   * {@code asignar} y el tipo no lo fijó el usuario (se revisa de nuevo bajo el lock del mapa).
+   *
+   * @return tipo vigente del documento tras aplicar.
+   */
+  public String aplicarClasificacionBorrador(
+      String sessionId,
+      String fileId,
+      String tipo,
+      BigDecimal confianza,
+      String modelo,
+      String estado,
+      boolean asignar) {
+    DraftExpediente draft = requireDraft(sessionId);
+    synchronized (draft.documentos()) {
+      StoredDoc doc = draft.documentos().get(fileId);
+      if (doc == null) {
+        throw ApiException.notFound("Documento no encontrado: " + fileId);
+      }
+      ClasificacionBorrador previa = draft.clasificaciones().get(fileId);
+      boolean fijado = draft.tipoFijadoPorUsuario(doc);
+      boolean asigna = asignar && !fijado;
+      if (asigna) {
+        doc = doc.withTipo(tipo);
+        draft.documentos().put(fileId, doc);
+      }
+      String origen =
+          asigna ? LegalDocument.ORIGEN_AUTO : (previa == null ? null : previa.origen());
+      draft.clasificaciones()
+          .put(fileId, new ClasificacionBorrador(tipo, confianza, origen, estado, modelo, Instant.now()));
+      return doc.codigoTipoDocumento();
+    }
+  }
+
+  public void registrarErrorClasificacionBorrador(String sessionId, String fileId, String modelo) {
+    DraftExpediente draft = requireDraft(sessionId);
+    draft.clasificaciones()
+        .compute(
+            fileId,
+            (id, previa) ->
+                new ClasificacionBorrador(
+                    previa == null ? null : previa.tipoSugerido(),
+                    previa == null ? null : previa.confianza(),
+                    previa == null ? null : previa.origen(),
+                    LegalDocument.ESTADO_ERROR,
+                    modelo,
+                    Instant.now()));
+  }
+
+  /** Para la promoción: la clasificación de cada documento del borrador (id DOC-xxxx). */
+  public Map<String, ClasificacionBorrador> clasificacionesDelBorrador(String draftId) {
+    DraftExpediente draft = borradorONull(draftId);
+    return draft == null ? Map.of() : Map.copyOf(draft.clasificaciones());
+  }
+
+  /** {@code null} si no es un borrador del tenant: aquí no es un error, es "no aplica". */
+  private DraftExpediente borradorONull(String sessionId) {
+    if (caseDocs.context(sessionId) != null) {
+      return null;
+    }
+    try {
+      return requireDraft(sessionId);
+    } catch (ApiException e) {
+      if (e.getStatus() != org.springframework.http.HttpStatus.NOT_FOUND) {
+        throw e;
+      }
+      return null;
+    }
+  }
+
+  /** {@code true} si el id es un expediente persistido del tenant (no un borrador). */
+  public boolean esExpedientePersistido(String idExpediente) {
+    return caseDocs.isCase(idExpediente);
+  }
+
+  /** Versión vigente del documento en un expediente persistido; {@code null} en un borrador. */
+  public Integer versionActual(String sessionId, String fileId) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
+    return official == null ? null : caseDocs.versionActual(official, fileId);
+  }
+
   /** Lookup bytes del borrador (sessionId = idExpediente). */
   public StoredDoc requireStoredDoc(String sessionId, String fileId) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
@@ -231,11 +374,40 @@ public class CargaDocumentoService {
    */
   public StoredDoc reemplazarArchivoOcr(
       String sessionId, String fileId, MultipartFile file, String tipoDocumento) {
+    return guardarReemplazo(prepararReemplazo(sessionId, fileId, file, tipoDocumento));
+  }
+
+  /**
+   * Reemplazo validado pero todavía sin persistir: archivo leído, formato y modo revisados, tipo del
+   * cliente resuelto al catálogo. El OCR y la clasificación se hacen sobre {@link
+   * ReemplazoPreparado#candidato()} antes de decidir si se guarda.
+   */
+  public ReemplazoPreparado prepararReemplazo(
+      String sessionId, String fileId, MultipartFile file, String tipoDocumento) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
     if (official != null) {
+      // 404 si el documento no es de este expediente; además trae el tipo vigente.
+      String tipoActual = caseDocs.clasificacionActual(official, fileId).docType();
       byte[] bytes = readBytes(file, official.ingestionMode());
-      return caseDocs.reemplazar(
-          official, fileId, originalName(file), file.getContentType(), bytes, tipoDocumento);
+      boolean escaneado = official.ingestionMode().isFisicoEscaneado();
+      String tipoCliente =
+          escaneado ? null : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
+      String tipoFinal =
+          escaneado
+              ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
+              : (tipoCliente != null ? tipoCliente : tipoActual);
+      return new ReemplazoPreparado(
+          sessionId,
+          fileId,
+          originalName(file),
+          file.getContentType(),
+          bytes,
+          formatSize(bytes.length),
+          tipoCliente,
+          tipoActual,
+          tipoFinal,
+          escaneado,
+          true);
     }
     DraftExpediente draft = requireDraft(sessionId);
     StoredDoc existing = draft.documentos().get(fileId);
@@ -266,38 +438,62 @@ public class CargaDocumentoService {
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
-    String tipo;
-    if (fisico) {
-      tipo = IngestionMode.EXPEDIENTE_FISICO_ESCANEADO;
-    } else {
-      tipo =
-          StringUtils.hasText(tipoDocumento)
-              ? tipoDocumento.trim()
-              : existing.codigoTipoDocumento();
+    String tipoCliente =
+        fisico ? null : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
+    String tipoFinal =
+        fisico
+            ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
+            : (tipoCliente != null ? tipoCliente : existing.codigoTipoDocumento());
+    return new ReemplazoPreparado(
+        sessionId,
+        fileId,
+        original,
+        file.getContentType(),
+        bytes,
+        formatSize(file.getSize()),
+        tipoCliente,
+        existing.codigoTipoDocumento(),
+        tipoFinal,
+        fisico,
+        false);
+  }
+
+  /** Persiste un reemplazo ya validado: versión N+1 (expediente) o el documento del borrador. */
+  public StoredDoc guardarReemplazo(ReemplazoPreparado p) {
+    if (p.expediente()) {
+      CaseDocumentoStore.CaseFileContext official = caseDocs.context(p.sessionId());
+      if (official == null) {
+        throw ApiException.notFound("Expediente no encontrado: " + p.sessionId());
+      }
+      return caseDocs.reemplazar(official, p.fileId(), p.nombre(), p.mime(), p.bytes(), p.tipoCliente());
     }
-    StoredDoc replaced =
-        new StoredDoc(
-            fileId,
-            original,
-            file.getSize(),
-            formatSize(file.getSize()),
-            file.getContentType(),
-            bytes,
-            tipo);
-    draft.documentos().put(fileId, replaced);
-    draft.ocrResultados().remove(fileId);
+    DraftExpediente draft = requireDraft(p.sessionId());
+    if (!draft.documentos().containsKey(p.fileId())) {
+      throw ApiException.notFound("Documento no encontrado: " + p.fileId());
+    }
+    StoredDoc replaced = p.candidato();
+    draft.documentos().put(p.fileId(), replaced);
+    draft.ocrResultados().remove(p.fileId());
+    if (!p.escaneado() && !java.util.Objects.equals(p.tipoFinal(), p.tipoActual())) {
+      draft.marcarManual(p.fileId());
+    }
     return replaced;
   }
 
-  /** Actualiza tipo sin validar catálogo (payload batch OCR). */
+  /**
+   * Tipo que manda el cliente en analyze-single/batch. Se valida contra el catálogo del expediente:
+   * una etiqueta se guarda como su código y un texto que no es del catálogo no se asigna ni marca
+   * MANUAL.
+   */
   public void actualizarTipoDocumentoLibre(String sessionId, String fileId, String tipo) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(sessionId);
     if (official != null) {
-      String codigo =
-          official.ingestionMode().isFisicoEscaneado()
-              ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
-              : tipo.trim();
-      caseDocs.actualizarTipo(official, fileId, codigo);
+      if (official.ingestionMode().isFisicoEscaneado()) {
+        caseDocs.actualizarTipo(official, fileId, IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
+        return;
+      }
+      tipoDelCliente(sessionId, fileId, tipo)
+          .ifPresent(codigo -> caseDocs.actualizarTipo(official, fileId, codigo));
       return;
     }
     DraftExpediente draft = requireDraft(sessionId);
@@ -310,7 +506,53 @@ public class CargaDocumentoService {
       draft.documentos().put(fileId, doc.withTipo(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO));
       return;
     }
-    draft.documentos().put(fileId, doc.withTipo(tipo.trim()));
+    Optional<String> codigo = tipoDelCliente(sessionId, fileId, tipo);
+    if (codigo.isEmpty()) {
+      return;
+    }
+    draft.documentos().put(fileId, doc.withTipo(codigo.get()));
+    draft.marcarManual(fileId);
+  }
+
+  /**
+   * Código del catálogo para lo que mandó el cliente: el código tal cual o su etiqueta (sin
+   * distinguir mayúsculas ni tildes). Vacío si no manda nada o no corresponde a ningún tipo. Sin
+   * catálogo (producto sin requisitos) se acepta tal cual, igual que en el PATCH.
+   */
+  Optional<String> tipoDelCliente(String idExpediente, String fileId, String tipo) {
+    if (!StringUtils.hasText(tipo)) {
+      return Optional.empty();
+    }
+    String valor = tipo.trim();
+    List<TipoPermitidoDTO> catalogo = tiposPermitidos(idExpediente);
+    if (catalogo.isEmpty()) {
+      return Optional.of(valor);
+    }
+    for (TipoPermitidoDTO permitido : catalogo) {
+      if (valor.equals(permitido.codigo())) {
+        return Optional.of(permitido.codigo());
+      }
+    }
+    String buscado = comparable(valor);
+    for (TipoPermitidoDTO permitido : catalogo) {
+      if (buscado.equals(comparable(permitido.codigo()))
+          || buscado.equals(comparable(permitido.nombre()))) {
+        return Optional.of(permitido.codigo());
+      }
+    }
+    // Sin el valor: es texto libre del cliente.
+    LOG.warn("Tipo documental del cliente fuera del catálogo doc={}; no se asigna", fileId);
+    return Optional.empty();
+  }
+
+  private static String comparable(String texto) {
+    if (texto == null) {
+      return "";
+    }
+    String sinTildes =
+        java.text.Normalizer.normalize(texto.trim(), java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "");
+    return sinTildes.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
   }
 
   public TipoActualizadoDTO actualizarTipo(
@@ -318,13 +560,7 @@ public class CargaDocumentoService {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
     if (official != null) {
       String codigo = body.codigoTipoDocumento().trim();
-      Set<String> permitidos =
-          tiposPermitidos(idExpediente).stream()
-              .map(TipoPermitidoDTO::codigo)
-              .collect(java.util.stream.Collectors.toSet());
-      if (!permitidos.isEmpty() && !permitidos.contains(codigo)) {
-        throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
-      }
+      exigirTipoPermitido(idExpediente, codigo);
       return caseDocs.actualizarTipo(official, idDocumento, codigo);
     }
     DraftExpediente draft = requireDraft(idExpediente);
@@ -336,16 +572,35 @@ public class CargaDocumentoService {
       throw ApiException.notFound("Documento no encontrado: " + idDocumento);
     }
     String codigo = body.codigoTipoDocumento().trim();
+    exigirTipoPermitido(idExpediente, codigo);
+    StoredDoc updated = doc.withTipo(codigo);
+    draft.documentos().put(idDocumento, updated);
+    draft.marcarManual(idDocumento);
+    return new TipoActualizadoDTO(idDocumento, codigo, "CLASIFICADO");
+  }
+
+  /**
+   * La minuta de tercero solo existe en productos con vendedor persona jurídica: fuera del
+   * catálogo del producto se rechaza aunque el catálogo esté vacío. SOPORTE_INGRESOS va como
+   * requisito opcional de productos con compraventa (V104); si no está en el catálogo, se rechaza.
+   */
+  private void exigirTipoPermitido(String idExpediente, String codigo) {
     Set<String> permitidos =
         tiposPermitidos(idExpediente).stream()
             .map(TipoPermitidoDTO::codigo)
             .collect(java.util.stream.Collectors.toSet());
-    if (!permitidos.isEmpty() && !permitidos.contains(codigo)) {
+    boolean libre = permitidos.isEmpty() && !LegalDocument.TIPO_MINUTA_TERCERO.equals(codigo);
+    if (!libre && !permitidos.contains(codigo)) {
       throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
     }
-    StoredDoc updated = doc.withTipo(codigo);
-    draft.documentos().put(idDocumento, updated);
-    return new TipoActualizadoDTO(idDocumento, codigo, "CLASIFICADO");
+  }
+
+  /** Lectura del contenido por el bufete: solo se auditan los documentos de soporte. */
+  public void registrarVista(String idExpediente, StoredDoc doc) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null && LegalDocument.esSoloSoporte(doc.codigoTipoDocumento())) {
+      caseDocs.registrarVista(official, doc.idDocumento());
+    }
   }
 
   public void eliminar(String idExpediente, String idDocumento) {
@@ -362,6 +617,7 @@ public class CargaDocumentoService {
       throw ApiException.notFound("Documento no encontrado: " + idDocumento);
     }
     draft.ocrResultados().remove(idDocumento);
+    draft.clasificaciones().remove(idDocumento);
   }
 
   /** POST iniciar-procesamiento / procesar-ia: encola Azure→Gemini una sola vez. */
@@ -506,36 +762,6 @@ public class CargaDocumentoService {
       return;
     }
     draft.ocrResultados().put(resultado.idDocumento(), resultado);
-  }
-
-  /**
-   * Vuelca OCR del borrador a {@code app.documento_texto_ocr}. Llamar al crear expediente definitivo.
-   */
-  public void persistirOcrAlCrearExpediente(String idExpediente, UUID tenantId) {
-    DraftExpediente draft = drafts.get(idExpediente);
-    if (draft == null) {
-      return;
-    }
-    for (DocumentoOcrResultadoDTO r : draft.ocrResultados().values()) {
-      try {
-        DocumentoTextoOcr row =
-            ocrRepository
-                .findByIdExpedienteAndIdDocumento(idExpediente, r.idDocumento())
-                .orElseGet(DocumentoTextoOcr::new);
-        row.setTenantId(tenantId);
-        row.setIdExpediente(idExpediente);
-        row.setIdDocumento(r.idDocumento());
-        row.setTipoDocumento(r.tipoDocumento());
-        row.setTextoOcr(r.textoOcr());
-        row.setAnalisisJson(r.analisisJson());
-        row.setEstadoDoc(r.estado());
-        row.setMotivo(r.motivo());
-        row.setConfianza(r.confianza());
-        ocrRepository.save(row);
-      } catch (Exception e) {
-        // no bloquear alta si falla el volcado OCR
-      }
-    }
   }
 
   void actualizarDocPrevalidacion(
@@ -686,6 +912,8 @@ public class CargaDocumentoService {
         Collections.synchronizedMap(new LinkedHashMap<>());
     /** OCR+LLM solo en RAM hasta crear expediente. */
     private final Map<String, DocumentoOcrResultadoDTO> ocrResultados = new ConcurrentHashMap<>();
+    /** Clasificación por documento (automática o manual) hasta la promoción. */
+    private final Map<String, ClasificacionBorrador> clasificaciones = new ConcurrentHashMap<>();
     private volatile boolean locked;
     private volatile PrevalidacionState prevalidacion;
 
@@ -732,6 +960,34 @@ public class CargaDocumentoService {
 
     Map<String, DocumentoOcrResultadoDTO> ocrResultados() {
       return ocrResultados;
+    }
+
+    Map<String, ClasificacionBorrador> clasificaciones() {
+      return clasificaciones;
+    }
+
+    /** El usuario eligió el tipo: MANUAL, conservando la última sugerencia del clasificador. */
+    void marcarManual(String fileId) {
+      clasificaciones.compute(
+          fileId,
+          (id, previa) ->
+              new ClasificacionBorrador(
+                  previa == null ? null : previa.tipoSugerido(),
+                  previa == null ? null : previa.confianza(),
+                  LegalDocument.ORIGEN_MANUAL,
+                  LegalDocument.ESTADO_CLASIFICADO,
+                  previa == null ? null : previa.modelo(),
+                  Instant.now()));
+    }
+
+    /** Igual que en {@code LegalDocument}: MANUAL, o un tipo puesto sin pasar por el clasificador. */
+    boolean tipoFijadoPorUsuario(StoredDoc doc) {
+      ClasificacionBorrador c = clasificaciones.get(doc.idDocumento());
+      if (c != null) {
+        return LegalDocument.ORIGEN_MANUAL.equals(c.origen())
+            || (c.origen() == null && StringUtils.hasText(doc.codigoTipoDocumento()));
+      }
+      return StringUtils.hasText(doc.codigoTipoDocumento());
     }
 
     void clearOcrResultados() {
@@ -853,7 +1109,57 @@ public class CargaDocumentoService {
     }
 
     DocumentoCargadoDTO toDto() {
-      return new DocumentoCargadoDTO(idDocumento, nombreOriginal, tamano, codigoTipoDocumento);
+      return toDto(null);
+    }
+
+    DocumentoCargadoDTO toDto(ClasificacionBorrador clasificacion) {
+      return new DocumentoCargadoDTO(
+          idDocumento,
+          nombreOriginal,
+          tamano,
+          codigoTipoDocumento,
+          clasificacion == null ? null : clasificacion.tipoSugerido(),
+          clasificacion == null ? null : clasificacion.estado(),
+          clasificacion == null ? null : clasificacion.origen());
     }
   }
+
+  /**
+   * Reemplazo validado sin persistir.
+   *
+   * @param tipoCliente tipo elegido por el usuario y resuelto al catálogo (null si no eligió).
+   * @param tipoActual tipo del documento antes del reemplazo.
+   * @param tipoFinal tipo que tendrá el documento si se guarda.
+   * @param expediente true si es un expediente persistido (versionado), false si es un borrador.
+   */
+  public record ReemplazoPreparado(
+      String sessionId,
+      String fileId,
+      String nombre,
+      String mime,
+      byte[] bytes,
+      String tamano,
+      String tipoCliente,
+      String tipoActual,
+      String tipoFinal,
+      boolean escaneado,
+      boolean expediente) {
+
+    /** El archivo nuevo como documento, para el OCR previo y para el borrador. */
+    public StoredDoc candidato() {
+      return new StoredDoc(fileId, nombre, bytes.length, tamano, mime, bytes, tipoFinal);
+    }
+  }
+
+  /**
+   * Clasificación de un documento del borrador; viaja al {@code LegalDocument} en la promoción.
+   * {@code origen} null = el clasificador solo sugirió (no asignó).
+   */
+  public record ClasificacionBorrador(
+      String tipoSugerido,
+      BigDecimal confianza,
+      String origen,
+      String estado,
+      String modelo,
+      Instant clasificadoEn) {}
 }

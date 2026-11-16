@@ -8,8 +8,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,13 +34,9 @@ public class DocxPdfConverter {
   private static final long SOFFICE_TIMEOUT_SEG = 90;
 
   private final String sofficePath;
-  private final Path workDir;
 
-  public DocxPdfConverter(
-      @Value("${lexia.minutas.soffice-path:}") String sofficePath,
-      @Value("${lexia.minutas.storage-dir:./data/minutas}") String storageDir) {
+  public DocxPdfConverter(@Value("${lexia.minutas.soffice-path:}") String sofficePath) {
     this.sofficePath = sofficePath == null ? "" : sofficePath.trim();
-    this.workDir = Path.of(storageDir).toAbsolutePath().normalize().resolve("preview-tmp");
   }
 
   public byte[] toPdf(byte[] docx) {
@@ -70,8 +68,8 @@ public class DocxPdfConverter {
   }
 
   private byte[] conLibreOffice(byte[] docx) throws IOException, InterruptedException {
-    Files.createDirectories(workDir);
-    Path dir = Files.createTempDirectory(workDir, "pv-");
+    // Temporal del sistema: nada de la conversión queda bajo las carpetas de almacenamiento.
+    Path dir = Files.createTempDirectory("lexia-pv-");
     Path in = dir.resolve("minuta.docx");
     Path outPdf = dir.resolve("minuta.pdf");
     try {
@@ -100,17 +98,24 @@ public class DocxPdfConverter {
       LOG.info("Minuta convertida a PDF (LibreOffice) bytes={}", pdf.length);
       return pdf;
     } finally {
-      borrar(outPdf);
-      borrar(in);
-      borrar(dir);
+      borrarDirectorio(dir);
     }
   }
 
-  private static void borrar(Path path) {
-    try {
-      Files.deleteIfExists(path);
-    } catch (IOException ignored) {
-      // temporal: se limpia en el siguiente arranque si quedó
+  /** LibreOffice puede dejar otros archivos (bloqueos, perfiles): se borra todo el directorio. */
+  static void borrarDirectorio(Path dir) {
+    try (Stream<Path> rutas = Files.walk(dir)) {
+      rutas.sorted(Comparator.reverseOrder())
+          .forEach(
+              ruta -> {
+                try {
+                  Files.deleteIfExists(ruta);
+                } catch (IOException ex) {
+                  LOG.warn("No se pudo borrar el temporal {}: {}", ruta, ex.getMessage());
+                }
+              });
+    } catch (IOException ex) {
+      LOG.warn("No se pudo recorrer el temporal {}: {}", dir, ex.getMessage());
     }
   }
 }

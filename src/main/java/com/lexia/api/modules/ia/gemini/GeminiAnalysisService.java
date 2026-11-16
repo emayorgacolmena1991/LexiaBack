@@ -57,7 +57,8 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         "vendedor": {"nombres": "", "cedula": "", "estadoCivil": ""},
         "inmueble": {"claveCatastral": "", "linderos": "", "avaluo": 0}},
        "dictamen": {"estado": "APPROVED|WITH_OBSERVATIONS|REJECTED", "resumen": "",
-        "observaciones": [{"codigo": "", "severidad": "HIGH|MEDIUM|LOW", "mensaje": ""}]}}
+        "observaciones": [{"codigo": "", "severidad": "HIGH|MEDIUM|LOW", "mensaje": "",
+          "documentoId": null}]}}
       """;
 
   private final String apiKey;

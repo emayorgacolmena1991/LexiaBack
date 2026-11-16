@@ -1,5 +1,8 @@
 package com.lexia.api.modules.notary;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
@@ -25,14 +28,17 @@ import com.lexia.api.modules.notifications.BrevoProperties;
 import com.lexia.api.modules.notifications.EmailNotificationService;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantRepository;
-import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
 public class NotaryCrossTenantService {
 
+  private static final Logger LOG = LoggerFactory.getLogger(NotaryCrossTenantService.class);
   private static final List<String> TERMINAL_ESTADOS =
       List.of(
           NotaryRemisionEstado.DEVUELTO_AL_BUFETE.name(),
@@ -51,7 +58,6 @@ public class NotaryCrossTenantService {
   private static final int PRIMERA_VERSION = 1;
 
   private final AuthorizationService authorization;
-  private final NotaryAccessGuard accessGuard;
   private final TenantRepository tenants;
   private final NotaryTenantProfileRepository profiles;
   private final TenantNotaryPartnershipRepository partnerships;
@@ -71,10 +77,11 @@ public class NotaryCrossTenantService {
   private final EmailNotificationService emails;
   private final AppUserRepository users;
   private final BrevoProperties brevoProperties;
+  private final NotaryEscrituraRepository escrituras;
+  private final ObjectMapper mapper;
 
   public NotaryCrossTenantService(
       AuthorizationService authorization,
-      NotaryAccessGuard accessGuard,
       TenantRepository tenants,
       NotaryTenantProfileRepository profiles,
       TenantNotaryPartnershipRepository partnerships,
@@ -93,9 +100,10 @@ public class NotaryCrossTenantService {
       AuditEventRepository auditEvents,
       EmailNotificationService emails,
       AppUserRepository users,
-      BrevoProperties brevoProperties) {
+      BrevoProperties brevoProperties,
+      NotaryEscrituraRepository escrituras,
+      ObjectMapper mapper) {
     this.authorization = authorization;
-    this.accessGuard = accessGuard;
     this.tenants = tenants;
     this.profiles = profiles;
     this.partnerships = partnerships;
@@ -115,6 +123,8 @@ public class NotaryCrossTenantService {
     this.emails = emails;
     this.users = users;
     this.brevoProperties = brevoProperties;
+    this.escrituras = escrituras;
+    this.mapper = mapper;
   }
 
   @Transactional(readOnly = true)
@@ -123,7 +133,6 @@ public class NotaryCrossTenantService {
       authorization.requirePermission("escrituracion:notaria:enviar");
     }
     UUID firmId = AuthContext.require().tenantId();
-    accessGuard.requireFirmContext(firmId);
     Set<UUID> assigned =
         assignments.findByTenantIdAndActiveTrueOrderByCreatedAtAsc(firmId).stream()
             .map(NotaryFirmAssignment::getNotaryTenantId)
@@ -180,14 +189,12 @@ public class NotaryCrossTenantService {
   public NotaryDtos.PartnershipDto approvePartnership(UUID partnershipId) {
     authorization.requirePermission("notaria:partnership:gestionar");
     UUID notaryId = AuthContext.require().tenantId();
+    // Un vínculo de otra notaría no existe para quien no es su destino: 404, igual que uno inexistente.
     TenantNotaryPartnership partnership =
         partnerships
             .findById(partnershipId)
+            .filter(p -> p.getNotaryTenantId().equals(notaryId))
             .orElseThrow(() -> NotaryBusinessException.notFound("Vínculo no encontrado."));
-    accessGuard.requireNotaryContext(partnership.getNotaryTenantId());
-    if (!partnership.getNotaryTenantId().equals(notaryId)) {
-      throw NotaryBusinessException.forbidden("Solo la notaría destino puede aprobar el vínculo.");
-    }
     partnership.approve();
     partnerships.save(partnership);
     audit(notaryId, "NOTARY_PARTNERSHIP_APPROVED", partnershipId);
@@ -252,7 +259,10 @@ public class NotaryCrossTenantService {
             .findById(snapshot.getFirmDocumentVersionId())
             .filter(v -> v.getTenantId().equals(snapshot.getFirmTenantId()))
             .orElseThrow(() -> NotaryBusinessException.notFound("Versión documental no disponible."));
-    byte[] bytes = documentStorage.read(version.getStorageKey());
+    // Clave del snapshot; filas anteriores a V101 sin backfill usan la de la versión.
+    String clave =
+        snapshot.getStorageKey() != null ? snapshot.getStorageKey() : version.getStorageKey();
+    byte[] bytes = documentStorage.read(clave);
     String mime =
         version.getMimeType() == null || version.getMimeType().isBlank()
             ? guessMime(snapshot.getDisplayName())
@@ -280,8 +290,10 @@ public class NotaryCrossTenantService {
   public NotaryDtos.RemisionDto getRemisionAndAcknowledge(UUID id) {
     NotaryRemision remision = remisionDeLaNotaria(id);
     authorization.requirePermission("notaria:remision:actuar");
-    remision.acknowledgeReceipt();
-    remisiones.save(remision);
+    if (remision.acknowledgeReceipt()) {
+      remisiones.save(remision);
+      audit(AuthContext.require().tenantId(), "NOTARY_REMISION_RECIBIDA", id);
+    }
     return toRemisionDto(remision);
   }
 
@@ -400,6 +412,59 @@ public class NotaryCrossTenantService {
     return versionLegible(id, numero).getPayload();
   }
 
+  /** Alertas de tarifa e impuestos de la versión vigente: bufete dueño o notaría destino. */
+  @Transactional(readOnly = true)
+  public List<NotaryDtos.AlertaDto> alertas(UUID id) {
+    NotaryRemision remision = remisionLegible(id);
+    return remisionVersions
+        .findFirstByRemisionIdOrderByVersionNoDesc(remision.getId())
+        .map(this::alertasDe)
+        .orElse(List.of());
+  }
+
+  /** Solicitud municipal de exoneración (Guayaquil) prellenada con la versión vigente. */
+  @Transactional(readOnly = true)
+  public NotaryDtos.RemisionDocumentContent solicitudExoneracion(
+      UUID id, Map<String, String> valores) {
+    Exoneracion e = exoneracion(id);
+    return new NotaryDtos.RemisionDocumentContent(
+        "solicitud_exoneracion_" + e.remision().getExpedienteCodigo() + ".pdf",
+        "application/pdf",
+        SolicitudExoneracionPdf.llenar(
+            e.payload(), e.solicitante(), LocalDate.now(NotaryAlertas.ZONA), valores));
+  }
+
+  /** Campos de la solicitud con su prellenado, para el panel del visor. */
+  @Transactional(readOnly = true)
+  public List<NotaryDtos.CampoExoneracionDto> camposExoneracion(UUID id) {
+    Exoneracion e = exoneracion(id);
+    return SolicitudExoneracionPdf.campos(e.payload(), e.solicitante()).stream()
+        .map(
+            c ->
+                new NotaryDtos.CampoExoneracionDto(
+                    c.clave(), c.seccion(), c.etiqueta(), c.tipo(), c.opciones(), c.valor(), c.editable()))
+        .toList();
+  }
+
+  private record Exoneracion(NotaryRemision remision, JsonNode payload, String solicitante) {}
+
+  private Exoneracion exoneracion(UUID id) {
+    NotaryRemision remision = remisionLegible(id);
+    NotaryRemisionVersion version =
+        remisionVersions
+            .findFirstByRemisionIdOrderByVersionNoDesc(remision.getId())
+            .orElseThrow(() -> NotaryBusinessException.conflict("La remisión no tiene versión vigente."));
+    JsonNode payload = payload(version);
+    String solicitante =
+        NotaryAlertas.solicitanteExoneracion(payload, () -> fechaReferencia(remision.getId()))
+            .orElseThrow(
+                () ->
+                    NotaryBusinessException.conflict(
+                        "La solicitud de exoneración aplica a compradores de 65 años o más con"
+                            + " inmueble en Guayaquil."));
+    return new Exoneracion(remision, payload, solicitante);
+  }
+
   @Transactional
   public NotaryDtos.RemisionDto advanceRemision(UUID id) {
     NotaryRemision remision = loadForNotaryAction(id);
@@ -425,22 +490,12 @@ public class NotaryCrossTenantService {
   @Transactional(readOnly = true)
   public Optional<NotaryDtos.RemisionDto> ultimaRemisionForCase(UUID legalCaseId) {
     UUID firmId = AuthContext.require().tenantId();
-    accessGuard.requireFirmContext(firmId);
     legalCases
         .findByIdAndTenantIdAndDeletedAtIsNull(legalCaseId, firmId)
         .orElseThrow(() -> NotaryBusinessException.notFound("Expediente no encontrado."));
     exigirLecturaDelBufete();
     return remisiones
         .findFirstByFirmTenantIdAndFirmLegalCaseIdOrderByEmitidoEnDesc(firmId, legalCaseId)
-        .map(this::toRemisionDto);
-  }
-
-  @Transactional(readOnly = true)
-  public Optional<NotaryDtos.RemisionDto> remisionAbiertaForCase(UUID legalCaseId) {
-    UUID firmId = AuthContext.require().tenantId();
-    return remisiones
-        .findFirstByFirmTenantIdAndFirmLegalCaseIdAndEstadoNotInOrderByEmitidoEnDesc(
-            firmId, legalCaseId, TERMINAL_ESTADOS)
         .map(this::toRemisionDto);
   }
 
@@ -526,8 +581,9 @@ public class NotaryCrossTenantService {
     byte[] contratoDocx = contrato == null ? null : minutas.leerDocx(contrato);
     List<LegalDocument> docs =
         documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(caseId, firmId);
+    String acta = pickActaLabel(docs);
 
-    remision.vincularEnvio(writing.getId(), docs.size(), pickActaLabel(docs));
+    remision.vincularEnvio(writing.getId(), 0, acta);
     remisiones.saveAndFlush(remision);
 
     int versionNo =
@@ -542,17 +598,21 @@ public class NotaryCrossTenantService {
             remision.getId(),
             versionNo,
             minuta.getPayload(),
-            copiarDocx(firmId, caseId, versionId, minuta, minutaDocx),
-            contrato == null ? null : copiarDocx(firmId, caseId, versionId, contrato, contratoDocx),
+            copiarDocx(firmId, remision.getId(), versionNo, minuta, minutaDocx),
+            contrato == null
+                ? null
+                : copiarDocx(firmId, remision.getId(), versionNo, contrato, contratoDocx),
             observacionesBufete,
             AuthContext.require().userId(),
             minuta.getProductCode()));
-    saveDocumentSnapshots(remision, versionId, firmId, docs);
+    int snapshots = saveDocumentSnapshots(remision, versionId, firmId, docs);
+    remision.vincularEnvio(writing.getId(), snapshots, acta);
+    remisiones.save(remision);
   }
 
   /** Bufete dueño o notaría destino. Cualquier otro tenant no debe saber que existe: 404. */
   private NotaryRemision remisionLegible(UUID id) {
-    UUID tenantId = AuthContext.require().tenantId();
+    UUID tenantId = RemisionesVisibles.tenantDeSesion();
     NotaryRemision remision =
         remisionVisible(
             id,
@@ -612,7 +672,8 @@ public class NotaryCrossTenantService {
                     d.getDisplayName(),
                     d.getSizeBytes(),
                     d.getStatusLabel(),
-                    d.getSortOrder()))
+                    d.getSortOrder(),
+                    d.getDocType()))
         .toList();
   }
 
@@ -649,11 +710,19 @@ public class NotaryCrossTenantService {
 
   /** Copia propia de la versión: el .docx del borrador puede cambiar después del envío. */
   private NotaryRemisionVersion.Archivo copiarDocx(
-      UUID firmId, UUID caseId, UUID versionId, MinutaDraft draft, byte[] docx) {
-    String guardado = Path.of(draft.getStoragePath()).getFileName().toString();
-    String prefijo = draft.getId() + "_";
-    String nombre = guardado.startsWith(prefijo) ? guardado.substring(prefijo.length()) : guardado;
-    String ruta = documentStorage.write(firmId, caseId, versionId, nombre, docx).path();
+      UUID firmId, UUID remisionId, int versionNo, MinutaDraft draft, byte[] docx) {
+    String nombre = MinutaGenerationService.nombreGuardado(draft);
+    String clave =
+        firmId
+            + "/remisiones/"
+            + remisionId
+            + "/v"
+            + versionNo
+            + "/"
+            + UUID.randomUUID()
+            + "_"
+            + ExpedienteDocumentoStorage.safeName(nombre);
+    String ruta = documentStorage.guardar(clave, guessMime(nombre), docx).clave();
     borrarSiHayRollback(ruta);
     return new NotaryRemisionVersion.Archivo(draft.getId(), ruta, nombre);
   }
@@ -662,7 +731,7 @@ public class NotaryCrossTenantService {
     documentStorage.borrarSiHayRollback(ruta);
   }
 
-  private void saveDocumentSnapshots(
+  private int saveDocumentSnapshots(
       NotaryRemision remision, UUID versionId, UUID firmId, List<LegalDocument> docs) {
     int order = 0;
     for (LegalDocument doc : docs) {
@@ -682,8 +751,13 @@ public class NotaryCrossTenantService {
               doc.getName(),
               order++,
               size > 0 ? size : null,
-              status));
+              status,
+              // Snapshot: las claves no se sobrescriben, reemplazar en el bufete no la toca.
+              version.get().getStorageKey(),
+              // Tipo al enviar: la notaría filtra (p. ej. SOPORTE_INGRESOS) sin leer app.document.
+              doc.getDocType()));
     }
+    return order;
   }
 
   private static String guessMime(String fileName) {
@@ -740,7 +814,56 @@ public class NotaryCrossTenantService {
         remision.getUpdatedAt(),
         remision.getObservacionesBufete(),
         remision.getObservacionesNotaria(),
-        docs);
+        docs,
+        actual.map(v -> NotaryAlertas.conTarifaOImpuestos(alertasDe(v))).orElse(false));
+  }
+
+  /** Payload y documentos de esta versión: los soportes de versiones anteriores no cuentan. */
+  private List<NotaryDtos.AlertaDto> alertasDe(NotaryRemisionVersion version) {
+    List<String> tipos =
+        remisionDocuments.findByVersionIdOrderBySortOrderAsc(version.getId()).stream()
+            .map(NotaryRemisionDocument::getDocType)
+            .toList();
+    return NotaryAlertas.calcular(
+        payload(version), () -> fechaReferencia(version.getRemisionId()), tipos);
+  }
+
+  /** Payload ilegible: sin alertas. Solo se registra la versión, nunca el contenido. */
+  private JsonNode payload(NotaryRemisionVersion version) {
+    String json = version.getPayload();
+    if (json == null || json.isBlank()) {
+      return null;
+    }
+    try {
+      return mapper.readTree(json);
+    } catch (JsonProcessingException ex) {
+      LOG.warn(
+          "Payload ilegible en la versión {} de la remisión {}: sin alertas",
+          version.getVersionNo(),
+          version.getRemisionId());
+      return null;
+    }
+  }
+
+  /** Otorgamiento de la última escritura generada; si no hay o no se lee, hoy en Guayaquil. */
+  private LocalDate fechaReferencia(UUID remisionId) {
+    return escrituras
+        .findFirstByRemisionIdOrderByGeneratedAtDesc(remisionId)
+        .map(NotaryEscritura::getDatosFormulario)
+        .flatMap(this::fechaOtorgamiento)
+        .orElseGet(() -> LocalDate.now(NotaryAlertas.ZONA));
+  }
+
+  private Optional<LocalDate> fechaOtorgamiento(String datosFormulario) {
+    if (datosFormulario == null || datosFormulario.isBlank()) {
+      return Optional.empty();
+    }
+    try {
+      return LetrasNotariales.parsearFecha(
+          mapper.readTree(datosFormulario).path("fecha_otorgamiento").asText(""));
+    } catch (JsonProcessingException ex) {
+      return Optional.empty();
+    }
   }
 
   private NotaryDtos.PartnershipDto toPartnershipDto(

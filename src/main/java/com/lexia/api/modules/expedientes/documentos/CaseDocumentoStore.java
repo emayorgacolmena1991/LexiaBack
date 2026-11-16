@@ -92,20 +92,47 @@ public class CaseDocumentoStore {
   @Transactional(readOnly = true)
   public List<DocumentoCargadoDTO> listar(CaseFileContext ctx) {
     List<DocumentoCargadoDTO> rows = new ArrayList<>();
+    ExpedienteSeguimientoService nombres = seguimiento.getIfAvailable();
+    Map<UUID, String> autores = new java.util.HashMap<>();
     for (LegalDocument doc :
         documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
             ctx.caseId(), ctx.tenantId())) {
       DocumentVersion version = latest(doc.getId(), ctx.tenantId());
       long bytes = version == null ? 0 : storage.size(version.getStorageKey());
+      String autor =
+          doc.getUploadedBy() == null || nombres == null
+              ? null
+              : autores.computeIfAbsent(doc.getUploadedBy(), nombres::actor);
       rows.add(
           new DocumentoCargadoDTO(
-              doc.getId().toString(), doc.getName(), formatSize(bytes), doc.getDocType()));
+              doc.getId().toString(),
+              doc.getName(),
+              formatSize(bytes),
+              doc.getDocType(),
+              doc.getTipoSugerido(),
+              doc.getClasificacionEstado(),
+              doc.getClasificacionOrigen(),
+              autor,
+              doc.getCreatedAt(),
+              doc.getObservacion()));
     }
     return rows;
   }
 
   @Transactional
   public DocumentoCargadoDTO subir(CaseFileContext ctx, String original, String mime, byte[] bytes) {
+    return subir(ctx, original, mime, bytes, null, null);
+  }
+
+  /** {@code tipoElegido}: casilla de la UI, ya validado contra los tipos del producto; queda MANUAL. */
+  @Transactional
+  public DocumentoCargadoDTO subir(
+      CaseFileContext ctx,
+      String original,
+      String mime,
+      byte[] bytes,
+      String tipoElegido,
+      String observacion) {
     String tipo =
         ctx.ingestionMode().isFisicoEscaneado() ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO : null;
     // Físico = un solo PDF: si ya hay, reemplaza (regularización / re-carga).
@@ -120,15 +147,30 @@ public class CaseDocumentoStore {
       }
     }
     LegalDocument doc = LegalDocument.create(ctx.tenantId(), ctx.caseId(), original, tipo);
+    if (tipo == null && StringUtils.hasText(tipoElegido)) {
+      doc.classify(tipoElegido.trim());
+    }
+    AuthPrincipal auth = AuthContext.get();
+    doc.registrarCarga(
+        auth == null ? null : auth.userId(),
+        StringUtils.hasText(observacion) ? observacion.trim() : null);
     ExpedienteDocumentoStorage.Stored stored =
-        storage.write(ctx.tenantId(), ctx.caseId(), doc.getId(), original, bytes);
+        storage.guardarVersion(ctx.tenantId(), ctx.caseId(), doc.getId(), 1, original, mime, bytes);
+    storage.borrarSiHayRollback(stored.clave());
     documents.save(doc);
     versions.save(
         DocumentVersion.upload(
-            ctx.tenantId(), doc.getId(), 1, mime, stored.sha256(), stored.path()));
+            ctx.tenantId(), doc.getId(), 1, mime, stored.sha256(), stored.clave()));
     seguimiento.ifAvailable(
         service -> service.documentoSubido(ctx.caseId(), ctx.tenantId(), original));
-    return new DocumentoCargadoDTO(doc.getId().toString(), original, formatSize(bytes.length), tipo);
+    return new DocumentoCargadoDTO(
+        doc.getId().toString(), original, formatSize(bytes.length), doc.getDocType());
+  }
+
+  /** Auditoría de lectura del bufete; la de la notaría vive en la remisión. */
+  public void registrarVista(CaseFileContext ctx, String idDocumento) {
+    seguimiento.ifAvailable(
+        service -> service.documentoVisto(ctx.caseId(), ctx.tenantId(), UUID.fromString(idDocumento)));
   }
 
   @Transactional
@@ -140,7 +182,77 @@ public class CaseDocumentoStore {
       doc.classify(codigo);
     }
     documents.save(doc);
+    tipoEnFilaOcr(ctx, doc);
     return new TipoActualizadoDTO(doc.getId().toString(), doc.getDocType(), "CLASIFICADO");
+  }
+
+  /** El {@code <documento tipo>} que recibe la IA sale de la fila OCR: va con el tipo vigente. */
+  private void tipoEnFilaOcr(CaseFileContext ctx, LegalDocument doc) {
+    ocrRows
+        .findByIdExpedienteAndIdDocumento(ctx.caseId().toString(), doc.getId().toString())
+        .filter(row -> !java.util.Objects.equals(row.getTipoDocumento(), doc.getDocType()))
+        .ifPresent(
+            row -> {
+              row.setTipoDocumento(doc.getDocType());
+              ocrRows.save(row);
+            });
+  }
+
+  /** Estado de clasificación antes de llamar al LLM (fuera de la transacción de la llamada). */
+  @Transactional(readOnly = true)
+  public ClasificacionActual clasificacionActual(CaseFileContext ctx, String fileId) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    return new ClasificacionActual(doc.getDocType(), doc.tipoFijadoPorUsuario());
+  }
+
+  /**
+   * Guarda el resultado del clasificador. Se relee el documento: si entre la llamada al LLM y
+   * ahora alguien lo clasificó a mano, {@code asignar} no tiene efecto.
+   *
+   * @return el tipo vigente del documento tras aplicar.
+   */
+  @Transactional
+  public String aplicarClasificacion(
+      CaseFileContext ctx,
+      String fileId,
+      String tipo,
+      java.math.BigDecimal confianza,
+      String modelo,
+      String estado,
+      boolean asignar) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    doc.registrarClasificacionAuto(tipo, confianza, modelo, estado, asignar);
+    documents.save(doc);
+    return doc.getDocType();
+  }
+
+  @Transactional
+  public void registrarErrorClasificacion(CaseFileContext ctx, String fileId, String modelo) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    doc.registrarErrorClasificacion(modelo);
+    documents.save(doc);
+  }
+
+  /**
+   * Promoción: el documento recién creado hereda tipo y clasificación del borrador tal cual (sin
+   * reclasificar). En escaneado el tipo es fijo y va por {@link #actualizarTipo}.
+   */
+  @Transactional
+  public void copiarClasificacion(
+      CaseFileContext ctx,
+      String fileId,
+      String docType,
+      CargaDocumentoService.ClasificacionBorrador clasificacion) {
+    LegalDocument doc = requireDoc(ctx, fileId);
+    doc.copiarClasificacion(
+        docType,
+        clasificacion.tipoSugerido(),
+        clasificacion.confianza(),
+        clasificacion.origen(),
+        clasificacion.estado(),
+        clasificacion.modelo(),
+        clasificacion.clasificadoEn());
+    documents.save(doc);
   }
 
   @Transactional
@@ -174,26 +286,40 @@ public class CaseDocumentoStore {
         doc.getDocType());
   }
 
+  @Transactional(readOnly = true)
+  public Integer versionActual(CaseFileContext ctx, String fileId) {
+    DocumentVersion version = latest(requireDoc(ctx, fileId).getId(), ctx.tenantId());
+    return version == null ? null : version.getVersionNo();
+  }
+
   @Transactional
   public StoredDoc reemplazar(
       CaseFileContext ctx, String fileId, String original, String mime, byte[] bytes, String tipo) {
     LegalDocument doc = requireDoc(ctx, fileId);
+    String tipoPrevio = doc.getDocType();
     String tipoFinal =
         ctx.ingestionMode().isFisicoEscaneado()
             ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO
-            : (StringUtils.hasText(tipo) ? tipo.trim() : doc.getDocType());
+            : (StringUtils.hasText(tipo) ? tipo.trim() : tipoPrevio);
     doc.rename(original, tipoFinal);
+    if (!java.util.Objects.equals(tipoPrevio, tipoFinal)) {
+      // El usuario eligió otro tipo al reemplazar: es una clasificación manual.
+      doc.classify(tipoFinal);
+    }
     documents.save(doc);
     int next =
         versions
             .findFirstByDocumentIdAndTenantIdOrderByVersionNoDesc(doc.getId(), ctx.tenantId())
             .map(version -> version.getVersionNo() + 1)
             .orElse(1);
+    // Clave nueva por versión: el archivo de la versión anterior queda intacto.
     ExpedienteDocumentoStorage.Stored stored =
-        storage.write(ctx.tenantId(), ctx.caseId(), doc.getId(), original, bytes);
+        storage.guardarVersion(ctx.tenantId(), ctx.caseId(), doc.getId(), next, original, mime, bytes);
+    // Si la transacción del reemplazo (versión, fila OCR, consolidado) se revierte, no queda archivo huérfano.
+    storage.borrarSiHayRollback(stored.clave());
     versions.save(
         DocumentVersion.upload(
-            ctx.tenantId(), doc.getId(), next, mime, stored.sha256(), stored.path()));
+            ctx.tenantId(), doc.getId(), next, mime, stored.sha256(), stored.clave()));
     return new StoredDoc(
         doc.getId().toString(),
         doc.getName(),
@@ -255,7 +381,10 @@ public class CaseDocumentoStore {
 
   @Transactional(readOnly = true)
   public PrevalidacionDTO prevalidacion(CaseFileContext ctx) {
-    List<DocumentoCargadoDTO> docs = listar(ctx);
+    List<DocumentoCargadoDTO> docs =
+        listar(ctx).stream()
+            .filter(d -> !LegalDocument.esSoloSoporte(d.codigoTipoDocumento()))
+            .toList();
     Map<String, DocumentoOcrResultadoDTO> ocr = new LinkedHashMap<>();
     for (DocumentoOcrResultadoDTO row : listarOcr(ctx)) {
       ocr.put(row.idDocumento(), row);
@@ -335,6 +464,9 @@ public class CaseDocumentoStore {
     return (mb < 10 ? String.format(Locale.ROOT, "%.1f", mb) : String.valueOf(Math.round(mb)))
         + " MB";
   }
+
+  /** @param fijadoPorUsuario MANUAL o tipo previo a la clasificación automática. */
+  public record ClasificacionActual(String docType, boolean fijadoPorUsuario) {}
 
   public record CaseFileContext(
       UUID caseId, UUID tenantId, String productCode, String canton, IngestionMode ingestionMode) {}

@@ -1,126 +1,112 @@
 package com.lexia.api.modules.expedientes.coactivas.archivos;
 
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.common.storage.ArchivoStorage;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
-/** Guarda archivos de coactivas en disco: {@code <root>/<tenant>/<yyyy>/<MM>/<uuid>_<nombre>}. */
+/**
+ * Archivos de coactivas sobre {@link ArchivoStorage}: {@code
+ * {tenant}/coactivas/{yyyy}/{MM}/{archivoId}_{uuid}_{nombre}}. Nunca sobrescribe; las filas
+ * anteriores conservan su ruta absoluta heredada.
+ */
 @Component
 public class CoactivaArchivoStorage {
 
-  private final Path root;
+  private static final Logger LOG = LoggerFactory.getLogger(CoactivaArchivoStorage.class);
 
-  public CoactivaArchivoStorage(@Value("${lexia.coactivas.storage-dir:./data/coactivas}") String root) {
-    this.root = Path.of(root).toAbsolutePath().normalize();
+  private final ArchivoStorage archivos;
+
+  public CoactivaArchivoStorage(ArchivoStorage archivos) {
+    this.archivos = archivos;
   }
 
+  /** Subida en streaming: el hash se calcula mientras se copia. */
   public StoredFile store(UUID tenantId, UUID archivoId, MultipartFile file) {
     if (file == null || file.isEmpty()) {
       throw ApiException.badRequest("El archivo está vacío.");
     }
-    LocalDate today = LocalDate.now();
-    Path dir =
-        root.resolve(tenantId.toString())
-            .resolve(String.valueOf(today.getYear()))
-            .resolve(String.format("%02d", today.getMonthValue()));
-    Path target = dir.resolve(archivoId + "_" + CoactivaTexto.safeFileName(file.getOriginalFilename()));
-    try {
-      Files.createDirectories(dir);
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      try (InputStream in = new DigestInputStream(file.getInputStream(), digest)) {
-        Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
-      }
-      return new StoredFile(target.toString(), HexFormat.of().formatHex(digest.digest()), file.getSize());
-    } catch (IOException | NoSuchAlgorithmException ex) {
+    String clave = clave(tenantId, archivoId, file.getOriginalFilename());
+    MessageDigest digest = sha256();
+    try (InputStream in = new DigestInputStream(file.getInputStream(), digest)) {
+      archivos.guardar(clave, in, file.getSize(), file.getContentType());
+    } catch (IOException ex) {
       throw new ApiException(
           HttpStatus.INTERNAL_SERVER_ERROR, "COA_STORAGE_ERROR", "No se pudo guardar el archivo.");
     }
+    archivos.borrarSiHayRollback(clave);
+    return new StoredFile(clave, HexFormat.of().formatHex(digest.digest()), file.getSize());
   }
 
   public StoredFile storeBytes(UUID tenantId, UUID archivoId, String fileName, byte[] bytes) {
     if (bytes == null || bytes.length == 0) {
       throw ApiException.badRequest("El archivo está vacío.");
     }
-    LocalDate today = LocalDate.now();
-    Path dir =
-        root.resolve(tenantId.toString())
-            .resolve(String.valueOf(today.getYear()))
-            .resolve(String.format("%02d", today.getMonthValue()));
-    Path target = dir.resolve(archivoId + "_" + CoactivaTexto.safeFileName(fileName));
+    String clave = clave(tenantId, archivoId, fileName);
+    archivos.guardar(clave, new ByteArrayInputStream(bytes), bytes.length, "application/octet-stream");
+    archivos.borrarSiHayRollback(clave);
+    return new StoredFile(clave, HexFormat.of().formatHex(sha256().digest(bytes)), bytes.length);
+  }
+
+  /** {@code false} si no hay ruta, el archivo no está en este servidor o la clave se rechaza. */
+  public boolean disponible(CoactivaArchivo archivo) {
+    String clave = archivo.getStoragePath();
+    if (clave == null || clave.isBlank()) {
+      return false;
+    }
     try {
-      Files.createDirectories(dir);
-      Files.write(target, bytes);
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      return new StoredFile(target.toString(), HexFormat.of().formatHex(digest.digest(bytes)), bytes.length);
-    } catch (IOException | NoSuchAlgorithmException ex) {
+      return archivos.existe(clave);
+    } catch (ApiException ex) {
+      LOG.warn("Coactiva archivo={} clave rechazada: {}", archivo.getId(), ex.getMessage());
+      return false;
+    }
+  }
+
+  public byte[] read(CoactivaArchivo archivo) {
+    String clave = archivo.getStoragePath();
+    if (clave == null || clave.isBlank()) {
+      throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
+    }
+    return archivos.leer(clave);
+  }
+
+  static String clave(UUID tenantId, UUID archivoId, String nombre) {
+    LocalDate hoy = LocalDate.now();
+    return tenantId
+        + "/coactivas/"
+        + hoy.getYear()
+        + "/"
+        + String.format("%02d", hoy.getMonthValue())
+        + "/"
+        + archivoId
+        + "_"
+        + UUID.randomUUID()
+        + "_"
+        + CoactivaTexto.safeFileName(nombre);
+  }
+
+  private static MessageDigest sha256() {
+    try {
+      return MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException ex) {
       throw new ApiException(
           HttpStatus.INTERNAL_SERVER_ERROR, "COA_STORAGE_ERROR", "No se pudo guardar el archivo.");
     }
   }
 
-  public boolean disponible(CoactivaArchivo archivo) {
-    return ubicar(archivo) != null;
-  }
-
-  public byte[] read(CoactivaArchivo archivo) {
-    Path path = ubicar(archivo);
-    if (path == null) {
-      throw ApiException.notFound("Archivo no disponible en el almacenamiento.");
-    }
-    try {
-      return Files.readAllBytes(path);
-    } catch (IOException ex) {
-      throw new ApiException(
-          HttpStatus.INTERNAL_SERVER_ERROR, "COA_STORAGE_ERROR", "No se pudo leer el archivo.");
-    }
-  }
-
-  /**
-   * {@code storage_path} es la ruta absoluta del equipo que subió el archivo. Si la raíz de este
-   * proceso es otra (otro equipo, otro directorio de arranque o {@code LEXIA_COACTIVAS_DIR}), se
-   * busca el mismo tramo {@code <tenant>/<yyyy>/<MM>/<uuid>_<nombre>} bajo {@link #root}.
-   */
-  Path ubicar(CoactivaArchivo archivo) {
-    String guardada = archivo.getStoragePath();
-    if (guardada == null || guardada.isBlank()) {
-      return null;
-    }
-    try {
-      Path directa = Path.of(guardada).toAbsolutePath().normalize();
-      if (directa.startsWith(root) && Files.isRegularFile(directa)) {
-        return directa;
-      }
-    } catch (InvalidPathException ignored) {
-      // Ruta de otro sistema operativo: se reubica abajo.
-    }
-    if (archivo.getTenantId() == null) {
-      return null;
-    }
-    String[] partes = guardada.replace('\\', '/').split("/");
-    int desde = Arrays.asList(partes).lastIndexOf(archivo.getTenantId().toString());
-    if (desde < 0) {
-      return null;
-    }
-    Path reubicada =
-        root.resolve(String.join("/", Arrays.copyOfRange(partes, desde, partes.length))).normalize();
-    return reubicada.startsWith(root) && Files.isRegularFile(reubicada) ? reubicada : null;
-  }
-
+  /** @param path clave persistida en {@code storage_path}. */
   public record StoredFile(String path, String sha256, long size) {}
 }

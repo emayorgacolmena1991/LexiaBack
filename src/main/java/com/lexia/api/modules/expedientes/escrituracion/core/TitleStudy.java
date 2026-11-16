@@ -5,7 +5,10 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(schema = "app", name = "title_study")
@@ -24,6 +27,11 @@ public class TitleStudy {
 
   @Column(columnDefinition = "text")
   private String summary;
+
+  /** Lo que la IA verificó como correcto. Solo lectura en el cotejo; nunca es observación. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(columnDefinition = "jsonb")
+  private List<String> validaciones;
 
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
@@ -57,6 +65,18 @@ public class TitleStudy {
 
   public String getSummary() {
     return summary;
+  }
+
+  public List<String> getValidaciones() {
+    return validaciones == null ? List.of() : validaciones;
+  }
+
+  public void registrarValidaciones(List<String> validaciones) {
+    this.validaciones =
+        validaciones == null
+            ? null
+            : validaciones.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).toList();
+    this.updatedAt = Instant.now();
   }
 
   public void applyResult(String status, String summary) {
