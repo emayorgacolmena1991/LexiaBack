@@ -1,7 +1,9 @@
 package com.lexia.api.modules.expedientes.minutas;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.common.storage.ArchivoStorage;
 import com.lexia.api.modules.auth.AuthContext;
@@ -304,6 +306,53 @@ public class MinutaGenerationService {
         CampoPlantilla.mapa());
   }
 
+  /**
+   * Minuta y mutuo se extraen por separado y la IA puede dejar vacío en uno lo que llenó en el otro.
+   * Completa solo lo vacío con el último borrador del otro documento del expediente (incluye lo que
+   * el abogado corrigió a mano); nunca pisa un valor.
+   */
+  private void completarDesdeOtroDocumento(
+      MinutaViviendaData base, WritingFile file, UUID tenantId, String kind) {
+    MinutaDraft otro = null;
+    for (MinutaDraft d :
+        minutaDrafts.findByWritingFileIdAndTenantIdOrderByCreatedAtAsc(file.getId(), tenantId)) {
+      if (!kind.equalsIgnoreCase(d.getTemplateKind()) && StringUtils.hasText(d.getPayload())) {
+        otro = d;
+      }
+    }
+    MinutaViviendaData fuente = loadData(otro);
+    if (fuente == null) {
+      return;
+    }
+    ObjectNode destino = objectMapper.valueToTree(base);
+    ObjectNode origen = objectMapper.valueToTree(fuente);
+    ObjectNode faltantes = objectMapper.createObjectNode();
+    origen
+        .fields()
+        .forEachRemaining(
+            e -> {
+              JsonNode actual = destino.get(e.getKey());
+              boolean vacio = actual == null || MinutaViviendaData.isMissing(actual.asText(""));
+              if (vacio && e.getValue().isTextual() && !MinutaViviendaData.isMissing(e.getValue().asText())) {
+                faltantes.set(e.getKey(), e.getValue());
+              }
+            });
+    if (faltantes.isEmpty()) {
+      return;
+    }
+    try {
+      objectMapper.readerForUpdating(base).readValue(faltantes);
+      LOG.info(
+          "Minuta kind={}: {} campos completados desde el borrador {} ({})",
+          kind,
+          faltantes.size(),
+          otro.getId(),
+          otro.getTemplateKind());
+    } catch (IOException e) {
+      LOG.warn("No se pudo completar kind={} desde el otro documento: {}", kind, e.getMessage());
+    }
+  }
+
   private MinutaDraft ultimoDraft(WritingFile file, UUID tenantId, String kind) {
     MinutaDraft ultimo = null;
     for (MinutaDraft d :
@@ -404,6 +453,7 @@ public class MinutaGenerationService {
             request == null ? null : request.sessionId(),
             product,
             kind);
+    completarDesdeOtroDocumento(base, file, tenantId, kind);
     MinutaDraft anterior = ultimoDraft(file, tenantId, kind);
     Map<String, String> overrides =
         variablesService.leerOverrides(anterior == null ? null : anterior.getOverrides());

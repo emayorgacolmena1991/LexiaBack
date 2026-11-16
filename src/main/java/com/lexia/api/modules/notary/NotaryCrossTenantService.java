@@ -31,6 +31,7 @@ import com.lexia.api.modules.tenancy.TenantRepository;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -419,6 +420,49 @@ public class NotaryCrossTenantService {
         .findFirstByRemisionIdOrderByVersionNoDesc(remision.getId())
         .map(this::alertasDe)
         .orElse(List.of());
+  }
+
+  /** Solicitud municipal de exoneración (Guayaquil) prellenada con la versión vigente. */
+  @Transactional(readOnly = true)
+  public NotaryDtos.RemisionDocumentContent solicitudExoneracion(
+      UUID id, Map<String, String> valores) {
+    Exoneracion e = exoneracion(id);
+    return new NotaryDtos.RemisionDocumentContent(
+        "solicitud_exoneracion_" + e.remision().getExpedienteCodigo() + ".pdf",
+        "application/pdf",
+        SolicitudExoneracionPdf.llenar(
+            e.payload(), e.solicitante(), LocalDate.now(NotaryAlertas.ZONA), valores));
+  }
+
+  /** Campos de la solicitud con su prellenado, para el panel del visor. */
+  @Transactional(readOnly = true)
+  public List<NotaryDtos.CampoExoneracionDto> camposExoneracion(UUID id) {
+    Exoneracion e = exoneracion(id);
+    return SolicitudExoneracionPdf.campos(e.payload(), e.solicitante()).stream()
+        .map(
+            c ->
+                new NotaryDtos.CampoExoneracionDto(
+                    c.clave(), c.seccion(), c.etiqueta(), c.tipo(), c.opciones(), c.valor(), c.editable()))
+        .toList();
+  }
+
+  private record Exoneracion(NotaryRemision remision, JsonNode payload, String solicitante) {}
+
+  private Exoneracion exoneracion(UUID id) {
+    NotaryRemision remision = remisionLegible(id);
+    NotaryRemisionVersion version =
+        remisionVersions
+            .findFirstByRemisionIdOrderByVersionNoDesc(remision.getId())
+            .orElseThrow(() -> NotaryBusinessException.conflict("La remisión no tiene versión vigente."));
+    JsonNode payload = payload(version);
+    String solicitante =
+        NotaryAlertas.solicitanteExoneracion(payload, () -> fechaReferencia(remision.getId()))
+            .orElseThrow(
+                () ->
+                    NotaryBusinessException.conflict(
+                        "La solicitud de exoneración aplica a compradores de 65 años o más con"
+                            + " inmueble en Guayaquil."));
+    return new Exoneracion(remision, payload, solicitante);
   }
 
   @Transactional

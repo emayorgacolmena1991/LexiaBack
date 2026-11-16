@@ -2,6 +2,7 @@ package com.lexia.api.modules.notary;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public final class NotaryDtos {
@@ -73,8 +74,31 @@ public final class NotaryDtos {
 
   public record AlertaPersonaDto(String rol, String nombre) {}
 
+  /**
+   * Campo de la solicitud de exoneración. {@code tipo}: TEXTO, SI_NO, CHECK u OPCION ({@code
+   * opciones}). {@code valor} es el prellenado ("" si no hay); solo los {@code editable} los llena
+   * la notaría.
+   */
+  public record CampoExoneracionDto(
+      String clave,
+      String seccion,
+      String etiqueta,
+      String tipo,
+      List<String> opciones,
+      String valor,
+      boolean editable) {}
+
+  /** Valores que la notaría llenó en el panel; solo claves editables. */
+  public record ExoneracionBody(Map<String, String> valores) {}
+
+  /** {@code formularioExoneracion}: hay solicitud municipal prellenada para descargar. */
   public record AlertaDto(
-      String codigo, String nivel, String titulo, String detalle, List<AlertaPersonaDto> personas) {}
+      String codigo,
+      String nivel,
+      String titulo,
+      String detalle,
+      List<AlertaPersonaDto> personas,
+      boolean formularioExoneracion) {}
 
   public record CrearVersionBody(String observacionesBufete) {}
 

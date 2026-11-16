@@ -41,7 +41,12 @@ final class NotaryAlertas {
   private static final Set<String> SI = Set.of("SI", "SÍ", "S", "TRUE", "1");
 
   private record Persona(
-      String rol, String nombre, boolean conFecha, Optional<LocalDate> nacimiento, boolean discapacidad) {
+      String rol,
+      String sufijo,
+      String nombre,
+      boolean conFecha,
+      Optional<LocalDate> nacimiento,
+      boolean discapacidad) {
 
     NotaryDtos.AlertaPersonaDto dto() {
       return new NotaryDtos.AlertaPersonaDto(rol, nombre);
@@ -66,7 +71,8 @@ final class NotaryAlertas {
               NIVEL_AVISO,
               "Debida diligencia de fondos",
               "El bufete no adjuntó soportes de ingresos; verifique el origen de los fondos",
-              List.of()));
+              List.of(),
+              false));
     }
     return alertas;
   }
@@ -118,7 +124,8 @@ final class NotaryAlertas {
               "Impuestos: tercera edad",
               "Considerar exoneración en la liquidación de impuestos y llenar el formulario"
                   + " correspondiente",
-              impuestos));
+              impuestos,
+              !compradoresMayores.isEmpty() && enGuayaquil(payload)));
     }
     // El vendedor suele ser compañía: sin fecha de nacimiento no se reclama su edad.
     List<Persona> sinEdad = new ArrayList<>();
@@ -135,6 +142,25 @@ final class NotaryAlertas {
               sinEdad));
     }
     return alertas;
+  }
+
+  /**
+   * Sufijo ({@code conyuge_1}/{@code conyuge_2}) del primer comprador de 65+ si el inmueble está en
+   * Guayaquil: el único formulario municipal que hay. El vendedor no: el predial lo paga el dueño.
+   */
+  static Optional<String> solicitanteExoneracion(JsonNode payload, Supplier<LocalDate> referencia) {
+    if (payload == null || !payload.isObject() || !enGuayaquil(payload)) {
+      return Optional.empty();
+    }
+    return compradores(payload).stream()
+        .filter(p -> terceraEdad(p, referencia))
+        .map(Persona::sufijo)
+        .findFirst();
+  }
+
+  private static boolean enGuayaquil(JsonNode payload) {
+    return !vacio(payload, "canton_inmueble")
+        && texto(payload, "canton_inmueble").toUpperCase(Locale.ROOT).contains("GUAYAQUIL");
   }
 
   static boolean conTarifaOImpuestos(List<NotaryDtos.AlertaDto> alertas) {
@@ -175,7 +201,8 @@ final class NotaryAlertas {
         conFecha
             ? LetrasNotariales.parsearFecha(texto(payload, "fecha_nacimiento_" + sufijo))
             : Optional.empty();
-    return new Persona(rol, nombre, conFecha, nacimiento, discapacidad(payload.get("discapacidad_" + sufijo)));
+    return new Persona(
+        rol, sufijo, nombre, conFecha, nacimiento, discapacidad(payload.get("discapacidad_" + sufijo)));
   }
 
   private static boolean terceraEdad(Persona persona, Supplier<LocalDate> referencia) {
@@ -204,7 +231,22 @@ final class NotaryAlertas {
 
   private static NotaryDtos.AlertaDto alerta(
       String codigo, String nivel, String titulo, String detalle, List<Persona> personas) {
+    return alerta(codigo, nivel, titulo, detalle, personas, false);
+  }
+
+  private static NotaryDtos.AlertaDto alerta(
+      String codigo,
+      String nivel,
+      String titulo,
+      String detalle,
+      List<Persona> personas,
+      boolean formularioExoneracion) {
     return new NotaryDtos.AlertaDto(
-        codigo, nivel, titulo, detalle, personas.stream().map(Persona::dto).toList());
+        codigo,
+        nivel,
+        titulo,
+        detalle,
+        personas.stream().map(Persona::dto).toList(),
+        formularioExoneracion);
   }
 }

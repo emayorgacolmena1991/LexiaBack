@@ -324,6 +324,9 @@ public class ActoVariableCatalog {
           "celular_vendedor",
           "correo_vendedor",
           "nombre_comprador",
+          // Cónyuge: viaja a la notaría (alertas, escritura y solicitud de exoneración).
+          "nombre_conyuge_2",
+          "cedula_conyuge_2",
           "fecha_nacimiento_conyuge_1",
           "fecha_nacimiento_conyuge_2",
           "discapacidad_conyuge_1",

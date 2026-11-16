@@ -177,6 +177,29 @@ class NotaryAlertasTest {
   }
 
   @Test
+  void exoneracionSoloParaCompradorMayorConInmuebleEnGuayaquil() {
+    ObjectNode payload = conFechas("1990-01-01", "1950-03-15");
+    payload.put("fecha_nacimiento_vendedor", "10/05/1945");
+
+    assertThat(NotaryAlertas.solicitanteExoneracion(payload, () -> OTORGAMIENTO)).isEmpty();
+    assertThat(calcular(payload).get(1).formularioExoneracion()).isFalse();
+
+    payload.put("canton_inmueble", "Guayaquil");
+    assertThat(NotaryAlertas.solicitanteExoneracion(payload, () -> OTORGAMIENTO))
+        .contains("conyuge_2");
+    NotaryDtos.AlertaDto impuestos = calcular(payload).get(1);
+    assertEquals(NotaryAlertas.IMPUESTOS_TERCERA_EDAD, impuestos.codigo());
+    assertThat(impuestos.formularioExoneracion()).isTrue();
+
+    // Solo el vendedor mayor: el predial es del comprador, no hay formulario.
+    ObjectNode soloVendedor = conFechas("1990-01-01", "1991-01-01");
+    soloVendedor.put("fecha_nacimiento_vendedor", "10/05/1945");
+    soloVendedor.put("canton_inmueble", "GUAYAQUIL");
+    assertThat(NotaryAlertas.solicitanteExoneracion(soloVendedor, () -> OTORGAMIENTO)).isEmpty();
+    assertThat(calcular(soloVendedor).get(0).formularioExoneracion()).isFalse();
+  }
+
+  @Test
   void fondosSinSoporteTambienSinPayloadNiDocumentos() {
     assertThat(codigos(NotaryAlertas.calcular(null, () -> OTORGAMIENTO, List.of())))
         .containsExactly(NotaryAlertas.FONDOS_SIN_SOPORTE);

@@ -4,6 +4,7 @@ import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ContentDisposition;
@@ -157,6 +158,26 @@ public class NotaryController {
   @GetMapping("/remisiones/{id}/alertas")
   public List<NotaryDtos.AlertaDto> alertas(@PathVariable UUID id) {
     return notary.alertas(id);
+  }
+
+  /** Solo con lo que trae la remisión (descarga directa desde la alerta). */
+  @GetMapping("/remisiones/{id}/exoneracion-tercera-edad")
+  public ResponseEntity<byte[]> solicitudExoneracion(@PathVariable UUID id) {
+    return archivo(notary.solicitudExoneracion(id, Map.of()));
+  }
+
+  /** Con lo que la notaría llenó en el panel; no se guarda. */
+  @PostMapping(
+      value = "/remisiones/{id}/exoneracion-tercera-edad",
+      produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> solicitudExoneracionConValores(
+      @PathVariable UUID id, @RequestBody(required = false) NotaryDtos.ExoneracionBody body) {
+    return archivo(notary.solicitudExoneracion(id, body == null ? Map.of() : body.valores()));
+  }
+
+  @GetMapping("/remisiones/{id}/exoneracion-tercera-edad/campos")
+  public List<NotaryDtos.CampoExoneracionDto> camposExoneracion(@PathVariable UUID id) {
+    return notary.camposExoneracion(id);
   }
 
   @GetMapping("/remisiones/{remisionId}/documentos/{documentId}/contenido")
