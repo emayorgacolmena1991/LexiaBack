@@ -853,7 +853,7 @@ public class IngestaMasivaEscrituracionService {
         });
   }
 
-  int lotesConOyentes() {
+  public int lotesConOyentes() {
     return streams.size();
   }
 

@@ -93,7 +93,7 @@ public class SessionCache {
     }
   }
 
-  int tamano() {
+  public int tamano() {
     return entradas.size();
   }
 

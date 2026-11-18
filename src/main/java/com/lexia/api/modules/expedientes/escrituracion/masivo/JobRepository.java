@@ -155,7 +155,7 @@ public class JobRepository {
     jdbc.update(
         """
         UPDATE app.jobs
-           SET estado = 'COMPLETADO', error_log = NULL, locked_until = NULL
+           SET estado = 'COMPLETADO', error_log = NULL, locked_until = NULL, run_at = NOW()
          WHERE id = ? AND estado = 'EN_PROCESO'
         """,
         id);
@@ -169,7 +169,7 @@ public class JobRepository {
     jdbc.update(
         """
         UPDATE app.jobs
-           SET estado = 'ERROR', error_log = ?, locked_until = NULL
+           SET estado = 'ERROR', error_log = ?, locked_until = NULL, run_at = NOW()
          WHERE id = ? AND estado = 'EN_PROCESO'
         """,
         log,

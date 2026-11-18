@@ -109,7 +109,14 @@ public class SecurityConfig {
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
-                auth.requestMatchers(
+                auth
+                    // P0: métricas internas (pool, colas, workers) solo desde la propia máquina.
+                    .requestMatchers(SecurityConfig::metricasDesdeLoopback)
+                    .permitAll()
+                    .requestMatchers(
+                        paths.matcher("/actuator/metrics"), paths.matcher("/actuator/metrics/**"))
+                    .denyAll()
+                    .requestMatchers(
                         paths.matcher("/error"),
                         paths.matcher("/api/v1/health"),
                         paths.matcher("/actuator/health"),
@@ -154,6 +161,24 @@ public class SecurityConfig {
                 exceptions.authenticationEntryPoint(SecurityConfig::unauthorized)
                     .accessDeniedHandler(SecurityConfig::forbidden))
         .build();
+  }
+
+  /**
+   * GET a /actuator/metrics desde loopback. remoteAddr no viene de X-Forwarded-For salvo que
+   * Tomcat confíe en el proxy (forward-headers-strategy); detrás de uno, el cliente externo no es
+   * loopback y recibe 403.
+   */
+  static boolean metricasDesdeLoopback(HttpServletRequest request) {
+    String uri = request.getRequestURI();
+    if (!"GET".equals(request.getMethod())
+        || uri == null
+        || !(uri.equals("/actuator/metrics") || uri.startsWith("/actuator/metrics/"))) {
+      return false;
+    }
+    String ip = request.getRemoteAddr();
+    return "127.0.0.1".equals(ip)
+        || "0:0:0:0:0:0:0:1".equals(ip)
+        || "::1".equals(ip);
   }
 
   private static final java.util.Set<String> METODOS_SEGUROS =

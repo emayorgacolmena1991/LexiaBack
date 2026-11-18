@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import io.micrometer.core.instrument.Metrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -138,6 +139,7 @@ public class IngestaJobWorker {
       JobRow job, String tipo, long timeoutSegundos, Consumer<BooleanSupplier> tarea) {
     AtomicBoolean cancelado = new AtomicBoolean();
     FutureTask<Void> ejecucion = new FutureTask<>(() -> tarea.accept(cancelado::get), null);
+    long inicio = System.nanoTime();
     CompletableFuture.runAsync(ejecucion, executor)
         .orTimeout(timeoutSegundos, TimeUnit.SECONDS)
         .exceptionally(
@@ -146,18 +148,23 @@ public class IngestaJobWorker {
               ejecucion.cancel(true);
               return null;
             })
-        .thenRunAsync(() -> cerrarJob(job, tipo, timeoutSegundos, ejecucion), executor);
+        .thenRunAsync(() -> cerrarJob(job, tipo, timeoutSegundos, ejecucion, inicio), executor);
   }
 
-  private void cerrarJob(JobRow job, String tipo, long timeoutSegundos, FutureTask<Void> ejecucion) {
+  private void cerrarJob(
+      JobRow job, String tipo, long timeoutSegundos, FutureTask<Void> ejecucion, long inicio) {
+    String resultado = "error";
     try {
       ejecucion.get();
       jobs.completar(job.id());
+      resultado = "ok";
     } catch (CancellationException ex) {
+      resultado = "timeout";
       LOG.error("worker timeout job={} tipo={} limite={}s", job.id(), tipo, timeoutSegundos);
       fallar(job, new RuntimeException("Timeout " + timeoutSegundos + "s"));
     } catch (ExecutionException ex) {
       if (ex.getCause() instanceof JobTerminalHandled terminal) {
+        resultado = "terminal";
         marcarItemComoError(job, terminal.loteId, terminal.itemId, "Documento ilegible");
         return;
       }
@@ -168,7 +175,15 @@ public class IngestaJobWorker {
       fallar(job, toRuntime(ex));
     } finally {
       capacidad.release();
+      // P0: duración real por tipo y resultado (ok | timeout | terminal | error).
+      Metrics.timer("lexia.jobs.duracion", "worker", "ingesta", "tipo", tipo, "resultado", resultado)
+          .record(System.nanoTime() - inicio, TimeUnit.NANOSECONDS);
     }
+  }
+
+  /** Hilos ocupados ahora (métrica lexia.worker.hilos.ocupados). */
+  public int hilosOcupados() {
+    return IngestaWorkerExecutorConfig.HILOS - capacidad.availablePermits();
   }
 
   private void ejecutarDocumento(JobRow job, BooleanSupplier cancelado) {

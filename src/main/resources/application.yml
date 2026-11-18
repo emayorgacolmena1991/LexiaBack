@@ -393,7 +393,8 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # metrics solo responde desde localhost (SecurityConfig.metricasDesdeLoopback).
+        include: health,info,metrics
   info:
     env:
       enabled: true

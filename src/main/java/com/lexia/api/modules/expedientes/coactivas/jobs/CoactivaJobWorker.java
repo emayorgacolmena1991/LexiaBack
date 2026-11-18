@@ -18,6 +18,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -70,6 +73,7 @@ public class CoactivaJobWorker {
     this.sse = sse;
     this.json = json;
     latido.scheduleAtFixedRate(this::renovar, 30, 30, TimeUnit.SECONDS);
+    new ExecutorServiceMetrics(anexoPool, "coactiva-anexo", Tags.empty()).bindTo(Metrics.globalRegistry);
   }
 
   @PreDestroy
@@ -107,7 +111,7 @@ public class CoactivaJobWorker {
     }
     CoactivaJobQueue.Job actual = job.get();
     LOG.info("Tarea tomada app.jobs id={} tipo={}", actual.id(), actual.tipo());
-    Runnable tarea;
+    java.util.function.BooleanSupplier tarea;
     if ("COACTIVA_VALIDACION_ANEXO".equals(actual.tipo())) {
       tarea = () -> correrAnexo(actual);
     } else if ("COACTIVA_DIAGNOSTICO".equals(actual.tipo())) {
@@ -119,16 +123,29 @@ public class CoactivaJobWorker {
     }
     anexoPool.execute(
         () -> {
+          long inicio = System.nanoTime();
+          boolean ok = false;
           try {
-            tarea.run();
+            ok = tarea.getAsBoolean();
           } finally {
             capacidad.release();
+            Metrics.timer(
+                    "lexia.jobs.duracion",
+                    "worker", "coactiva",
+                    "tipo", actual.tipo(),
+                    "resultado", ok ? "ok" : "error")
+                .record(System.nanoTime() - inicio, TimeUnit.NANOSECONDS);
           }
         });
     return true;
   }
 
-  private void correrDiagnostico(CoactivaJobQueue.Job job) {
+  /** Hilos ocupados ahora (métrica lexia.worker.hilos.ocupados). */
+  public int hilosOcupados() {
+    return HILOS - capacidad.availablePermits();
+  }
+
+  private boolean correrDiagnostico(CoactivaJobQueue.Job job) {
     RlsConnectionProvider.setTenantId(job.tenantId());
     try {
       CoactivaExpedienteAnalisisWorker worker = coactivas.getIfAvailable();
@@ -137,17 +154,19 @@ public class CoactivaJobWorker {
       }
       worker.ejecutar(job.tenantId(), archivoId(job.payload()));
       cola.completar(job.id(), NODE);
+      return true;
     } catch (RuntimeException ex) {
       LOG.warn("job {} falló: {}", job.id(), ex.getMessage());
       cola.fallar(job.id(), NODE, ex.getMessage());
       abandonarCoactiva(job, ex);
+      return false;
     } finally {
       AuthContext.clear();
       TenantContext.clear();
     }
   }
 
-  private void correrAnexo(CoactivaJobQueue.Job job) {
+  private boolean correrAnexo(CoactivaJobQueue.Job job) {
     RlsConnectionProvider.setTenantId(job.tenantId());
     UUID expedienteId = uuidEn(job.payload(), "expedienteId");
     try {
@@ -163,6 +182,7 @@ public class CoactivaJobWorker {
         sse.publicar(expedienteId, "ANALYSIS_COMPLETED", Map.of("expedienteId", expedienteId.toString()));
       }
       cola.completar(job.id(), NODE);
+      return true;
     } catch (RuntimeException ex) {
       LOG.warn("anexo {} falló: {}", job.id(), ex.getMessage());
       if (expedienteId != null) {
@@ -171,6 +191,7 @@ public class CoactivaJobWorker {
       }
       cola.fallar(job.id(), NODE, ex.getMessage());
       abandonarCoactiva(job, ex);
+      return false;
     } finally {
       TenantContext.clear();
     }

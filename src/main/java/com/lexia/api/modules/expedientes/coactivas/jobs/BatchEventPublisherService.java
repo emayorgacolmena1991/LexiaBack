@@ -203,7 +203,7 @@ public class BatchEventPublisherService {
         });
   }
 
-  int expedientesConOyentes() {
+  public int expedientesConOyentes() {
     return emisores.size();
   }
 

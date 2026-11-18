@@ -4,6 +4,9 @@ import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.notifications.BrevoProperties;
 import com.lexia.api.modules.tenancy.TenantContext;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -40,6 +43,10 @@ public class AsyncConfig {
     delegate.setQueueCapacity(queueCapacity);
     delegate.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
     delegate.initialize();
+    // P0: executor.active / executor.queued / executor.pool.size {name=lexia-async|AzureOCR}.
+    String nombre = prefix.endsWith("-") ? prefix.substring(0, prefix.length() - 1) : prefix;
+    new ExecutorServiceMetrics(delegate.getThreadPoolExecutor(), nombre, Tags.empty())
+        .bindTo(Metrics.globalRegistry);
     return delegate;
   }
 

@@ -96,6 +96,24 @@ public class CargaDocumentoService {
     purgarBorradoresInactivos(System.currentTimeMillis());
   }
 
+  /** Métrica lexia.memoria.borradores. */
+  public int borradoresEnMemoria() {
+    return drafts.size();
+  }
+
+  /** Métrica lexia.memoria.borradores.bytes: archivos de borrador retenidos en RAM. */
+  public long bytesBorradoresEnMemoria() {
+    long total = 0;
+    for (DraftExpediente draft : drafts.values()) {
+      synchronized (draft.documentos()) {
+        for (StoredDoc doc : draft.documentos().values()) {
+          total += doc.bytes() == null ? 0 : doc.bytes().length;
+        }
+      }
+    }
+    return total;
+  }
+
   int purgarBorradoresInactivos(long ahoraMs) {
     long limite = ahoraMs - Math.max(1, borradorTtlHoras) * 3_600_000L;
     int antes = drafts.size();
