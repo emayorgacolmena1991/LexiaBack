@@ -50,8 +50,11 @@ class MinutaViviendaDataCifraTest {
   @Test
   void digitosConLetrasConcatenaNumeroYLectura() {
     assertEquals(
-        "0954656732 (CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS)",
+        "CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS (0954656732)",
         MinutaViviendaData.digitosConLetras("0954656732"));
+    String leida = MinutaViviendaData.digitosConLetras("0954");
+    assertEquals(leida, MinutaViviendaData.digitosConLetras(leida));
+    assertEquals(leida, MinutaViviendaData.digitosConLetras("0954 (CERO NUEVE CINCO CUATRO)"));
     assertEquals("nodata", MinutaViviendaData.digitosConLetras(""));
     assertEquals("abc", MinutaViviendaData.digitosConLetras("abc"));
   }

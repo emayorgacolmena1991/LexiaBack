@@ -20,13 +20,13 @@ class LetrasNotarialesTest {
 
   /** Lo que escribe la minuta del bufete ({@code MinutaViviendaData.digitosConLetras}). */
   private static String comoElBufete(String numero) {
-    return numero + " (" + NumeroALetras.digitosALetras(numero) + ")";
+    return NumeroALetras.digitosALetras(numero) + " (" + numero + ")";
   }
 
   @Test
   void cedulaRucYTelefonoIgualQueLaMinutaDelBufete() {
     assertEquals(
-        "0956856306 (CERO NUEVE CINCO SEIS OCHO CINCO SEIS TRES CERO SEIS)",
+        "CERO NUEVE CINCO SEIS OCHO CINCO SEIS TRES CERO SEIS (0956856306)",
         convertir(Tipo.DIGITOS, "0956856306"));
     for (String numero : List.of("092255248-4", "0922552484", "0992345678001", "+593 99 123 4567")) {
       assertEquals(comoElBufete(numero), convertir(Tipo.DIGITOS, " " + numero + " "), numero);
@@ -36,10 +36,10 @@ class LetrasNotarialesTest {
   @Test
   void montoConLasLetrasDelPayloadIgualQueElBufete() {
     assertEquals(
-        "USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)",
+        "CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)",
         LetrasNotariales.convertir(Tipo.MONTO, "120.000,00", "ciento veinte mil").orElseThrow());
     assertEquals(
-        "USD 120.000,50 (CIENTO VEINTE MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)",
+        "CIENTO VEINTE MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,50)",
         LetrasNotariales.convertir(
                 Tipo.MONTO, "120000.50", "ciento veinte mil con 50/100 dólares americanos")
             .orElseThrow());
@@ -50,45 +50,45 @@ class LetrasNotarialesTest {
     for (String cifra : List.of("85.000,00", "USD 21.000,05", "1.000.001,99")) {
       String letras = NumeroALetras.montoBancario(NumeroALetras.parsearMonto(cifra).orElseThrow());
       assertThat(convertir(Tipo.MONTO, cifra))
-          .startsWith("USD ")
-          .endsWith(" (" + letras + " " + LetrasNotariales.DOLARES + ")");
+          .startsWith(letras + " " + LetrasNotariales.DOLARES + " (USD ")
+          .endsWith(")");
     }
     assertEquals(
-        "USD 21.000,05 (VEINTIÚN MIL CON 05/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)",
+        "VEINTIÚN MIL CON 05/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 21.000,05)",
         convertir(Tipo.MONTO, "USD 21.000,05"));
   }
 
   @Test
   void superficieNumeroYLetrasEnMetrosYDecimetros() {
     assertEquals(
-        "84,00 m² (OCHENTA Y CUATRO METROS CUADRADOS)", convertir(Tipo.SUPERFICIE, "84"));
+        "OCHENTA Y CUATRO METROS CUADRADOS (84,00 m²)", convertir(Tipo.SUPERFICIE, "84"));
     assertEquals(
-        "80,80 m² (OCHENTA METROS CUADRADOS CON OCHENTA DECÍMETROS CUADRADOS)",
+        "OCHENTA METROS CUADRADOS CON OCHENTA DECÍMETROS CUADRADOS (80,80 m²)",
         convertir(Tipo.SUPERFICIE, "80,80 m2"));
-    assertEquals("21,00 m² (VEINTIÚN METROS CUADRADOS)", convertir(Tipo.SUPERFICIE, "21 m²"));
+    assertEquals("VEINTIÚN METROS CUADRADOS (21,00 m²)", convertir(Tipo.SUPERFICIE, "21 m²"));
     assertEquals(
-        "1,01 m² (UN METRO CUADRADO CON UN DECÍMETRO CUADRADO)", convertir(Tipo.SUPERFICIE, "1.01"));
+        "UN METRO CUADRADO CON UN DECÍMETRO CUADRADO (1,01 m²)", convertir(Tipo.SUPERFICIE, "1.01"));
   }
 
   @Test
   void claveCatastralCompletaYSegmentosEnLetras() {
     assertEquals(
-        "60 – 2387 – 013 – 0 – 0 - 0 (SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE"
-            + " – CERO – CERO – CERO)",
+        "SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE – CERO – CERO – CERO"
+            + " (60 – 2387 – 013 – 0 – 0 - 0)",
         convertir(Tipo.CLAVE_CATASTRAL, "60 – 2387 – 013 – 0 – 0 - 0"));
-    assertEquals("21.01 (VEINTIUNO – CERO UNO)", convertir(Tipo.CLAVE_CATASTRAL, "21.01"));
-    assertEquals("012 (CERO UNO DOS)", convertir(Tipo.CLAVE_CATASTRAL, "012"));
+    assertEquals("VEINTIUNO – CERO UNO (21.01)", convertir(Tipo.CLAVE_CATASTRAL, "21.01"));
+    assertEquals("CERO UNO DOS (012)", convertir(Tipo.CLAVE_CATASTRAL, "012"));
   }
 
   @Test
   void fechaNumeroYLetrasConPrimeroYSinApocope() {
     assertEquals(
-        "31/03/2026 (TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS)",
+        "TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS (31/03/2026)",
         convertir(Tipo.FECHA, "31/03/2026"));
     assertEquals(
-        "01/08/2026 (PRIMERO DE AGOSTO DE DOS MIL VEINTISÉIS)", convertir(Tipo.FECHA, "2026-08-01"));
+        "PRIMERO DE AGOSTO DE DOS MIL VEINTISÉIS (01/08/2026)", convertir(Tipo.FECHA, "2026-08-01"));
     assertEquals(
-        "21/01/2021 (VEINTIUNO DE ENERO DE DOS MIL VEINTIUNO)", convertir(Tipo.FECHA, "21-1-2021"));
+        "VEINTIUNO DE ENERO DE DOS MIL VEINTIUNO (21/01/2021)", convertir(Tipo.FECHA, "21-1-2021"));
   }
 
   @Test
@@ -96,6 +96,10 @@ class LetrasNotarialesTest {
     String delBufete = comoElBufete("0956856306");
 
     assertEquals("0956856306", LetrasNotariales.soloNumero("cedula_conyuge_1", delBufete));
+    assertEquals(
+        "0956856306",
+        LetrasNotariales.soloNumero(
+            "cedula_conyuge_1", "0956856306 (" + NumeroALetras.digitosALetras("0956856306") + ")"));
     assertEquals(delBufete, LetrasNotariales.soloNumero("nombre_conyuge_1", delBufete));
     assertEquals(
         "0956 (CERO NUEVE)", LetrasNotariales.soloNumero("cedula_conyuge_1", "0956 (CERO NUEVE)"));

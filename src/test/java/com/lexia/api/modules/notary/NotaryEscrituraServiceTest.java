@@ -330,20 +330,20 @@ class NotaryEscrituraServiceTest {
     String texto = textoXml(partes(docx(escritura)));
     assertThat(texto)
         .doesNotContain("{{")
-        .contains("092255248-4 (" + NumeroALetras.digitosALetras("092255248-4") + ")")
+        .contains(NumeroALetras.digitosALetras("092255248-4") + " (092255248-4)")
         .contains(
-            "es de USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+            "es de CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
         .contains(
-            "b) USD 85.000,50 (OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+            "b) OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
         .contains(
-            "CUANTÍA: USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
+            "CUANTÍA: CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)")
         .contains(
-            "CUANTÍA: USD 85.000,50 (OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)")
-        .contains("84,00 m² (OCHENTA Y CUATRO METROS CUADRADOS)")
+            "CUANTÍA: OCHENTA Y CINCO MIL CON 50/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 85.000,50)")
+        .contains("OCHENTA Y CUATRO METROS CUADRADOS (84,00 m²)")
         .contains(
-            "60-2387-013-0-0-0 (SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE – CERO"
-                + " – CERO – CERO)")
-        .contains("otorgada el 31/03/2026 (TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS)")
+            "SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE – CERO – CERO – CERO"
+                + " (60-2387-013-0-0-0)")
+        .contains("otorgada el TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS (31/03/2026)")
         .contains("a los veinte días del mes de agosto de dos mil veintiséis")
         .contains("C.C. 092255248-4");
   }

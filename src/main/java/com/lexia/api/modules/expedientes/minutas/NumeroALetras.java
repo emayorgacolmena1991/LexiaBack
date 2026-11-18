@@ -38,6 +38,8 @@ public final class NumeroALetras {
   private static final Pattern SOLO_CIFRA = Pattern.compile("[0-9.,]+");
   private static final Pattern ENTERO_SIN_GRUPOS = Pattern.compile("\\d+");
   private static final Pattern ENTERO_AGRUPADO = Pattern.compile("\\d{1,3}(?:([.,])\\d{3})(?:\\1\\d{3})*");
+  private static final Pattern LETRAS_Y_CIFRA = Pattern.compile("([A-ZÁÉÍÓÚÑ ]+) \\(([^()]*\\d[^()]*)\\)");
+  private static final Pattern CIFRA_Y_LETRAS = Pattern.compile("(.*\\d.*?) \\(([A-ZÁÉÍÓÚÑ ]+)\\)");
 
   private NumeroALetras() {}
 
@@ -65,6 +67,31 @@ public final class NumeroALetras {
       texto.chars().filter(c -> c >= '0' && c <= '9').forEach(c -> out.add(DIGITOS[c - '0']));
     }
     return out.toString();
+  }
+
+  /** Formato de notaría: letras primero y la cifra entre paréntesis, «CERO NUEVE (09)». */
+  public static String conCifra(String letras, String cifra) {
+    return letras + " (" + cifra + ")";
+  }
+
+  /**
+   * Cifra de un valor ya leído dígito a dígito por {@link #digitosALetras}: «CERO NUEVE (09)» o el
+   * formato anterior «09 (CERO NUEVE)» → «09». Vacío si no lo es o si las letras no coinciden.
+   */
+  public static Optional<String> cifraLeida(String valor) {
+    if (valor == null) {
+      return Optional.empty();
+    }
+    String t = valor.trim();
+    var nuevo = LETRAS_Y_CIFRA.matcher(t);
+    if (nuevo.matches() && nuevo.group(1).trim().equals(digitosALetras(nuevo.group(2)))) {
+      return Optional.of(nuevo.group(2).trim());
+    }
+    var anterior = CIFRA_Y_LETRAS.matcher(t);
+    if (anterior.matches() && anterior.group(2).equals(digitosALetras(anterior.group(1)))) {
+      return Optional.of(anterior.group(1).trim());
+    }
+    return Optional.empty();
   }
 
   /**
