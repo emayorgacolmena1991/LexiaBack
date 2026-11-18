@@ -8,5 +8,7 @@ import java.util.UUID;
 public interface LoginAttemptRepository extends JpaRepository<LoginAttempt, UUID> {
   List<LoginAttempt> findTop20ByEmailOrderByCreatedAtDesc(String email);
 
+  List<LoginAttempt> findTop20ByEmailAndIpAddressOrderByCreatedAtDesc(String email, String ipAddress);
+
   long countByIpAddressAndCreatedAtAfterAndSuccessFalse(String ipAddress, Instant after);
 }

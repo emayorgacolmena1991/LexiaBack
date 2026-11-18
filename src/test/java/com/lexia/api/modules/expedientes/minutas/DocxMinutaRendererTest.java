@@ -178,7 +178,7 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("{{"), "Quedaron placeholders");
     assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
     assertTrue(text.contains("V_nombre_conyuge_1"));
-    assertTrue(text.contains(CEDULA + " (" + CEDULA_LETRAS + ")"));
+    assertTrue(text.contains(CEDULA_LETRAS + " (" + CEDULA + ")"));
     assertTrue(text.contains("V_nombre_afiliado"));
     assertTrue(text.contains("Plazo 300 meses,"));
     assertFalse(text.contains("meses meses"));
@@ -231,6 +231,12 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("5.99%%"));
     assertTrue(text.contains("Plazo 300 meses,"));
     assertTrue(text.contains("OCHENTA Y CINCO MIL CON 00/100"), "Letras en formato bancario");
+    assertTrue(
+        text.contains(
+            "Monto:  OCHENTA Y CINCO MIL CON 00/100 Dólares de los Estados Unidos de América\n"
+                + "(USD 85.000,00) más"),
+        "Monto: letras primero y la cifra entre paréntesis");
+    assertFalse(text.contains("Son:"));
     assertTrue(text.contains(CEDULA_LETRAS));
   }
 
@@ -244,7 +250,7 @@ class DocxMinutaRendererTest {
 
     assertTrue(
         text.contains(
-            "celular 0954656732 (CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS)"),
+            "celular CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS (0954656732)"),
         text);
   }
 

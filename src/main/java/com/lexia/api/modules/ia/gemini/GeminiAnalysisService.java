@@ -368,7 +368,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         for (int intento = 1; intento <= 2; intento++) {
           try {
             String raw = client.models.generateContent(modelo, content, config).text();
-            LOG.info("Gemini captura BIESS modelo={} respuesta cruda: {}", modelo, raw);
+            LOG.info("Gemini captura BIESS modelo={} respuesta chars={}", modelo, raw == null ? 0 : raw.length());
             if (StringUtils.hasText(raw)) {
               DatosBiessMinuta data =
                   objectMapper.readValue(GeminiJsonSanitizer.limpiar(raw), DatosBiessMinuta.class);

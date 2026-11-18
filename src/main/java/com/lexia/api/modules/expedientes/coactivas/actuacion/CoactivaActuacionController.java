@@ -1,5 +1,7 @@
 package com.lexia.api.modules.expedientes.coactivas.actuacion;
 
+import static com.lexia.api.common.api.Descargas.adjunto;
+
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ActuacionResponse;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.ErrorBody;
 import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaActuacionDtos.GenerarActuacionRequest;
@@ -59,7 +61,7 @@ public class CoactivaActuacionController {
     DocumentoGenerado doc =
         service.generarDocumento(id, request.plantillaId(), request.variables(), request.formato());
     return ResponseEntity.status(201)
-        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + doc.nombre() + "\"")
+        .header(HttpHeaders.CONTENT_DISPOSITION, adjunto(doc.nombre()))
         .header("X-Actuacion-Id", doc.actuacionId().toString())
         .contentType(MediaType.parseMediaType(doc.mime()))
         .body(doc.bytes());
@@ -100,7 +102,7 @@ public class CoactivaActuacionController {
   public ResponseEntity<byte[]> descargar(@PathVariable UUID draftId) {
     Descarga doc = generacion.descargar(draftId);
     return ResponseEntity.ok()
-        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + doc.nombre() + "\"")
+        .header(HttpHeaders.CONTENT_DISPOSITION, adjunto(doc.nombre()))
         .contentType(
             MediaType.parseMediaType(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))

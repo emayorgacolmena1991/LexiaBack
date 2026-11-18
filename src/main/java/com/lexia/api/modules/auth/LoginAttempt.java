@@ -46,4 +46,16 @@ public class LoginAttempt {
   public Instant getCreatedAt() {
     return createdAt;
   }
+
+  public String getReason() {
+    return reason;
+  }
+
+  /**
+   * Acierto que cierra una racha de fallos. "MFA_REQUIRED" no: la contraseña fue buena pero falta
+   * el segundo factor; si contara, se podrían probar códigos MFA sin límite intercalando logins.
+   */
+  public boolean cierraRachaDeFallos() {
+    return success && !"MFA_REQUIRED".equals(reason);
+  }
 }

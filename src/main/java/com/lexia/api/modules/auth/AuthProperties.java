@@ -14,9 +14,10 @@ public class AuthProperties {
   private int maxFailedAttempts = 5;
   private int lockoutMinutes = 30;
   private boolean cookieSecure = false;
-  private String demoPassword = "Lexia-Demo-2026!";
+  /** Sin valor por defecto: una contraseña conocida en el código servía en cualquier despliegue. */
+  private String demoPassword = "";
   /** Correos cuyo hash se (re)aplica al arrancar si aún no es Argon2 real. */
-  private List<String> bootstrapEmails = new ArrayList<>(List.of("emayorga@colmenas.ec"));
+  private List<String> bootstrapEmails = new ArrayList<>();
   private String cryptoKey = "";
 
   public boolean isEnabled() {
@@ -57,6 +58,21 @@ public class AuthProperties {
 
   public void setMaxFailedAttempts(int maxFailedAttempts) {
     this.maxFailedAttempts = maxFailedAttempts;
+  }
+
+  /**
+   * Fallos seguidos (desde cualquier IP) que bloquean la cuenta. Más alto que maxFailedAttempts,
+   * que solo frena a esa IP: así un tercero que conoce el email no puede bloquear al usuario.
+   * Tope efectivo 20 (se leen los últimos 20 intentos).
+   */
+  private int accountLockAttempts = 20;
+
+  public int getAccountLockAttempts() {
+    return accountLockAttempts;
+  }
+
+  public void setAccountLockAttempts(int accountLockAttempts) {
+    this.accountLockAttempts = accountLockAttempts;
   }
 
   public int getLockoutMinutes() {

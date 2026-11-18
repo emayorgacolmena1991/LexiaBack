@@ -36,6 +36,12 @@ public class DemoCredentialBootstrap implements ApplicationRunner {
   @Override
   @Transactional
   public void run(ApplicationArguments args) {
+    String password = properties.getDemoPassword();
+    if (password == null || password.isBlank()) {
+      LOG.warn(
+          "LEXIA_BOOTSTRAP_PASSWORD no definida: las cuentas bootstrap sin hash Argon2 quedan sin contraseña.");
+      return;
+    }
     for (String email : resolveBootstrapEmails()) {
       if (email == null || email.isBlank()) {
         continue;
@@ -53,10 +59,11 @@ public class DemoCredentialBootstrap implements ApplicationRunner {
                     && credential.getPasswordHash().startsWith("$argon2")) {
                   return;
                 }
-                credential.setPasswordHash(hasher.hash(properties.getDemoPassword()));
+                credential.setPasswordHash(hasher.hash(password));
                 credential.setAlgorithm("argon2id");
                 credential.setLastChangedAt(Instant.now());
-                credential.setMustChange(false);
+                // Contraseña compartida por configuración: queda marcada para cambio.
+                credential.setMustChange(true);
                 LOG.info("Contraseña bootstrap aplicada para {}", email);
               });
     }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -13,12 +14,13 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
-import javax.sql.DataSource;
 import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -34,16 +36,30 @@ public class BatchEventPublisherService {
   private static final String CANAL = "lexia_sse";
 
   private final JdbcTemplate jdbc;
-  private final DataSource dataSource;
+  private final String url;
+  private final String usuario;
+  private final String clave;
   private final ObjectMapper json;
   private final AtomicBoolean vivo = new AtomicBoolean(true);
   private final ConcurrentHashMap<UUID, CopyOnWriteArrayList<SseEmitter>> emisores =
       new ConcurrentHashMap<>();
 
-  public BatchEventPublisherService(JdbcTemplate jdbc, DataSource dataSource, ObjectMapper json) {
+  /** LISTEN ocupa su conexión de por vida: va directa al driver para no restarla del pool. */
+  public BatchEventPublisherService(
+      JdbcTemplate jdbc,
+      @Value("${spring.datasource.url:}") String url,
+      @Value("${spring.datasource.username:}") String usuario,
+      @Value("${spring.datasource.password:}") String clave,
+      ObjectMapper json) {
     this.jdbc = jdbc;
-    this.dataSource = dataSource;
+    this.url = url;
+    this.usuario = usuario;
+    this.clave = clave;
     this.json = json;
+    if (url == null || url.isBlank()) {
+      LOG.warn("Sin spring.datasource.url: los SSE no se reciben de otros nodos");
+      return;
+    }
     Thread hilo = new Thread(this::escuchar, "sse-listen");
     hilo.setDaemon(true);
     hilo.start();
@@ -58,12 +74,7 @@ public class BatchEventPublisherService {
     // 15 min: Azure puede usar sus 5 y detrás van consolidar e IA. 5 min cortaba el stream a mitad.
     SseEmitter emitter = new SseEmitter(15L * 60L * 1000L);
     emisores.computeIfAbsent(batchId, id -> new CopyOnWriteArrayList<>()).add(emitter);
-    Runnable quitar = () -> {
-      List<SseEmitter> lista = emisores.get(batchId);
-      if (lista != null) {
-        lista.remove(emitter);
-      }
-    };
+    Runnable quitar = () -> quitarEmisor(batchId, emitter);
     emitter.onCompletion(() -> {
       LOG.info("SSE completado {}", batchId);
       quitar.run();
@@ -113,7 +124,7 @@ public class BatchEventPublisherService {
 
   private void escuchar() {
     while (vivo.get()) {
-      try (Connection connection = dataSource.getConnection();
+      try (Connection connection = DriverManager.getConnection(url, usuario, clave);
           Statement statement = connection.createStatement()) {
         connection.setAutoCommit(true);
         statement.execute("LISTEN " + CANAL);
@@ -177,8 +188,35 @@ public class BatchEventPublisherService {
         emitter.send(SseEmitter.event().name(evento).data(data));
       } catch (IOException | IllegalStateException ex) {
         emitter.complete();
-        lista.remove(emitter);
+        quitarEmisor(batchId, emitter);
       }
+    }
+  }
+
+  /** Quita el emisor y, si la lista queda vacía, también la entrada del expediente. */
+  private void quitarEmisor(UUID batchId, SseEmitter emitter) {
+    emisores.computeIfPresent(
+        batchId,
+        (id, lista) -> {
+          lista.remove(emitter);
+          return lista.isEmpty() ? null : lista;
+        });
+  }
+
+  public int expedientesConOyentes() {
+    return emisores.size();
+  }
+
+  /**
+   * app.sse_evento solo sirve para que otro nodo lea el cuerpo tras el pg_notify (milisegundos).
+   * Sin purga crecía con cada evento.
+   */
+  @Scheduled(fixedDelayString = "${lexia.sse.purga-ms:600000}")
+  public void purgarEventos() {
+    int borrados =
+        jdbc.update("DELETE FROM app.sse_evento WHERE created_at < now() - INTERVAL '1 hour'");
+    if (borrados > 0) {
+      LOG.info("sse_evento purgados={}", borrados);
     }
   }
 }

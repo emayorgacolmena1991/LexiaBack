@@ -1022,11 +1022,11 @@ public class MinutaViviendaData {
     map.put("apoderado_biess", blankToNodata(apoderadoBiess));
     map.put("cedula_apoderado_biess", digitosConLetras(cedulaApoderadoBiess));
     map.put("nombre_vendedor", blankToNodata(nombreVendedor));
-    map.put("cedula_vendedor", blankToNodata(cedulaVendedor));
+    map.put("cedula_vendedor", digitosConLetras(cedulaVendedor));
     map.put("fecha_nacimiento_vendedor", blankToNodata(fechaNacimientoVendedor));
     map.put("estado_civil_vendedor", blankToNodata(estadoCivilVendedor));
     map.put("nombre_conyuge_vendedor", blankToNodata(nombreConyugeVendedor));
-    map.put("cedula_conyuge_vendedor", blankToNodata(cedulaConyugeVendedor));
+    map.put("cedula_conyuge_vendedor", digitosConLetras(cedulaConyugeVendedor));
     map.put("profesion_vendedor", blankToNodata(profesionVendedor));
     map.put("profesion_vendedor_2", blankToNodata(profesionVendedor2));
     map.put("direccion_vendedor", blankToNodata(direccionVendedor));
@@ -1100,14 +1100,19 @@ public class MinutaViviendaData {
     return t;
   }
 
-  /** {@code 0954 (CERO NUEVE CINCO CUATRO)}; sin dígitos → nodata o el valor tal cual. */
+  /**
+   * {@code CERO NUEVE CINCO CUATRO (0954)}: letras primero, como va a notaría. Un valor que ya
+   * viene leído (override desde la vista previa) no se vuelve a leer. Sin dígitos → nodata o el
+   * valor tal cual.
+   */
   static String digitosConLetras(String value) {
     String t = nullToEmpty(value);
+    t = NumeroALetras.cifraLeida(t).orElse(t);
     String letras = NumeroALetras.digitosALetras(t);
     if (letras.isEmpty()) {
       return blankToNodata(t);
     }
-    return t + " (" + letras + ")";
+    return NumeroALetras.conCifra(letras, t);
   }
 
   /**

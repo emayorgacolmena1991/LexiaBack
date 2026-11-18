@@ -130,6 +130,7 @@ public class AuthService {
     String ip = clientIp(http);
     String userAgent = userAgent(http);
     rejectIfIpThrottled(ip);
+    rejectIfEmailIpThrottled(email, ip);
 
     Optional<AppUser> found = users.findByEmail(email);
     if (found.isEmpty()) {
@@ -237,6 +238,7 @@ public class AuthService {
         users.findById(challenge.getUserId()).orElseThrow(() -> AuthException.unauthorized("El código de verificación no es válido."));
     String ip = clientIp(http);
     rejectIfLocked(user);
+    rejectIfEmailIpThrottled(user.getEmail(), ip);
     if (!matchesMfa(user.getId(), request.code())) {
       fail(user.getEmail(), ip, userAgent(http), user, "BAD_MFA");
     }
@@ -361,7 +363,10 @@ public class AuthService {
             Instant.now().plus(Duration.ofDays(properties.getRefreshDays())));
     refreshTokens.save(next);
     current.revoke(next.getId());
-    cookies.write(response, session.getId().toString(), nextRaw);
+    // Rota también el token de sesión (y migra las sesiones previas a V111, cuya cookie era el id).
+    String sessionToken = session.emitirToken();
+    sessions.save(session);
+    cookies.write(response, sessionToken, nextRaw);
     if (session.getTenantId() != null) {
       tenantBinder.bind(session.getTenantId());
     }
@@ -662,15 +667,12 @@ public class AuthService {
     ensureTenantOperational(membership.getTenantId());
     tenantBinder.bind(membership.getTenantId());
     Instant expiresAt = Instant.now().plus(Duration.ofHours(properties.getSessionHours()));
-    UserSession session =
-        sessions.save(
-            UserSession.open(
-                user.getId(),
-                membership.getTenantId(),
-                membership.getId(),
-                ip,
-                userAgent,
-                expiresAt));
+    UserSession nueva =
+        UserSession.open(
+            user.getId(), membership.getTenantId(), membership.getId(), ip, userAgent, expiresAt);
+    // La cookie lleva un token aleatorio; en BD solo queda su hash (antes la cookie era la PK).
+    String sessionToken = nueva.emitirToken();
+    UserSession session = sessions.save(nueva);
     String refreshRaw = TokenHasher.randomToken();
     refreshTokens.save(
         RefreshToken.issue(
@@ -678,7 +680,7 @@ public class AuthService {
             TokenHasher.sha256(refreshRaw),
             UUID.randomUUID(),
             Instant.now().plus(Duration.ofDays(properties.getRefreshDays()))));
-    cookies.write(response, session.getId().toString(), refreshRaw);
+    cookies.write(response, sessionToken, refreshRaw);
     attempts.save(LoginAttempt.record(user.getEmail(), ip, true, method));
     audit(membership.getTenantId(), user.getId(), "LOGIN", "session", session.getId(), "OK", ip, userAgent);
     if (user.isNotifyOnLogin()) {
@@ -786,6 +788,29 @@ public class AuthService {
     }
   }
 
+  /**
+   * Frena a la IP que falla contra esta cuenta, sin bloquear la cuenta: el usuario real sigue
+   * entrando desde su equipo. Cuentan los fallos seguidos (desde el último acierto) en la ventana.
+   */
+  private void rejectIfEmailIpThrottled(String email, String ip) {
+    if (properties.getMaxFailedAttempts() <= 0) {
+      return;
+    }
+    Instant desde = Instant.now().minus(Duration.ofMinutes(properties.getLockoutMinutes()));
+    int seguidos = 0;
+    for (LoginAttempt attempt : attempts.findTop20ByEmailAndIpAddressOrderByCreatedAtDesc(email, ip)) {
+      if (attempt.getCreatedAt().isBefore(desde) || attempt.cierraRachaDeFallos()) {
+        break;
+      }
+      if (!attempt.isSuccess()) {
+        seguidos++;
+      }
+    }
+    if (seguidos >= properties.getMaxFailedAttempts()) {
+      throw AuthException.tooMany("Demasiados intentos. Espera unos minutos e inténtalo de nuevo.");
+    }
+  }
+
   private void fail(String email, String ip, String userAgent, AppUser user, String reason) {
     attempts.save(LoginAttempt.record(email, ip, false, reason));
     if (user != null) {
@@ -808,12 +833,17 @@ public class AuthService {
     List<LoginAttempt> recent = attempts.findTop20ByEmailOrderByCreatedAtDesc(user.getEmail());
     int consecutive = 0;
     for (LoginAttempt attempt : recent) {
-      if (attempt.isSuccess()) {
+      if (attempt.cierraRachaDeFallos()) {
         break;
       }
-      consecutive++;
+      if (!attempt.isSuccess()) {
+        consecutive++;
+      }
     }
-    if (consecutive >= properties.getMaxFailedAttempts()) {
+    // Bloqueo de cuenta solo ante fallos desde muchas IPs; una sola IP ya la frena
+    // rejectIfEmailIpThrottled tras maxFailedAttempts.
+    int umbral = Math.max(properties.getMaxFailedAttempts(), Math.min(20, properties.getAccountLockAttempts()));
+    if (consecutive >= umbral) {
       user.setStatus("LOCKED");
       user.setLockedUntil(Instant.now().plus(Duration.ofMinutes(properties.getLockoutMinutes())));
       return true;
@@ -941,10 +971,9 @@ public class AuthService {
   }
 
   private static String clientIp(HttpServletRequest request) {
-    String forwarded = request.getHeader("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      return forwarded.split(",")[0].trim();
-    }
+    // No se lee X-Forwarded-For: lo manda el cliente y saltaba el límite de intentos por IP.
+    // Detrás de un proxy, Tomcat reescribe remoteAddr solo si el proxy es de confianza
+    // (server.forward-headers-strategy=native).
     return request.getRemoteAddr();
   }
 

@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.escrituracion.masivo;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,71 +31,94 @@ public class JobRepository {
     return id;
   }
 
-  /** Pasa una fila PENDIENTE a EN_PROCESO. El lock se suelta al cerrar la transacción. */
+  /**
+   * Pasa una fila PENDIENTE vencida ({@code run_at}) a EN_PROCESO. {@code lockSegundos} debe superar
+   * el timeout del job: si no, {@link #liberarJobsColgados} reencolaría un job vivo.
+   */
   @Transactional
-  public Optional<JobRow> reclamar(String tipo, String workerId) {
+  public Optional<JobRow> reclamar(String tipo, String workerId, long lockSegundos) {
     return jdbc
         .query(
             """
             UPDATE app.jobs
                SET estado = 'EN_PROCESO',
                    intentos = intentos + 1,
-                   locked_until = NOW() + INTERVAL '5 minutes'
+                   locked_until = NOW() + ? * INTERVAL '1 second'
              WHERE id = (
                SELECT id
                  FROM app.jobs
                 WHERE estado = 'PENDIENTE'
                   AND tipo = ?
                   AND worker_id = ?
+                  AND run_at <= NOW()
                 ORDER BY prioridad DESC, created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
              )
             RETURNING id, tenant_id, payload::text, intentos
             """,
-            (rs, row) ->
-                new JobRow(
-                    rs.getObject("id", UUID.class),
-                    rs.getObject("tenant_id", UUID.class),
-                    rs.getString(3),
-                    rs.getInt("intentos")),
+            JobRepository::fila,
+            lockSegundos,
             tipo,
             workerId)
         .stream()
         .findFirst();
   }
 
-  public int liberarJobsColgados(String workerId) {
-    jdbc.update(
-        """
-        UPDATE app.ingesta_item
-           SET detalle = jsonb_set(
-                 jsonb_set(
-                   jsonb_set(detalle, '{ocrEstado}', '"ERROR"'),
-                   '{semaforo}', '"ROJO"'),
-                 '{observaciones}', '"Job colgado >5min. Reintentar o reemplazar."'),
-               error_log = 'Job colgado >5min',
-               estado = 'ERROR'
-         WHERE lote_id IN (
-                 SELECT (payload->>'loteId')::uuid
-                   FROM app.jobs
-                  WHERE estado = 'EN_PROCESO'
-                    AND worker_id = ?
-                    AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
-                    AND (locked_until IS NULL OR locked_until < NOW()))
-           AND (detalle->>'ocrEstado') = 'PROCESANDO'
-        """,
-        workerId);
-    return jdbc.update(
-        """
-        UPDATE app.jobs
-           SET estado = 'PENDIENTE', intentos = intentos + 1
-         WHERE estado = 'EN_PROCESO'
-           AND worker_id = ?
-           AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
-           AND (locked_until IS NULL OR locked_until < NOW())
-        """,
-        workerId);
+  /**
+   * Jobs EN_PROCESO de este worker con lock vencido (el proceso murió). Los que aún tienen intentos
+   * vuelven a PENDIENTE; los agotados pasan a ERROR y se devuelven para marcar su item. Los
+   * intentos solo los suma {@link #reclamar}.
+   */
+  @Transactional
+  public JobsColgados liberarJobsColgados(String workerId, int maxIntentos) {
+    List<JobRow> agotados =
+        jdbc.query(
+            """
+            UPDATE app.jobs
+               SET estado = 'ERROR',
+                   locked_until = NULL,
+                   error_log = 'Job colgado: reintentos agotados'
+             WHERE estado = 'EN_PROCESO'
+               AND worker_id = ?
+               AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
+               AND (locked_until IS NULL OR locked_until < NOW())
+               AND intentos >= ?
+            RETURNING id, tenant_id, payload::text, intentos
+            """,
+            JobRepository::fila,
+            workerId,
+            maxIntentos);
+    int reencolados =
+        jdbc.update(
+            """
+            UPDATE app.jobs
+               SET estado = 'PENDIENTE',
+                   locked_until = NULL,
+                   run_at = NOW() + INTERVAL '15 seconds'
+             WHERE estado = 'EN_PROCESO'
+               AND worker_id = ?
+               AND tipo IN ('PROCESAR_DOCUMENTO', 'PROCESAR_IA_EXPEDIENTE')
+               AND (locked_until IS NULL OR locked_until < NOW())
+               AND intentos < ?
+            """,
+            workerId,
+            maxIntentos);
+    return new JobsColgados(reencolados, agotados);
+  }
+
+  /** Espera antes del siguiente intento: 15 s, 30 s, 60 s… con tope de 5 min. */
+  static long backoffSegundos(int intentos) {
+    int exponente = Math.max(0, Math.min(intentos - 1, 5));
+    return Math.min(300L, 15L << exponente);
+  }
+
+  private static JobRow fila(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+    return new JobRow(
+        rs.getObject("id", UUID.class),
+        rs.getObject("tenant_id", UUID.class),
+        rs.getString(3),
+        rs.getInt("intentos"));
   }
 
   /** app.jobs no tiene RLS: el tenant se filtra aquí. */
@@ -113,12 +137,28 @@ public class JobRepository {
         loteId.toString());
   }
 
-  public void devolverAPendiente(UUID id) {
-    jdbc.update("UPDATE app.jobs SET estado = 'PENDIENTE' WHERE id = ?", id);
+  /** Reintento con backoff según los intentos ya consumidos. Solo si el job sigue EN_PROCESO. */
+  public void devolverAPendiente(UUID id, int intentos) {
+    jdbc.update(
+        """
+        UPDATE app.jobs
+           SET estado = 'PENDIENTE',
+               locked_until = NULL,
+               run_at = NOW() + ? * INTERVAL '1 second'
+         WHERE id = ? AND estado = 'EN_PROCESO'
+        """,
+        backoffSegundos(intentos),
+        id);
   }
 
   public void completar(UUID id) {
-    jdbc.update("UPDATE app.jobs SET estado = 'COMPLETADO', error_log = NULL WHERE id = ?", id);
+    jdbc.update(
+        """
+        UPDATE app.jobs
+           SET estado = 'COMPLETADO', error_log = NULL, locked_until = NULL, run_at = NOW()
+         WHERE id = ? AND estado = 'EN_PROCESO'
+        """,
+        id);
   }
 
   public void error(UUID id, String errorLog) {
@@ -126,10 +166,19 @@ public class JobRepository {
     if (log.length() > 4000) {
       log = log.substring(0, 4000);
     }
-    jdbc.update("UPDATE app.jobs SET estado = 'ERROR', error_log = ? WHERE id = ?", log, id);
+    jdbc.update(
+        """
+        UPDATE app.jobs
+           SET estado = 'ERROR', error_log = ?, locked_until = NULL, run_at = NOW()
+         WHERE id = ? AND estado = 'EN_PROCESO'
+        """,
+        log,
+        id);
   }
 
   public record JobRow(UUID id, UUID tenantId, String payload, int intentos) {}
+
+  public record JobsColgados(int reencolados, List<JobRow> agotados) {}
 
   public record JobsEnCola(int encolados, int iaEncolados) {}
 }

@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
 
 /**
  * Cifras de la escritura notarial también en letras, con el formato de la minuta del bufete:
- * {@code número (letras)}. Cédulas, teléfonos y montos usan el mismo conversor que el bufete
+ * {@code LETRAS (número)}. Cédulas, teléfonos y montos usan el mismo conversor que el bufete
  * ({@link NumeroALetras#digitosALetras}, {@link NumeroALetras#montoBancario}); superficies, fechas
  * y clave catastral, que el bufete no convierte, usan la lógica de esta clase. Cada tag numérico
  * {@code x} de la plantilla tiene su derivado {@code x_completo}.
@@ -85,9 +85,6 @@ final class LetrasNotariales {
   private static final Pattern LETRA = Pattern.compile("\\p{L}");
   private static final Pattern NUMERO_DIGITOS =
       Pattern.compile("\\+?\\d[\\d ]*(?:\\s*[-–]\\s*\\d[\\d ]*)*");
-  /** Formato de {@code MinutaViviendaData.digitosConLetras}: «número (LETRAS EN MAYÚSCULAS)». */
-  private static final Pattern CON_LETRAS_DEL_BUFETE =
-      Pattern.compile("(.*\\d.*?) \\(([A-ZÁÉÍÓÚÑ ]+)\\)");
   private static final Pattern CLAVE =
       Pattern.compile("\\d+(?:\\s*[-–—./]\\s*\\d+|\\s+\\d+)*");
   private static final Pattern SEPARADOR_CLAVE = Pattern.compile("\\s*[-–—./]\\s*|\\s+");
@@ -160,19 +157,19 @@ final class LetrasNotariales {
   }
 
   /**
-   * Igual que la minuta del bufete ({@code MinutaViviendaData.digitosConLetras}): el número tal
-   * cual y sus dígitos con {@link NumeroALetras#digitosALetras}: «0956856306 (CERO NUEVE …)».
+   * Igual que la minuta del bufete ({@code MinutaViviendaData.digitosConLetras}): sus dígitos con
+   * {@link NumeroALetras#digitosALetras} y el número tal cual: «CERO NUEVE … (0956856306)».
    */
   static Optional<String> digitos(String valor) {
     String t = valor.trim();
     if (!NUMERO_DIGITOS.matcher(t).matches()) {
       return Optional.empty();
     }
-    return Optional.of(t + " (" + NumeroALetras.digitosALetras(t) + ")");
+    return Optional.of(NumeroALetras.conCifra(NumeroALetras.digitosALetras(t), t));
   }
 
   /**
-   * «USD 120.000,00 (CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)». Las
+   * «CIENTO VEINTE MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA (USD 120.000,00)». Las
    * letras son las del payload (el bufete las arma con {@link NumeroALetras#montoBancario}); si no
    * vienen, las mismas de {@code montoBancario}.
    */
@@ -191,25 +188,22 @@ final class LetrasNotariales {
       letras += String.format(" con %02d/100", centesimos(monto));
     }
     return Optional.of(
-        "USD " + cifra(monto) + " (" + letras.toUpperCase(Locale.ROOT) + " " + DOLARES + ")");
+        NumeroALetras.conCifra(
+            letras.toUpperCase(Locale.ROOT) + " " + DOLARES, "USD " + cifra(monto)));
   }
 
   /**
-   * Cédula o teléfono que {@code toTemplateMap()} ya trae como «0956 (CERO NUEVE CINCO SEIS)»:
+   * Cédula o teléfono que {@code toTemplateMap()} ya trae como «CERO NUEVE CINCO SEIS (0956)»:
    * devuelve solo el número, para las firmas y para armar su {@code _completo}. Otro valor, igual.
    */
   static Object soloNumero(String tag, Object valor) {
     if (CONVERSIONES.get(tag) != Tipo.DIGITOS || !(valor instanceof String texto)) {
       return valor;
     }
-    var partes = CON_LETRAS_DEL_BUFETE.matcher(texto.trim());
-    if (partes.matches() && partes.group(2).equals(NumeroALetras.digitosALetras(partes.group(1)))) {
-      return partes.group(1).trim();
-    }
-    return valor;
+    return NumeroALetras.cifraLeida(texto).<Object>map(cifra -> cifra).orElse(valor);
   }
 
-  /** «84,00 m² (OCHENTA METROS CUADRADOS CON OCHENTA DECÍMETROS CUADRADOS)». */
+  /** «OCHENTA METROS CUADRADOS CON OCHENTA DECÍMETROS CUADRADOS (80,80 m²)». */
   static Optional<String> superficie(String valor) {
     String numero = UNIDAD_SUPERFICIE.matcher(valor.trim()).replaceFirst("").trim();
     Optional<BigDecimal> cifra = NumeroALetras.parsearMonto(numero);
@@ -228,10 +222,10 @@ final class LetrasNotariales {
           .append(NumeroALetras.entero(decimetros))
           .append(decimetros == 1 ? " decímetro cuadrado" : " decímetros cuadrados");
     }
-    return Optional.of(cifra(area) + " m² (" + mayusculas(letras.toString()) + ")");
+    return Optional.of(NumeroALetras.conCifra(mayusculas(letras.toString()), cifra(area) + " m²"));
   }
 
-  /** «60-2387-013 (SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE)». */
+  /** «SESENTA – DOS MIL TRESCIENTOS OCHENTA Y SIETE – CERO TRECE (60-2387-013)». */
   static Optional<String> claveCatastral(String valor) {
     String t = valor.trim();
     if (!CLAVE.matcher(t).matches()) {
@@ -247,15 +241,15 @@ final class LetrasNotariales {
         letras.add(segmento(segmento));
       }
     }
-    return Optional.of(t + " (" + mayusculas(String.join(" – ", letras)) + ")");
+    return Optional.of(NumeroALetras.conCifra(mayusculas(String.join(" – ", letras)), t));
   }
 
-  /** «31/03/2026 (TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS)»; el día 1 es «PRIMERO». */
+  /** «TREINTA Y UNO DE MARZO DE DOS MIL VEINTISÉIS (31/03/2026)»; el día 1 es «PRIMERO». */
   static String fecha(LocalDate fecha) {
     String dia = fecha.getDayOfMonth() == 1 ? "primero" : cardinal(fecha.getDayOfMonth());
     String letras =
         dia + " de " + MESES[fecha.getMonthValue() - 1] + " de " + cardinal(fecha.getYear());
-    return FECHA_CORTA.format(fecha) + " (" + mayusculas(letras) + ")";
+    return NumeroALetras.conCifra(mayusculas(letras), FECHA_CORTA.format(fecha));
   }
 
   /**

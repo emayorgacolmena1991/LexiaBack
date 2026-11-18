@@ -1,17 +1,40 @@
 server:
   port: ${LEXIA_SERVER_PORT:8081}
+  # IP del cliente: por defecto remoteAddr directo (X-Forwarded-For lo puede falsificar cualquiera).
+  # Detrás de un proxy/balanceador: LEXIA_FORWARD_HEADERS=native. Tomcat solo acepta el header si
+  # viene de un proxy de confianza: por defecto redes privadas y loopback; un proxy con IP pública
+  # se añade con SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES (regex).
+  forward-headers-strategy: ${LEXIA_FORWARD_HEADERS:none}
 
 spring:
   application:
     name: lexia-api
   servlet:
     multipart:
-      max-file-size: 300MB
-      max-request-size: 500MB
+      # Tope global: el PDF de expediente coactivo admite 300 MB (CoactivaExpedienteService). Cada
+      # endpoint aplica el suyo (carga de documentos 25 MB, captura BIESS 10 MB, logo 1 MB).
+      # Sin coactivas grandes, bajarlo aquí corta antes las subidas abusivas.
+      max-file-size: ${LEXIA_MAX_FILE_SIZE:300MB}
+      max-request-size: ${LEXIA_MAX_REQUEST_SIZE:500MB}
+      # Por encima de esto el archivo va a disco temporal en vez de memoria mientras se recibe.
+      file-size-threshold: ${LEXIA_MULTIPART_MEMORY_THRESHOLD:2MB}
+  task:
+    scheduling:
+      # Antes: 1 hilo para todos los @Scheduled (coactivas, ingesta, colgados, outbox EJD, caché OCR).
+      pool:
+        size: ${LEXIA_SCHEDULER_POOL:5}
+      thread-name-prefix: lexia-sched-
   datasource:
-    url: jdbc:postgresql://${LEXIA_DB_HOST:51.79.11.21}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
+    # Sin host por defecto de un servidor real: se define en LEXIA_DB_HOST (backend/.env).
+    url: jdbc:postgresql://${LEXIA_DB_HOST:localhost}:${LEXIA_DB_PORT:5432}/${LEXIA_DB_NAME:lexia}
     username: ${LEXIA_DB_USER:lexia_app}
     password: ${LEXIA_DB_PASSWORD:}
+    hikari:
+      # Cada instancia abre hasta este número; con varias contra la misma BD, la suma debe quedar
+      # bajo max_connections de Postgres. LISTEN del SSE va fuera del pool.
+      maximum-pool-size: ${LEXIA_DB_POOL_MAX:20}
+      minimum-idle: ${LEXIA_DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${LEXIA_DB_POOL_TIMEOUT_MS:10000}
   flyway:
     enabled: true
     user: ${LEXIA_FLYWAY_USER:lexia_migrator}
@@ -56,6 +79,8 @@ lexia:
       zona-horaria: ${LEXIA_COACTIVAS_ZONA_HORARIA:America/Guayaquil}
   expedientes:
     storage-dir: ${LEXIA_EXPEDIENTES_DIR:./data/expedientes}
+    # Borradores en memoria (con sus archivos) sin uso durante estas horas se descartan.
+    borrador-ttl-horas: ${LEXIA_BORRADOR_TTL_HORAS:24}
   # Clasificación automática del tipo documental tras el OCR (expedientes persistidos).
   clasificacion:
     # Confianza mínima (0-1) para asignar el tipo; por debajo queda como sugerencia (POR_REVISAR).
@@ -65,6 +90,14 @@ lexia:
     modelo: ${LEXIA_CLASIFICACION_MODELO:}
   worker:
     id: ${LEXIA_WORKER_ID:${HOSTNAME:${COMPUTERNAME:local-dev-worker}}}
+  ingesta:
+    worker:
+      # Por encima del timeout de Claude (180 s) y de una llamada Azure (120 s). El lock del job
+      # vence 120 s después del timeout.
+      timeout-documento-s: ${LEXIA_INGESTA_TIMEOUT_DOCUMENTO_S:300}
+      timeout-ia-s: ${LEXIA_INGESTA_TIMEOUT_IA_S:360}
+      max-intentos: ${LEXIA_INGESTA_MAX_INTENTOS:3}
+      colgados-ms: ${LEXIA_INGESTA_COLGADOS_MS:60000}
   prompts:
     PROMPT_EXTRACCION_ACTO: |
       Eres un asistente legal experto en escrituración e hipotecas. Tu única función es
@@ -286,7 +319,7 @@ lexia:
       stub-live: ${LEXIA_EJD_STUB_LIVE:false}
       live-base-url: ${LEXIA_EJD_CONNECTOR_BASE_URL:}
       worker:
-        poll-interval-ms: ${LEXIA_EJD_WORKER_POLL_MS:500}
+        poll-interval-ms: ${LEXIA_EJD_WORKER_POLL_MS:5000}
         batch-size: ${LEXIA_EJD_WORKER_BATCH_SIZE:50}
   cors:
     allowed-origins:
@@ -295,15 +328,21 @@ lexia:
   auth:
     enabled: true
     session-hours: 8
+    # Caché de sesiones activas por nodo. Una revocación en otro nodo tarda hasta este TTL; 0 la desactiva.
+    session-cache-seconds: ${LEXIA_SESSION_CACHE_SECONDS:30}
     refresh-days: 7
     challenge-minutes: 5
+    # Fallos seguidos desde una misma IP contra una cuenta: frena a esa IP (429), no bloquea la cuenta.
     max-failed-attempts: 5
+    # Fallos seguidos desde cualquier IP que sí bloquean la cuenta (ataque distribuido). Máximo 20.
+    account-lock-attempts: ${LEXIA_ACCOUNT_LOCK_ATTEMPTS:20}
     lockout-minutes: 30
     cookie-secure: ${LEXIA_COOKIE_SECURE:false}
-    # Contraseña inicial para cuentas bootstrap. Cambiar en producción (LEXIA_BOOTSTRAP_PASSWORD).
-    demo-password: ${LEXIA_DEMO_PASSWORD:${LEXIA_BOOTSTRAP_PASSWORD:Lexia-Demo-2026!}}
-    # Lista separada por comas. Producción: solo cuentas operativas (p. ej. emayorga@colmenas.ec).
-    bootstrap-emails: ${LEXIA_AUTH_BOOTSTRAP_EMAILS:emayorga@colmenas.ec}
+    # Contraseña inicial de las cuentas bootstrap. Sin valor por defecto: si no se define
+    # LEXIA_BOOTSTRAP_PASSWORD (o LEXIA_DEMO_PASSWORD), el bootstrap no asigna ninguna.
+    demo-password: ${LEXIA_DEMO_PASSWORD:${LEXIA_BOOTSTRAP_PASSWORD:}}
+    # Lista separada por comas (LEXIA_AUTH_BOOTSTRAP_EMAILS). Sin valor por defecto.
+    bootstrap-emails: ${LEXIA_AUTH_BOOTSTRAP_EMAILS:}
     crypto-key: ${LEXIA_CRYPTO_KEY:}
   brevo:
     enabled: ${LEXIA_BREVO_ENABLED:false}
@@ -354,15 +393,16 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # metrics solo responde desde localhost (SecurityConfig.metricasDesdeLoopback).
+        include: health,info,metrics
   info:
     env:
       enabled: true
 
-# TICKET-DEV-401B: ver por qué SecurityFilterChain rechaza /api/v1/cache/**
+# DEBUG de Spring Security vuelca cabeceras y decisiones de cada request: solo bajo demanda.
 logging:
   level:
-    org.springframework.security: ${LEXIA_SECURITY_DEBUG:DEBUG}
+    org.springframework.security: ${LEXIA_SECURITY_DEBUG:INFO}
 
 info:
   app:

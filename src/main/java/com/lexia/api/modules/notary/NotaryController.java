@@ -244,7 +244,11 @@ public class NotaryController {
         .body(bytes);
   }
 
-  private static ResponseEntity<byte[]> archivo(NotaryDtos.RemisionDocumentContent content) {
+  /**
+   * El MIME guardado puede venir del cliente (filas anteriores a la validación por extensión): solo
+   * PDF e imágenes no SVG se sirven inline con su tipo; el resto se descarga como binario.
+   */
+  static ResponseEntity<byte[]> archivo(NotaryDtos.RemisionDocumentContent content) {
     MediaType mediaType;
     try {
       mediaType = MediaType.parseMediaType(content.mimeType());
@@ -254,15 +258,30 @@ public class NotaryController {
     String nombre = content.fileName() == null || content.fileName().isBlank()
         ? "archivo"
         : content.fileName();
+    boolean docx = esDocx(nombre, mediaType);
+    boolean inline = !docx && esVisibleInline(mediaType);
+    if (docx) {
+      mediaType = DOCX;
+    } else if (!inline) {
+      mediaType = MediaType.APPLICATION_OCTET_STREAM;
+    }
     ContentDisposition disposition =
-        (esDocx(nombre, mediaType) ? ContentDisposition.attachment() : ContentDisposition.inline())
+        (inline ? ContentDisposition.inline() : ContentDisposition.attachment())
             .filename(nombre, StandardCharsets.UTF_8)
             .build();
     return ResponseEntity.ok()
         .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
         .header(HttpHeaders.CACHE_CONTROL, "no-store")
+        .header("X-Content-Type-Options", "nosniff")
         .contentType(mediaType)
         .body(content.bytes());
+  }
+
+  private static boolean esVisibleInline(MediaType mediaType) {
+    return MediaType.APPLICATION_PDF.equalsTypeAndSubtype(mediaType)
+        || ("image".equals(mediaType.getType())
+            && !mediaType.isWildcardSubtype()
+            && !mediaType.getSubtype().contains("svg"));
   }
 
   private static boolean esDocx(String fileName, MediaType mediaType) {

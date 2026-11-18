@@ -2,12 +2,14 @@ package com.lexia.api.modules.auth;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
+@EntityListeners(UserSessionCacheListener.class)
 @Table(schema = "app", name = "user_session")
 public class UserSession {
 
@@ -36,6 +38,24 @@ public class UserSession {
 
   @Column(name = "revoked_at")
   private Instant revokedAt;
+
+  /** SHA-256 del token de la cookie. NULL: sesión anterior a V111 (la cookie era el id). */
+  @Column(name = "token_hash", length = 64)
+  private String tokenHash;
+
+  /**
+   * Genera un token nuevo, guarda su hash y lo devuelve en claro (solo para la cookie). También al
+   * refrescar: el token anterior deja de valer.
+   */
+  public String emitirToken() {
+    String token = TokenHasher.randomToken();
+    this.tokenHash = TokenHasher.sha256(token);
+    return token;
+  }
+
+  public String getTokenHash() {
+    return tokenHash;
+  }
 
   public static UserSession open(
       UUID userId, UUID tenantId, UUID membershipId, String ip, String userAgent, Instant expiresAt) {
