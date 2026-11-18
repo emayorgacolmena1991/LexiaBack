@@ -60,6 +60,11 @@ public class OcrAzureBatchService {
   /** Cuánto se guarda la validación de un reemplazo a la espera de la confirmación del usuario. */
   static final Duration VALIDACION_TTL = Duration.ofMinutes(10);
   private static final int VALIDACIONES_MAX = 200;
+  /**
+   * El request espera a todo el OCR (join): sin tope, un lote grande retiene el hilo HTTP y llena
+   * la cola de ocrExecutor.
+   */
+  static final int MAX_DOCUMENTOS_BATCH = 20;
 
   private final AzureCalidadDocumentoService layoutService;
   private final CargaDocumentoService cargaDocumentoService;
@@ -98,6 +103,10 @@ public class OcrAzureBatchService {
     }
     if (request.documents() == null || request.documents().isEmpty()) {
       throw ApiException.badRequest("documents requerido.");
+    }
+    if (request.documents().size() > MAX_DOCUMENTOS_BATCH) {
+      throw ApiException.badRequest(
+          "El lote admite hasta " + MAX_DOCUMENTOS_BATCH + " documentos por solicitud.");
     }
     if (!layoutService.isConfigured()) {
       throw new ApiException(
@@ -474,6 +483,8 @@ public class OcrAzureBatchService {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String sessionId = request.sessionId().trim();
+    // El sessionId lo manda el cliente: sin esto se leía y reescribía el OCR de cualquier expediente.
+    cargaDocumentoService.exigirSesionDelTenant(sessionId);
     cache.putConsolidated(sessionId, regenerarConsolidado(sessionId, request.consolidatedContent()));
     return new ConsolidateResponse(true, OcrSessionCacheService.cacheKey(sessionId));
   }
@@ -506,6 +517,7 @@ public class OcrAzureBatchService {
       throw ApiException.badRequest("sessionId requerido.");
     }
     String id = sessionId.trim();
+    cargaDocumentoService.exigirSesionDelTenant(id);
     String content = cache.getConsolidated(id);
     if (content == null) {
       throw ApiException.notFound("Caché OCR no encontrada o expirada para sessionId=" + id);

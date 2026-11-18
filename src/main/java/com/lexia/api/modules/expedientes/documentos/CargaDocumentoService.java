@@ -33,7 +33,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -60,6 +62,13 @@ public class CargaDocumentoService {
   private final ObjectProvider<RevisionMinutaTerceroService> revisionMinutaTercero;
   private final Map<String, DraftExpediente> drafts = new ConcurrentHashMap<>();
 
+  /**
+   * Horas sin uso tras las que un borrador sale de memoria con sus archivos. Antes no salía nunca
+   * (solo al reiniciar). Lo que no se promovió se pierde, igual que en un reinicio.
+   */
+  @Value("${lexia.expedientes.borrador-ttl-horas:24}")
+  private long borradorTtlHoras = 24;
+
   public CargaDocumentoService(
       ActoNotarialService actoNotarialService,
       @Lazy ProcesamientoDocumentalService procesamientoDocumentalService,
@@ -79,6 +88,23 @@ public class CargaDocumentoService {
 
   public BorradorResponse crearBorrador(String idActo) {
     return crearBorrador(new CrearBorradorRequest(idActo, null, null));
+  }
+
+  /** Saca de memoria los borradores sin uso en {@link #borradorTtlHoras}. */
+  @Scheduled(fixedDelayString = "${lexia.expedientes.borrador-purga-ms:600000}")
+  public void purgarBorradoresInactivos() {
+    purgarBorradoresInactivos(System.currentTimeMillis());
+  }
+
+  int purgarBorradoresInactivos(long ahoraMs) {
+    long limite = ahoraMs - Math.max(1, borradorTtlHoras) * 3_600_000L;
+    int antes = drafts.size();
+    drafts.values().removeIf(draft -> draft.ultimoUsoMs() < limite);
+    int purgados = antes - drafts.size();
+    if (purgados > 0) {
+      LOG.info("Borradores en memoria purgados={} quedan={}", purgados, drafts.size());
+    }
+    return purgados;
   }
 
   public BorradorResponse crearBorrador(CrearBorradorRequest request) {
@@ -109,7 +135,9 @@ public class CargaDocumentoService {
             ingestionMode.name(),
             auth.userId());
     String id = generated.toString();
-    drafts.put(id, new DraftExpediente(id, idActo, productCode, canton, ingestionMode));
+    DraftExpediente nuevo = new DraftExpediente(id, idActo, productCode, canton, ingestionMode);
+    nuevo.asignarTenant(auth.tenantId());
+    drafts.put(id, nuevo);
     LOG.info("Borrador persistido id={} tenant={}", id, auth.tenantId());
     return new BorradorResponse(id, idActo, "BORRADOR", productCode, ingestionMode.name());
   }
@@ -188,7 +216,7 @@ public class CargaDocumentoService {
       }
       byte[] bytes = readBytes(file, official.ingestionMode());
       String original = originalName(file);
-      String mime = file.getContentType();
+      String mime = mimeDeExtension(extensionOf(original));
       String tipoFijo = conTipo ? codigoTipo.trim() : null;
       DocumentoCargadoDTO subido = caseDocs.subir(official, original, mime, bytes, tipoFijo, observacion);
       // EJ-3: solo minuta de tercero (no SOPORTE_INGRESOS). Tras commit de la carga.
@@ -235,9 +263,7 @@ public class CargaDocumentoService {
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
-    if ("pdf".equals(ext) && (bytes.length < 4 || !new String(bytes, 0, 4, java.nio.charset.StandardCharsets.ISO_8859_1).startsWith("%PDF"))) {
-      throw ApiException.badRequest("El archivo no es un PDF válido.");
-    }
+    exigirFirma(ext, bytes);
 
     String idDoc = "DOC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
     StoredDoc stored =
@@ -246,7 +272,7 @@ public class CargaDocumentoService {
             original,
             file.getSize(),
             formatSize(file.getSize()),
-            file.getContentType(),
+            mimeDeExtension(ext),
             bytes,
             fisico ? IngestionMode.EXPEDIENTE_FISICO_ESCANEADO : null);
     draft.documentos().put(idDoc, stored);
@@ -343,6 +369,17 @@ public class CargaDocumentoService {
     }
   }
 
+  /**
+   * El id debe ser un expediente o un borrador del tenant de la sesión. Si no, 404 (no se revela si
+   * existe en otro tenant).
+   */
+  public void exigirSesionDelTenant(String sessionId) {
+    if (caseDocs.context(sessionId) != null) {
+      return;
+    }
+    requireDraft(sessionId);
+  }
+
   /** {@code true} si el id es un expediente persistido del tenant (no un borrador). */
   public boolean esExpedientePersistido(String idExpediente) {
     return caseDocs.isCase(idExpediente);
@@ -400,7 +437,7 @@ public class CargaDocumentoService {
           sessionId,
           fileId,
           originalName(file),
-          file.getContentType(),
+          mimeDeExtension(extensionOf(originalName(file))),
           bytes,
           formatSize(bytes.length),
           tipoCliente,
@@ -438,6 +475,7 @@ public class CargaDocumentoService {
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
     }
+    exigirFirma(ext, bytes);
     String tipoCliente =
         fisico ? null : tipoDelCliente(sessionId, fileId, tipoDocumento).orElse(null);
     String tipoFinal =
@@ -448,7 +486,7 @@ public class CargaDocumentoService {
         sessionId,
         fileId,
         original,
-        file.getContentType(),
+        mimeDeExtension(ext),
         bytes,
         formatSize(file.getSize()),
         tipoCliente,
@@ -728,13 +766,19 @@ public class CargaDocumentoService {
     }
     guardarOcrEnMemoria(idExpediente, resultado);
     var principal = com.lexia.api.modules.auth.AuthContext.get();
+    UUID tenant =
+        principal != null && principal.tenantId() != null
+            ? principal.tenantId()
+            : com.lexia.api.modules.tenancy.TenantContext.getTenantId();
+    if (tenant == null) {
+      // Con RLS (V109) una fila sin tenant no se puede escribir ni leer.
+      throw new IllegalStateException("Guardar OCR requiere tenant: " + idExpediente);
+    }
     DocumentoTextoOcr row =
         ocrRepository
             .findByIdExpedienteAndIdDocumento(idExpediente, resultado.idDocumento())
             .orElseGet(DocumentoTextoOcr::new);
-    if (principal != null) {
-      row.setTenantId(principal.tenantId());
-    }
+    row.setTenantId(tenant);
     row.setIdExpediente(idExpediente);
     row.setIdDocumento(resultado.idDocumento());
     row.setTipoDocumento(resultado.tipoDocumento());
@@ -755,9 +799,30 @@ public class CargaDocumentoService {
     ocrRepository.deleteByIdExpedienteAndIdDocumento(idExpediente, idDocumento);
   }
 
+  /**
+   * Borrador en memoria para escrituras internas (sin hidratar desde BD). {@code null} si el
+   * contexto es de otro tenant; sin contexto (tarea interna) se acepta.
+   */
+  private DraftExpediente draftDelTenantONull(String idExpediente) {
+    if (idExpediente == null) {
+      return null;
+    }
+    DraftExpediente draft = drafts.get(idExpediente);
+    if (draft == null) {
+      return null;
+    }
+    AuthPrincipal auth = AuthContext.get();
+    UUID tenantActual = auth == null ? null : auth.tenantId();
+    if (tenantActual != null && draft.tenantId() != null && !draft.tenantId().equals(tenantActual)) {
+      LOG.warn("Escritura en borrador {} rechazada: pertenece a otro tenant", idExpediente);
+      return null;
+    }
+    return draft;
+  }
+
   /** Guarda resultado OCR+Gemini solo en RAM del borrador. */
   public void guardarOcrEnMemoria(String idExpediente, DocumentoOcrResultadoDTO resultado) {
-    DraftExpediente draft = drafts.get(idExpediente);
+    DraftExpediente draft = draftDelTenantONull(idExpediente);
     if (draft == null || resultado == null) {
       return;
     }
@@ -766,7 +831,7 @@ public class CargaDocumentoService {
 
   void actualizarDocPrevalidacion(
       String idExpediente, String idDocumento, String estado, String motivo, int confianza) {
-    DraftExpediente draft = drafts.get(idExpediente);
+    DraftExpediente draft = draftDelTenantONull(idExpediente);
     if (draft == null) {
       return;
     }
@@ -780,7 +845,7 @@ public class CargaDocumentoService {
       int legibles,
       int total,
       List<PrevalidacionDocumentoDTO> documentos) {
-    DraftExpediente draft = drafts.get(idExpediente);
+    DraftExpediente draft = draftDelTenantONull(idExpediente);
     if (draft == null) {
       return;
     }
@@ -788,7 +853,7 @@ public class CargaDocumentoService {
   }
 
   void marcarPrevalidacionError(String idExpediente, String motivo) {
-    DraftExpediente draft = drafts.get(idExpediente);
+    DraftExpediente draft = draftDelTenantONull(idExpediente);
     if (draft == null) {
       return;
     }
@@ -808,8 +873,16 @@ public class CargaDocumentoService {
       throw missingDraft(idExpediente);
     }
     String key = idExpediente.trim();
+    AuthPrincipal auth = AuthContext.get();
+    UUID tenantActual = auth == null ? null : auth.tenantId();
+    // El mapa es de todo el nodo: el tenant se valida también al leer de memoria.
     DraftExpediente cached = drafts.get(key);
-    if (cached != null) {
+    if (cached != null && cached.tenantId() != null) {
+      if (!cached.tenantId().equals(tenantActual)) {
+        LOG.warn("Borrador {} rechazado: pertenece a otro tenant", key);
+        throw missingDraft(key);
+      }
+      cached.tocar();
       return cached;
     }
     UUID id = parseUuid(key);
@@ -817,15 +890,20 @@ public class CargaDocumentoService {
       LOG.warn("Borrador rechazado: id no es UUID ({})", key);
       throw missingDraft(key);
     }
-    AuthPrincipal auth = AuthContext.get();
-    if (auth == null || auth.tenantId() == null) {
+    if (tenantActual == null) {
       LOG.warn("Borrador {} rechazado: sesión sin tenant", id);
       throw missingDraft(key);
     }
-    Optional<ExpedienteBorrador> row = borradores.find(id, auth.tenantId());
+    Optional<ExpedienteBorrador> row = borradores.find(id, tenantActual);
     if (row.isEmpty()) {
       LOG.warn("Borrador {} no existe en app.expediente_borrador", id);
       throw missingDraft(key);
+    }
+    if (cached != null) {
+      // En memoria sin tenant registrado: se acaba de validar contra la BD.
+      cached.asignarTenant(tenantActual);
+      cached.tocar();
+      return cached;
     }
     ExpedienteBorrador persisted = row.get();
     DraftExpediente hydrated =
@@ -835,8 +913,13 @@ public class CargaDocumentoService {
             persisted.getProductCode(),
             persisted.getCanton(),
             IngestionMode.from(persisted.getIngestionMode()));
+    hydrated.asignarTenant(tenantActual);
     DraftExpediente raced = drafts.putIfAbsent(persisted.getId().toString(), hydrated);
-    return raced != null ? raced : hydrated;
+    if (raced != null) {
+      raced.asignarTenant(tenantActual);
+      return raced;
+    }
+    return hydrated;
   }
 
   private static UUID parseUuid(String raw) {
@@ -867,9 +950,7 @@ public class CargaDocumentoService {
     }
     try {
       byte[] bytes = file.getBytes();
-      if ("pdf".equals(ext) && (bytes.length < 4 || !new String(bytes, 0, 4, java.nio.charset.StandardCharsets.ISO_8859_1).startsWith("%PDF"))) {
-        throw ApiException.badRequest("El archivo no es un PDF válido.");
-      }
+      exigirFirma(ext, bytes);
       return bytes;
     } catch (IOException e) {
       throw ApiException.badRequest("No se pudo leer el archivo.");
@@ -886,6 +967,51 @@ public class CargaDocumentoService {
       return "";
     }
     return name.substring(dot + 1).toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * MIME según la extensión ya validada. Nunca el Content-Type del cliente: se guarda y luego se
+   * sirve tal cual (un text/html inline ejecutaría script en el origen de Lexia).
+   */
+  static String mimeDeExtension(String ext) {
+    return switch (ext == null ? "" : ext) {
+      case "pdf" -> "application/pdf";
+      case "jpg", "jpeg" -> "image/jpeg";
+      case "png" -> "image/png";
+      case "tif", "tiff" -> "image/tiff";
+      default -> "application/octet-stream";
+    };
+  }
+
+  /** La firma (magic bytes) debe corresponder a la extensión: un .png con HTML dentro no pasa. */
+  static void exigirFirma(String ext, byte[] bytes) {
+    boolean valida =
+        switch (ext == null ? "" : ext) {
+          case "pdf" -> empiezaCon(bytes, '%', 'P', 'D', 'F');
+          case "jpg", "jpeg" -> empiezaCon(bytes, 0xFF, 0xD8, 0xFF);
+          case "png" -> empiezaCon(bytes, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A);
+          case "tif", "tiff" ->
+              empiezaCon(bytes, 'I', 'I', 0x2A, 0x00) || empiezaCon(bytes, 'M', 'M', 0x00, 0x2A);
+          default -> false;
+        };
+    if (!valida) {
+      throw ApiException.badRequest(
+          "pdf".equals(ext)
+              ? "El archivo no es un PDF válido."
+              : "El contenido del archivo no corresponde a su extensión.");
+    }
+  }
+
+  private static boolean empiezaCon(byte[] bytes, int... firma) {
+    if (bytes == null || bytes.length < firma.length) {
+      return false;
+    }
+    for (int i = 0; i < firma.length; i++) {
+      if ((bytes[i] & 0xFF) != firma[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static String formatSize(long bytes) {
@@ -916,6 +1042,27 @@ public class CargaDocumentoService {
     private final Map<String, ClasificacionBorrador> clasificaciones = new ConcurrentHashMap<>();
     private volatile boolean locked;
     private volatile PrevalidacionState prevalidacion;
+    private volatile long ultimoUsoMs = System.currentTimeMillis();
+    private volatile UUID tenantId;
+
+    UUID tenantId() {
+      return tenantId;
+    }
+
+    /** Solo la primera vez: un borrador no cambia de tenant. */
+    synchronized void asignarTenant(UUID tenant) {
+      if (tenantId == null) {
+        tenantId = tenant;
+      }
+    }
+
+    void tocar() {
+      ultimoUsoMs = System.currentTimeMillis();
+    }
+
+    long ultimoUsoMs() {
+      return ultimoUsoMs;
+    }
 
     DraftExpediente(String id, String idActo) {
       this(id, idActo, null, null, IngestionMode.DIGITAL_SEPARADO);

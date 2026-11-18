@@ -184,10 +184,8 @@ public class CatalogAdminService {
   }
 
   private static String clientIp(HttpServletRequest request) {
-    String forwarded = request.getHeader("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      return forwarded.split(",")[0].trim();
-    }
+    // No se lee X-Forwarded-For: lo manda el cliente. Detrás de un proxy, Tomcat reescribe
+    // remoteAddr solo si el proxy es de confianza (server.forward-headers-strategy=native).
     return request.getRemoteAddr();
   }
 }

@@ -23,9 +23,11 @@ public class SessionAuthFilter extends OncePerRequestFilter {
   private static final String BEARER_PREFIX = "Bearer ";
 
   private final UserSessionRepository sessions;
+  private final SessionCache cache;
 
-  public SessionAuthFilter(UserSessionRepository sessions) {
+  public SessionAuthFilter(UserSessionRepository sessions, SessionCache cache) {
     this.sessions = sessions;
+    this.cache = cache;
   }
 
   @Override
@@ -56,12 +58,33 @@ public class SessionAuthFilter extends OncePerRequestFilter {
     if (raw == null || raw.isBlank()) {
       return null;
     }
+    String token = raw.trim();
+    UserSession porToken =
+        cache.obtener(TokenHasher.sha256(token), hash -> sessions.findByTokenHash(hash).orElse(null));
+    if (porToken != null) {
+      return porToken;
+    }
+    return legado(token);
+  }
+
+  /**
+   * Sesiones anteriores a V111: la cookie era el id. Solo valen si no tienen token_hash (no se
+   * crean más así) y caducan en session-hours; el próximo refresh las migra a token.
+   */
+  private UserSession legado(String token) {
+    UUID sessionId;
     try {
-      UUID sessionId = UUID.fromString(raw.trim());
-      return sessions.findById(sessionId).filter(UserSession::isActive).orElse(null);
+      sessionId = UUID.fromString(token);
     } catch (IllegalArgumentException ignored) {
       return null;
     }
+    return cache.obtener(
+        "legado:" + sessionId,
+        clave ->
+            sessions
+                .findById(sessionId)
+                .filter(session -> session.getTokenHash() == null)
+                .orElse(null));
   }
 
   private static String bearerToken(HttpServletRequest request) {

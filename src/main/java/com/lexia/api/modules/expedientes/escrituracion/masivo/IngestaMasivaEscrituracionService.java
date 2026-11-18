@@ -71,6 +71,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -689,7 +690,7 @@ public class IngestaMasivaEscrituracionService {
     AuthPrincipal principal = AuthContext.require();
     Lote lote = require(batchId);
     UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
-    UUID usuario = usuarioConfirmacion(confirmadoPor, principal.userId());
+    UUID usuario = usuarioConfirmacion(confirmadoPor, principal.userId(), batchId);
     tx.executeWithoutResult(
         status ->
             entityManager
@@ -729,15 +730,20 @@ public class IngestaMasivaEscrituracionService {
     return snapshot(fresh);
   }
 
-  private static UUID usuarioConfirmacion(String confirmadoPor, UUID actual) {
-    if (confirmadoPor == null || confirmadoPor.isBlank()) {
-      return actual;
+  /**
+   * Quien confirma es siempre el usuario de la sesión. {@code confirmadoPor} del body se ignora:
+   * antes permitía registrar la confirmación a nombre de otro usuario.
+   */
+  static UUID usuarioConfirmacion(String confirmadoPor, UUID actual, UUID loteId) {
+    if (confirmadoPor != null
+        && !confirmadoPor.isBlank()
+        && !confirmadoPor.trim().equalsIgnoreCase(String.valueOf(actual))) {
+      LOG.warn(
+          "confirmar lote={}: confirmadoPor del cliente ({}) distinto del usuario de la sesión; se usa la sesión",
+          loteId,
+          confirmadoPor);
     }
-    try {
-      return UUID.fromString(confirmadoPor.trim());
-    } catch (IllegalArgumentException ex) {
-      throw ApiException.badRequest("confirmadoPor no es un UUID.");
-    }
+    return actual;
   }
 
   private static int contarItems(Connection connection, UUID loteId, UUID tenant) throws java.sql.SQLException {
@@ -807,23 +813,71 @@ public class IngestaMasivaEscrituracionService {
     return fila;
   }
 
+  /** Antes 0 (sin timeout): un cliente caído quedaba registrado para siempre. EventSource reconecta. */
+  static final long SSE_TIMEOUT_MS = 30L * 60L * 1000L;
+
   public SseEmitter stream(UUID batchId) {
     require(batchId);
-    SseEmitter emitter = new SseEmitter(0L);
+    SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
     streams.computeIfAbsent(batchId, id -> new CopyOnWriteArrayList<>()).add(emitter);
-    Runnable drop = () -> streams.getOrDefault(batchId, new CopyOnWriteArrayList<>()).remove(emitter);
+    Runnable drop = () -> quitarEmisor(batchId, emitter);
     emitter.onCompletion(drop);
     emitter.onTimeout(drop);
     emitter.onError(err -> drop.run());
     return emitter;
   }
 
+  /** Quita el emisor y, si la lista queda vacía, también la entrada del lote. */
+  private void quitarEmisor(UUID loteId, SseEmitter emitter) {
+    streams.computeIfPresent(
+        loteId,
+        (id, lista) -> {
+          lista.remove(emitter);
+          return lista.isEmpty() ? null : lista;
+        });
+  }
+
+  /** Ping: mantiene viva la conexión tras proxies y descubre clientes caídos (el envío falla). */
+  @Scheduled(fixedDelayString = "${lexia.ingesta.sse.latido-ms:25000}")
+  public void latidoSse() {
+    streams.forEach(
+        (loteId, lista) -> {
+          for (SseEmitter emitter : lista) {
+            try {
+              emitter.send(SseEmitter.event().comment("ping"));
+            } catch (IOException | IllegalStateException ex) {
+              emitter.complete();
+              quitarEmisor(loteId, emitter);
+            }
+          }
+        });
+  }
+
+  int lotesConOyentes() {
+    return streams.size();
+  }
+
   public ResumenLote resumen(UUID batchId) {
     Lote lote = require(batchId);
-    int total = contar(batchId, null);
-    int completados = contar(batchId, "COMPLETADO");
-    int fallidos = contar(batchId, "ERROR");
-    int enProceso = contarEnProceso(batchId);
+    Object[] c =
+        (Object[])
+            entityManager
+                .createNativeQuery(
+                    """
+                    SELECT count(*)::int,
+                           count(*) FILTER (WHERE estado = 'COMPLETADO')::int,
+                           count(*) FILTER (WHERE estado = 'ERROR')::int,
+                           count(*) FILTER (WHERE estado IN ('PENDIENTE', 'EN_PROCESO'))::int
+                      FROM app.ingesta_item
+                     WHERE lote_id = :lote AND tenant_id = :tenant
+                    """)
+                .setParameter("lote", batchId)
+                .setParameter("tenant", lote.tenantId)
+                .getSingleResult();
+    int total = ((Number) c[0]).intValue();
+    int completados = ((Number) c[1]).intValue();
+    int fallidos = ((Number) c[2]).intValue();
+    int enProceso = ((Number) c[3]).intValue();
     return new ResumenLote(batchId, total, completados, enProceso, fallidos, 0, snapshot(lote));
   }
 
@@ -861,7 +915,7 @@ public class IngestaMasivaEscrituracionService {
       throw ApiException.badRequest(
           "No se pudo encolar el procesamiento del documento. " + e.getMessage());
     }
-    LOG.info("job PROCESAR_DOCUMENTO {}", payload);
+    LOG.info("job PROCESAR_DOCUMENTO lote={} item={} doc={}", payload.loteId(), payload.itemId(), payload.docId());
   }
 
   private void encolarProcesarIa(Lote lote, Fila fila, AuthPrincipal principal) {
@@ -878,11 +932,11 @@ public class IngestaMasivaEscrituracionService {
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar el cotejo IA.");
     }
-    LOG.info("job PROCESAR_IA_EXPEDIENTE {}", payload);
+    LOG.info("job PROCESAR_IA_EXPEDIENTE lote={} item={}", payload.loteId(), payload.itemId());
   }
 
   public void procesarDocumento(ProcesarDocumento payload, BooleanSupplier cancelado) {
-    Lote lote = cargar(payload.tenantId(), payload.loteId());
+    Lote lote = cargar(payload.tenantId(), payload.loteId(), payload.itemId());
     Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
     Archivo archivo = fila == null ? null : archivoDe(fila, payload.docId());
     UUID tenantId = payload.tenantId();
@@ -962,9 +1016,9 @@ public class IngestaMasivaEscrituracionService {
         return;
       }
       String detalle = ex.getMessage() == null || ex.getMessage().isBlank() ? ex.getClass().getSimpleName() : ex.getMessage();
-      LOG.error("job PROCESAR_DOCUMENTO ERROR payload={} error_log={}", payload, detalle);
+      LOG.error("job PROCESAR_DOCUMENTO ERROR lote={} item={} doc={} error_log={}", payload.loteId(), payload.itemId(), payload.docId(), detalle);
       if (lote == null) {
-        lote = cargar(tenantId, loteId);
+        lote = cargar(tenantId, loteId, payload.itemId());
       }
       if (fila == null && lote != null) {
         fila = filaONull(lote, payload.itemId());
@@ -1050,7 +1104,10 @@ public class IngestaMasivaEscrituracionService {
 
   /** Fallo terminal de un job: requiere el contexto de auth y tenant del payload. */
   public void marcarItemComoError(UUID loteId, String itemId, String motivo) {
-    Lote lote = require(loteId);
+    Lote lote = cargar(AuthContext.require().tenantId(), loteId, itemId);
+    if (lote == null) {
+      throw ApiException.notFound("Lote de ingesta no encontrado.");
+    }
     fila(lote, itemId);
     mutarFila(
         loteId,
@@ -1150,7 +1207,7 @@ public class IngestaMasivaEscrituracionService {
 
   public void procesarIaExpediente(ProcesarIaExpediente payload, BooleanSupplier cancelado) {
     try {
-      Lote lote = cargar(payload.tenantId(), payload.loteId());
+      Lote lote = cargar(payload.tenantId(), payload.loteId(), payload.itemId());
       Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
       if (fila == null || lote == null || fila.expedienteId == null) {
         throw new IllegalStateException("Fila no encontrada: " + payload.itemId());
@@ -1202,7 +1259,7 @@ public class IngestaMasivaEscrituracionService {
           ex.getMessage() == null || ex.getMessage().isBlank()
               ? ex.getClass().getSimpleName()
               : ex.getMessage();
-      LOG.error("job PROCESAR_IA_EXPEDIENTE ERROR payload={} error_log={}", payload, motivo);
+      LOG.error("job PROCESAR_IA_EXPEDIENTE ERROR lote={} item={} error_log={}", payload.loteId(), payload.itemId(), motivo);
       try {
         persistirErrorIa(payload, motivo);
       } catch (RuntimeException persistEx) {
@@ -1217,6 +1274,10 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private void emitirLoteActualizado(UUID tenantId, UUID loteId, boolean iaCompletada) {
+    // El snapshot solo sirve al SSE de este nodo: sin oyentes no se recarga el lote entero.
+    if (!streams.containsKey(loteId)) {
+      return;
+    }
     Lote fresh = cargar(tenantId, loteId);
     if (fresh == null) {
       return;
@@ -1272,8 +1333,9 @@ public class IngestaMasivaEscrituracionService {
     for (SseEmitter emitter : streams.getOrDefault(loteId, new CopyOnWriteArrayList<>())) {
       try {
         emitter.send(SseEmitter.event().name("ITEM_ERROR").data(java.util.Map.of("itemId", itemId, "mensaje", mensaje)));
-      } catch (IOException ex) {
+      } catch (IOException | IllegalStateException ex) {
         emitter.complete();
+        quitarEmisor(loteId, emitter);
       }
     }
   }
@@ -1282,8 +1344,9 @@ public class IngestaMasivaEscrituracionService {
     for (SseEmitter emitter : streams.getOrDefault(loteId, new CopyOnWriteArrayList<>())) {
       try {
         emitter.send(SseEmitter.event().name(evento).data(status));
-      } catch (IOException ex) {
+      } catch (IOException | IllegalStateException ex) {
         emitter.complete();
+        quitarEmisor(loteId, emitter);
       }
     }
   }
@@ -1358,7 +1421,8 @@ public class IngestaMasivaEscrituracionService {
     }
   }
 
-  private static String sqlLotes(boolean contar, boolean producto, boolean canton, boolean q, boolean status) {
+  private static String sqlLotes(
+      boolean contar, boolean producto, boolean canton, boolean q, boolean qId, boolean status) {
     String cuerpo =
         """
         SELECT
@@ -1381,7 +1445,8 @@ public class IngestaMasivaEscrituracionService {
         """
             + (producto ? " AND l.producto = :producto" : "")
             + (canton ? " AND l.canton = :canton" : "")
-            + (q ? " AND l.id::text ILIKE '%' || :q || '%'" : "")
+            // UUID completo: igualdad por PK. Fragmento: búsqueda parcial (sin índice).
+            + (qId ? " AND l.id = :qId" : q ? " AND l.id::text ILIKE '%' || :q || '%'" : "")
             + """
          GROUP BY l.id, l.created_at, l.producto, l.canton, l.status_revision, l.estado, l.total_filas
         """
@@ -1433,9 +1498,16 @@ public class IngestaMasivaEscrituracionService {
       String status,
       int limite,
       int offset) {
+    UUID qId = uuidONull(q);
     var consulta =
         entityManager.createNativeQuery(
-            sqlLotes(contar, producto != null, canton != null, q != null, status != null));
+            sqlLotes(
+                contar,
+                producto != null,
+                canton != null,
+                q != null && qId == null,
+                qId != null,
+                status != null));
     consulta.setParameter("tenant", tenant);
     if (producto != null) {
       consulta.setParameter("producto", producto);
@@ -1443,7 +1515,9 @@ public class IngestaMasivaEscrituracionService {
     if (canton != null) {
       consulta.setParameter("canton", canton);
     }
-    if (q != null) {
+    if (qId != null) {
+      consulta.setParameter("qId", qId);
+    } else if (q != null) {
       consulta.setParameter("q", q);
     }
     if (status != null) {
@@ -1454,6 +1528,17 @@ public class IngestaMasivaEscrituracionService {
       consulta.setParameter("offset", offset);
     }
     return consulta;
+  }
+
+  private static UUID uuidONull(String valor) {
+    if (valor == null || valor.trim().length() != 36) {
+      return null;
+    }
+    try {
+      return UUID.fromString(valor.trim());
+    } catch (IllegalArgumentException ex) {
+      return null;
+    }
   }
 
   private static LoteListItemDto mapLoteListItem(Object[] row) {
@@ -1535,7 +1620,7 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private void persistirErrorIa(ProcesarIaExpediente payload, String motivo) {
-    Lote lote = cargar(payload.tenantId(), payload.loteId());
+    Lote lote = cargar(payload.tenantId(), payload.loteId(), payload.itemId());
     Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
     if (lote == null || fila == null) {
       return;
@@ -1575,30 +1660,6 @@ public class IngestaMasivaEscrituracionService {
     return lote;
   }
 
-  private int contar(UUID loteId, String estado) {
-    String sql =
-        estado == null
-            ? "SELECT count(*)::int FROM app.ingesta_item WHERE lote_id = :lote"
-            : "SELECT count(*)::int FROM app.ingesta_item WHERE lote_id = :lote AND estado = :estado";
-    var q = entityManager.createNativeQuery(sql).setParameter("lote", loteId);
-    if (estado != null) {
-      q.setParameter("estado", estado);
-    }
-    return ((Number) q.getSingleResult()).intValue();
-  }
-
-  private int contarEnProceso(UUID loteId) {
-    return ((Number)
-            entityManager
-                .createNativeQuery(
-                    """
-                    SELECT count(*)::int FROM app.ingesta_item
-                    WHERE lote_id = :lote AND estado IN ('PENDIENTE', 'EN_PROCESO')
-                    """)
-                .setParameter("lote", loteId)
-                .getSingleResult())
-        .intValue();
-  }
 
   private void persistir(Lote lote) {
     try {
@@ -1802,6 +1863,14 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private Lote cargar(UUID tenantId, UUID loteId) {
+    return cargar(tenantId, loteId, null);
+  }
+
+  /**
+   * Cabecera del lote y sus filas. Con {@code soloFila} trae únicamente esa fila: el worker procesa
+   * un item y no necesita el JSON de todo el lote (antes, O(N) por job y O(N²) por lote).
+   */
+  private Lote cargar(UUID tenantId, UUID loteId, String soloFila) {
     List<?> fase =
         entityManager
             .createNativeQuery(
@@ -1817,17 +1886,25 @@ public class IngestaMasivaEscrituracionService {
     lote.fase = String.valueOf(cabecera[0]);
     lote.producto = cabecera[1] == null ? null : String.valueOf(cabecera[1]);
     lote.canton = cabecera[2] == null ? null : String.valueOf(cabecera[2]);
-    List<?> rows =
+    var consulta =
         entityManager
             .createNativeQuery(
-                """
-                SELECT CAST(detalle AS text) FROM app.ingesta_item
-                WHERE lote_id = :id AND tenant_id = :tenant
-                ORDER BY orden
-                """)
+                soloFila == null
+                    ? """
+                    SELECT CAST(detalle AS text) FROM app.ingesta_item
+                    WHERE lote_id = :id AND tenant_id = :tenant
+                    ORDER BY orden
+                    """
+                    : """
+                    SELECT CAST(detalle AS text) FROM app.ingesta_item
+                    WHERE lote_id = :id AND tenant_id = :tenant AND client_row_id = :fila
+                    """)
             .setParameter("id", loteId)
-            .setParameter("tenant", tenantId)
-            .getResultList();
+            .setParameter("tenant", tenantId);
+    if (soloFila != null) {
+      consulta.setParameter("fila", soloFila);
+    }
+    List<?> rows = consulta.getResultList();
     for (Object row : rows) {
       lote.filas.add(leerFila(String.valueOf(row)));
     }

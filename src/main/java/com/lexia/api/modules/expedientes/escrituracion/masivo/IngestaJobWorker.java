@@ -21,6 +21,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -32,57 +33,97 @@ public class IngestaJobWorker {
 
   private static final Logger LOG = LoggerFactory.getLogger(IngestaJobWorker.class);
 
+  /** El lock vence después del timeout: la limpieza de colgados nunca toca un job vivo. */
+  static final long MARGEN_LOCK_SEGUNDOS = 120;
+
   private final JobRepository jobs;
   private final IngestaMasivaEscrituracionService ingesta;
   private final ObjectMapper objectMapper;
   private final ExecutorService executor;
+  private final long timeoutDocumentoSegundos;
+  private final long timeoutIaSegundos;
+  private final int maxIntentos;
 
-  /** Solo se reclama con hilo libre: un job en cola gastaría sus 120 s sin haber empezado. */
+  /** Solo se reclama con hilo libre: un job en cola gastaría su timeout sin haber empezado. */
   private final Semaphore capacidad = new Semaphore(IngestaWorkerExecutorConfig.HILOS);
 
   public IngestaJobWorker(
       JobRepository jobs,
       IngestaMasivaEscrituracionService ingesta,
       ObjectMapper objectMapper,
-      ExecutorService ingestaWorkerExecutor) {
+      ExecutorService ingestaWorkerExecutor,
+      @Value("${lexia.ingesta.worker.timeout-documento-s:300}") long timeoutDocumentoSegundos,
+      @Value("${lexia.ingesta.worker.timeout-ia-s:360}") long timeoutIaSegundos,
+      @Value("${lexia.ingesta.worker.max-intentos:3}") int maxIntentos) {
     this.jobs = jobs;
     this.ingesta = ingesta;
     this.objectMapper = objectMapper;
     this.executor = ingestaWorkerExecutor;
+    this.timeoutDocumentoSegundos = Math.max(1, timeoutDocumentoSegundos);
+    this.timeoutIaSegundos = Math.max(1, timeoutIaSegundos);
+    this.maxIntentos = Math.max(1, maxIntentos);
   }
 
+  /** Reclama jobs mientras haya hilos libres y cola; antes era uno por tick. */
   @Scheduled(fixedDelay = 2000)
   public void poll() {
     LOG.debug("ingesta poll tick");
-    jobs.liberarJobsColgados(ingesta.workerId());
-    if (!capacidad.tryAcquire()) {
-      return;
-    }
-    boolean lanzado = false;
-    try {
-      lanzado = reclamarYLanzar();
-    } finally {
+    for (int i = 0; i < IngestaWorkerExecutorConfig.HILOS; i++) {
+      if (!capacidad.tryAcquire()) {
+        return;
+      }
+      boolean lanzado = false;
+      try {
+        lanzado = reclamarYLanzar();
+      } finally {
+        if (!lanzado) {
+          capacidad.release();
+        }
+      }
       if (!lanzado) {
-        capacidad.release();
+        return;
       }
     }
   }
 
-  private boolean reclamarYLanzar() {
-    Optional<JobRow> documento = jobs.reclamar("PROCESAR_DOCUMENTO", ingesta.workerId());
-    Optional<JobRow> ia = Optional.empty();
-    if (documento.isEmpty()) {
-      ia = jobs.reclamar("PROCESAR_IA_EXPEDIENTE", ingesta.workerId());
+  /**
+   * Jobs de este worker cuyo proceso murió (lock vencido). Los agotados marcan su item en ERROR,
+   * como cualquier fallo terminal.
+   */
+  @Scheduled(
+      fixedDelayString = "${lexia.ingesta.worker.colgados-ms:60000}",
+      initialDelayString = "${lexia.ingesta.worker.colgados-ms:60000}")
+  public void liberarColgados() {
+    JobRepository.JobsColgados colgados = jobs.liberarJobsColgados(ingesta.workerId(), maxIntentos);
+    if (colgados.reencolados() > 0) {
+      LOG.warn("jobs colgados reencolados={} worker={}", colgados.reencolados(), ingesta.workerId());
     }
-    LOG.debug("ingesta poll documento={} ia={}", documento.isPresent(), ia.isPresent());
+    for (JobRow job : colgados.agotados()) {
+      LOG.error("job colgado sin reintentos job={} intentos={}", job.id(), job.intentos());
+      JobTerminalHandled item = terminalConItem(job);
+      marcarItemComoError(job, item.loteId, item.itemId, "Job colgado: reintentos agotados");
+    }
+  }
+
+  private boolean reclamarYLanzar() {
+    Optional<JobRow> documento =
+        jobs.reclamar(
+            "PROCESAR_DOCUMENTO",
+            ingesta.workerId(),
+            timeoutDocumentoSegundos + MARGEN_LOCK_SEGUNDOS);
     if (documento.isPresent()) {
       JobRow job = documento.get();
-      ejecutarConTimeout(job, "DOCUMENTO", cancelado -> ejecutarDocumento(job, cancelado));
+      ejecutarConTimeout(
+          job, "DOCUMENTO", timeoutDocumentoSegundos, cancelado -> ejecutarDocumento(job, cancelado));
       return true;
     }
+    Optional<JobRow> ia =
+        jobs.reclamar(
+            "PROCESAR_IA_EXPEDIENTE", ingesta.workerId(), timeoutIaSegundos + MARGEN_LOCK_SEGUNDOS);
+    LOG.debug("ingesta poll documento=false ia={}", ia.isPresent());
     if (ia.isPresent()) {
       JobRow job = ia.get();
-      ejecutarConTimeout(job, "IA", cancelado -> ejecutarIa(job, cancelado));
+      ejecutarConTimeout(job, "IA", timeoutIaSegundos, cancelado -> ejecutarIa(job, cancelado));
       return true;
     }
     return false;
@@ -93,27 +134,28 @@ public class IngestaJobWorker {
    * bandera cubre al código que ignora la interrupción. El cierre va al pool porque el timeout
    * dispara en el hilo único del JDK, que no debe bloquearse con BD.
    */
-  private void ejecutarConTimeout(JobRow job, String tipo, Consumer<BooleanSupplier> tarea) {
+  private void ejecutarConTimeout(
+      JobRow job, String tipo, long timeoutSegundos, Consumer<BooleanSupplier> tarea) {
     AtomicBoolean cancelado = new AtomicBoolean();
     FutureTask<Void> ejecucion = new FutureTask<>(() -> tarea.accept(cancelado::get), null);
     CompletableFuture.runAsync(ejecucion, executor)
-        .orTimeout(120, TimeUnit.SECONDS)
+        .orTimeout(timeoutSegundos, TimeUnit.SECONDS)
         .exceptionally(
             ex -> {
               cancelado.set(true);
               ejecucion.cancel(true);
               return null;
             })
-        .thenRunAsync(() -> cerrarJob(job, tipo, ejecucion), executor);
+        .thenRunAsync(() -> cerrarJob(job, tipo, timeoutSegundos, ejecucion), executor);
   }
 
-  private void cerrarJob(JobRow job, String tipo, FutureTask<Void> ejecucion) {
+  private void cerrarJob(JobRow job, String tipo, long timeoutSegundos, FutureTask<Void> ejecucion) {
     try {
       ejecucion.get();
       jobs.completar(job.id());
     } catch (CancellationException ex) {
-      LOG.error("worker timeout job={} tipo={}", job.id(), tipo);
-      fallar(job, new RuntimeException("Timeout 120s"));
+      LOG.error("worker timeout job={} tipo={} limite={}s", job.id(), tipo, timeoutSegundos);
+      fallar(job, new RuntimeException("Timeout " + timeoutSegundos + "s"));
     } catch (ExecutionException ex) {
       if (ex.getCause() instanceof JobTerminalHandled terminal) {
         marcarItemComoError(job, terminal.loteId, terminal.itemId, "Documento ilegible");
@@ -182,12 +224,12 @@ public class IngestaJobWorker {
   }
 
   private void fallar(JobRow job, RuntimeException ex) {
-    if (job.intentos() >= 3) {
+    if (job.intentos() >= maxIntentos) {
       jobs.error(job.id(), ex.getMessage());
       JobTerminalHandled item = terminalConItem(job);
       marcarItemComoError(job, item.loteId, item.itemId, "Fallo en worker: " + ex.getMessage());
     } else {
-      jobs.devolverAPendiente(job.id());
+      jobs.devolverAPendiente(job.id(), job.intentos());
     }
     LOG.error("job fallar job={} intentos={}", job.id(), job.intentos(), ex);
   }

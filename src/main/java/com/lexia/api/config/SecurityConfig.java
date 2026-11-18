@@ -18,7 +18,6 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -35,9 +34,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @EnableConfigurationProperties(AuthProperties.class)
 public class SecurityConfig {
 
-  static {
-    SecurityContextHolder.setStrategyName(SecurityContextHolder.MODE_INHERITABLETHREADLOCAL);
-  }
+  // Sin MODE_INHERITABLETHREADLOCAL: un hilo de pool creado durante un request heredaba la sesión
+  // de ese usuario. Los executors propagan el contexto explícitamente (AsyncConfig).
 
   @Bean
   @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -94,6 +92,10 @@ public class SecurityConfig {
             csrf ->
                 csrf.csrfTokenRepository(csrfRepository)
                     .csrfTokenRequestHandler(requestHandler)
+                    .requireCsrfProtectionMatcher(SecurityConfig::requiereCsrf)
+                    // Solo endpoints previos a tener sesión (o que la cierran). Las mutaciones de la
+                    // app van autenticadas con cookie: sin CSRF, otra web del mismo sitio podía
+                    // dispararlas con la sesión del usuario.
                     .ignoringRequestMatchers(
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/login"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/logout"),
@@ -103,61 +105,7 @@ public class SecurityConfig {
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/refresh"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/invite/accept"),
                         paths.matcher(HttpMethod.POST, "/api/v1/auth/password/forgot"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset"),
-                        // Flujo carga/tipificación + OCR + escrituración abogado: cookie + Bearer; CSRF rompe mutaciones.
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/promover-borrador"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/procesar-documentos"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/borrador"),
-                        paths.matcher(
-                            HttpMethod.PUT,
-                            "/api/v1/expedientes/{id}/escrituracion/producto"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{id}/escrituracion/estudio-titulo"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{id}/escrituracion/minutas"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{id}/minutas/{tipoMinuta}/generar-borrador"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{id}/escrituracion/captura-biess"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{id}/extract-biess-screenshot"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/expedientes/{id}/stages/advance"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{id}/escrituracion/analizar-ia"),
-                        paths.matcher(
-                            HttpMethod.POST, "/api/v1/expedientes/{id}/procesar-completo"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{idExpediente}/iniciar-procesamiento"),
-                        paths.matcher(
-                            HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/procesar-ia"),
-                        paths.matcher(
-                            HttpMethod.POST, "/api/v1/expedientes/{idExpediente}/validar-ia"),
-                        paths.matcher(
-                            HttpMethod.POST,
-                            "/api/v1/expedientes/{idExpediente}/documentos/upload"),
-                        paths.matcher(
-                            HttpMethod.PATCH,
-                            "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}/tipo"),
-                        paths.matcher(
-                            HttpMethod.DELETE,
-                            "/api/v1/expedientes/{idExpediente}/documentos/{idDocumento}"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/ia/calidad-documento"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-batch"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/ocr/azure/analyze-single"),
-                        paths.matcher(HttpMethod.POST, "/api/v1/documents/reupload"),
-                        paths.matcher(
-                            HttpMethod.POST, "/api/v1/cache/consolidate-extracted-text"),
-                        paths.matcher("/api/v1/escrituracion/ingesta-masiva/**"),
-                        // Coactivas: la SPA en :4200 manda la cookie de sesión; el CSRF se desincroniza en PATCH.
-                        paths.matcher("/api/v1/coactivas/**")))
+                        paths.matcher(HttpMethod.POST, "/api/v1/auth/password/reset")))
         .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
         .authorizeHttpRequests(
             auth ->
@@ -206,6 +154,27 @@ public class SecurityConfig {
                 exceptions.authenticationEntryPoint(SecurityConfig::unauthorized)
                     .accessDeniedHandler(SecurityConfig::forbidden))
         .build();
+  }
+
+  private static final java.util.Set<String> METODOS_SEGUROS =
+      java.util.Set.of("GET", "HEAD", "TRACE", "OPTIONS");
+
+  /**
+   * CSRF protege credenciales que el navegador manda solo (la cookie de sesión). Una petición con
+   * Bearer y sin cookie de sesión (cliente API, pruebas) no la necesita: el token no viaja solo.
+   */
+  static boolean requiereCsrf(HttpServletRequest request) {
+    if (METODOS_SEGUROS.contains(request.getMethod())) {
+      return false;
+    }
+    String autorizacion = request.getHeader(org.springframework.http.HttpHeaders.AUTHORIZATION);
+    boolean bearer =
+        autorizacion != null && autorizacion.regionMatches(true, 0, "Bearer ", 0, 7);
+    String sid =
+        com.lexia.api.modules.auth.CookieReader.get(
+            request, com.lexia.api.modules.auth.AuthCookies.SESSION);
+    boolean cookieSesion = sid != null && !sid.isBlank();
+    return !(bearer && !cookieSesion);
   }
 
   private static void unauthorized(

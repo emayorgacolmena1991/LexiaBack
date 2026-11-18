@@ -16,6 +16,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,8 +41,12 @@ public class CoactivaJobWorker {
   private final ObjectProvider<CoactivaValidacionIaWorker> anexos;
   private final BatchEventPublisherService sse;
   private final ObjectMapper json;
+  public static final int HILOS = 4;
+
+  /** Se reclama solo con hilo libre: un job esperando en la cola local retiene su lease sin avanzar. */
+  private final Semaphore capacidad = new Semaphore(HILOS);
   private final ExecutorService anexoPool =
-      Executors.newFixedThreadPool(4, r -> {
+      Executors.newFixedThreadPool(HILOS, r -> {
         Thread hilo = new Thread(r, "coactiva-anexo");
         hilo.setDaemon(true);
         return hilo;
@@ -73,23 +78,54 @@ public class CoactivaJobWorker {
     anexoPool.shutdownNow();
   }
 
+  /** Reclama mientras haya hilos libres y cola. */
   @Scheduled(fixedDelay = 1000)
   public void tick() {
-    tomarCoactiva();
+    for (int i = 0; i < HILOS; i++) {
+      if (!capacidad.tryAcquire()) {
+        return;
+      }
+      boolean lanzado = false;
+      try {
+        lanzado = tomarCoactiva();
+      } finally {
+        if (!lanzado) {
+          capacidad.release();
+        }
+      }
+      if (!lanzado) {
+        return;
+      }
+    }
   }
 
-  private void tomarCoactiva() {
+  /** @return true si el job quedó en el pool; el pool libera la capacidad al terminar. */
+  private boolean tomarCoactiva() {
     Optional<CoactivaJobQueue.Job> job = cola.reclamar(NODE, TIPOS_COACTIVA);
     if (job.isEmpty()) {
-      return;
+      return false;
     }
     CoactivaJobQueue.Job actual = job.get();
     LOG.info("Tarea tomada app.jobs id={} tipo={}", actual.id(), actual.tipo());
+    Runnable tarea;
     if ("COACTIVA_VALIDACION_ANEXO".equals(actual.tipo())) {
-      anexoPool.execute(() -> correrAnexo(actual));
+      tarea = () -> correrAnexo(actual);
     } else if ("COACTIVA_DIAGNOSTICO".equals(actual.tipo())) {
-      anexoPool.execute(() -> correrDiagnostico(actual));
+      tarea = () -> correrDiagnostico(actual);
+    } else {
+      LOG.error("Tipo de job coactivo no soportado id={} tipo={}", actual.id(), actual.tipo());
+      cola.fallar(actual.id(), NODE, "Tipo no soportado: " + actual.tipo());
+      return false;
     }
+    anexoPool.execute(
+        () -> {
+          try {
+            tarea.run();
+          } finally {
+            capacidad.release();
+          }
+        });
+    return true;
   }
 
   private void correrDiagnostico(CoactivaJobQueue.Job job) {

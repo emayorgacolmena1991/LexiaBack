@@ -181,8 +181,8 @@ public class PasswordService {
   }
 
   private void invalidateSessions(UUID userId) {
-    sessions.findAll().stream()
-        .filter(session -> userId.equals(session.getUserId()) && session.getRevokedAt() == null)
+    // Antes: findAll() sobre todas las sesiones de todos los usuarios.
+    sessions.findByUserIdAndRevokedAtIsNull(userId)
         .forEach(
             session -> {
               session.revoke();

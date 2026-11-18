@@ -503,7 +503,7 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
           HttpResponse<String> res = enviar(construirBodyCapturaBiess(modelo, texto));
           int status = res.statusCode();
           if (status == 200) {
-            LOG.info("Claude captura BIESS modelo={} respuesta cruda: {}", modelo, res.body());
+            LOG.info("Claude captura BIESS modelo={} respuesta chars={}", modelo, res.body() == null ? 0 : res.body().length());
             DatosBiessMinuta data =
                 leerToolUse(objectMapper.readTree(res.body()), DatosBiessMinuta.class);
             if (data != null) {

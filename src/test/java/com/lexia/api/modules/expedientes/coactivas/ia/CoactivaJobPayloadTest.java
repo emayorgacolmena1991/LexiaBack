@@ -68,8 +68,8 @@ class CoactivaJobPayloadTest {
     reclamar("COACTIVA_DIAGNOSTICO", comoJsonb(payload.getValue()), 1);
     worker().tick();
 
-    verify(diagnostico, timeout(2000)).ejecutar(tenant, archivo);
-    verify(cola, timeout(2000)).completar(any(), anyString());
+    verify(diagnostico, timeout(2000).atLeastOnce()).ejecutar(tenant, archivo);
+    verify(cola, timeout(2000).atLeastOnce()).completar(any(), anyString());
   }
 
   @Test
@@ -80,8 +80,8 @@ class CoactivaJobPayloadTest {
         1);
     worker().tick();
 
-    verify(anexo, timeout(2000)).ejecutar(tenant, archivo);
-    verify(sse, timeout(2000)).publicar(eq(expediente), eq("ANALYSIS_COMPLETED"), any());
+    verify(anexo, timeout(2000).atLeastOnce()).ejecutar(tenant, archivo);
+    verify(sse, timeout(2000).atLeastOnce()).publicar(eq(expediente), eq("ANALYSIS_COMPLETED"), any());
   }
 
   @Test
@@ -93,7 +93,30 @@ class CoactivaJobPayloadTest {
         3);
     worker().tick();
 
-    verify(cola, timeout(2000)).fallar(any(), anyString(), eq("Azure caído"));
-    verify(diagnostico, timeout(2000)).abandonar(tenant, archivo, "Azure caído");
+    verify(cola, timeout(2000).atLeastOnce()).fallar(any(), anyString(), eq("Azure caído"));
+    verify(diagnostico, timeout(2000).atLeastOnce()).abandonar(tenant, archivo, "Azure caído");
+  }
+
+  @Test
+  void tickNoReclamaMasQueLosHilosLibres() throws InterruptedException {
+    java.util.concurrent.CountDownLatch liberar = new java.util.concurrent.CountDownLatch(1);
+    org.mockito.Mockito.doAnswer(
+            inv -> {
+              liberar.await();
+              return null;
+            })
+        .when(diagnostico)
+        .ejecutar(tenant, archivo);
+    reclamar(
+        "COACTIVA_DIAGNOSTICO",
+        "{\"archivoId\": \"" + archivo + "\", \"expedienteId\": \"" + expediente + "\"}",
+        1);
+    CoactivaJobWorker w = worker();
+
+    w.tick();
+    w.tick();
+
+    verify(cola, org.mockito.Mockito.times(CoactivaJobWorker.HILOS)).reclamar(anyString(), any());
+    liberar.countDown();
   }
 }

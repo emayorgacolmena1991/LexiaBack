@@ -1,5 +1,7 @@
 package com.lexia.api.modules.expedientes.escrituracion.secuencial;
 
+import static com.lexia.api.common.api.Descargas.adjunto;
+
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.BorradorGeneradoResponse;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ConfigurarProductoRequest;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ContenidoMinutaResponse;
@@ -259,8 +261,7 @@ public class EscrituracionAbogadoController {
 
   private static ResponseEntity<byte[]> docx(MinutaGenerationService.DownloadedMinuta file) {
     return ResponseEntity.ok()
-        .header(
-            HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.fileName() + "\"")
+        .header(HttpHeaders.CONTENT_DISPOSITION, adjunto(file.fileName()))
         .contentType(
             MediaType.parseMediaType(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
