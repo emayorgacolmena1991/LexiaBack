@@ -15,6 +15,7 @@ import org.springframework.orm.jpa.JpaSystemException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -128,6 +129,12 @@ public class ApiExceptionHandler {
                 "INTERNAL_ERROR",
                 "message",
                 detail != null && !detail.isBlank() ? detail : "Error de persistencia."));
+  }
+
+  /** Cliente SSE/async desconectado: no intentar escribir JSON sobre text/event-stream. */
+  @ExceptionHandler(AsyncRequestNotUsableException.class)
+  public void asyncNotUsable(AsyncRequestNotUsableException exception) {
+    LOG.debug("Conexión async cerrada: {}", exception.getMessage());
   }
 
   @ExceptionHandler(Exception.class)

@@ -169,12 +169,10 @@ public class WorkspaceService {
 
     String responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
     Map<UUID, ProcessStageDef> stageDefById = loadStageDefinitions(legalCase.getProcessDefinitionId(), tenantId);
-    List<StageItem> stages = buildStages(caseId, tenantId, stageDefById);
-    String currentStage = stages.stream()
-        .filter(stage -> "current".equals(stage.status()))
-        .map(StageItem::label)
-        .findFirst()
-        .orElse(stages.isEmpty() ? "Recepción" : stages.get(0).label());
+    ExpedienteEstadoService.EtapaOperativa etapaOperativa =
+        expedienteEstado.etapaOperativa(legalCase, tenantId);
+    List<StageItem> stages = buildStages(caseId, tenantId, stageDefById, etapaOperativa.code());
+    String currentStage = etapaOperativa.label();
 
     List<ParticipantItem> participants = buildParticipants(caseId, tenantId);
     String clientRef = participants.stream()
@@ -195,11 +193,9 @@ public class WorkspaceService {
     String statusLabel = mapStatusLabel(legalCase.getStatus());
     AttentionItem attention = buildAttention(validations, gates, currentStage, responsible);
     String currentStageCode =
-        stages.stream()
-            .filter(stage -> "current".equals(stage.status()))
-            .map(StageItem::id)
-            .findFirst()
-            .orElse("");
+        "notary".equals(etapaOperativa.code())
+            ? "e4"
+            : etapaOperativa.code();
     List<WorkspaceDtos.StageConnectorItem> stageConnectors =
         CaseWorkflowTypes.isOrchestrated(legalCase.getCaseType())
             ? ejdIntegrations.connectorsForStage(tenantId, currentStageCode).stream()
@@ -263,7 +259,10 @@ public class WorkspaceService {
   }
 
   private List<StageItem> buildStages(
-      UUID caseId, UUID tenantId, Map<UUID, ProcessStageDef> stageDefById) {
+      UUID caseId,
+      UUID tenantId,
+      Map<UUID, ProcessStageDef> stageDefById,
+      String operationalStageCode) {
     List<CaseStage> rows = new ArrayList<>(
         caseStages.findByCaseIdAndTenantIdOrderByStartedAtAsc(caseId, tenantId));
     if (rows.isEmpty()) {
@@ -275,11 +274,27 @@ public class WorkspaceService {
               ProcessStageDef definition = stageDefById.get(row.getStageDefId());
               return definition != null ? definition.getSortOrder() : 0;
             }));
+  final boolean inNotary = "notary".equalsIgnoreCase(operationalStageCode);
+  final String opCode =
+        inNotary ? "e4" : operationalStageCode == null ? "e1" : operationalStageCode.toLowerCase(Locale.ROOT);
+    int operationalOrder = stageOrder(opCode, stageDefById);
+
     List<StageItem> stages = new ArrayList<>();
     for (CaseStage row : rows) {
       ProcessStageDef definition = stageDefById.get(row.getStageDefId());
       if (definition == null || !definition.isActive() || definition.getDeprecatedAt() != null) {
         continue;
+      }
+      int order = definition.getSortOrder();
+      String uiStatus;
+      if (inNotary) {
+        uiStatus = "completed";
+      } else if (definition.getCode().equalsIgnoreCase(opCode)) {
+        uiStatus = "current";
+      } else if (order < operationalOrder) {
+        uiStatus = "completed";
+      } else {
+        uiStatus = "pending";
       }
       stages.add(
           new StageItem(
@@ -287,9 +302,23 @@ public class WorkspaceService {
               definition.getLabel(),
               definition.getShortLabel(),
               definition.getLabel(),
-              row.getStatus()));
+              uiStatus));
     }
     return stages;
+  }
+
+  private static int stageOrder(String code, Map<UUID, ProcessStageDef> stageDefById) {
+    for (ProcessStageDef def : stageDefById.values()) {
+      if (code.equalsIgnoreCase(def.getCode())) {
+        return def.getSortOrder();
+      }
+    }
+    return switch (code) {
+      case "e2" -> 2;
+      case "e3" -> 3;
+      case "e4" -> 4;
+      default -> 1;
+    };
   }
 
   private List<ParticipantItem> buildParticipants(UUID caseId, UUID tenantId) {

@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -172,8 +173,8 @@ public class BatchEventPublisherService {
       if (cuerpo == null) {
         return;
       }
-      emitirLocal(expedienteId, evento, json.readTree(cuerpo));
-    } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException ex) {
+      emitirLocal(expedienteId, evento, cuerpo);
+    } catch (RuntimeException ex) {
       LOG.warn("SSE remoto ilegible: {}", ex.getMessage());
     }
   }
@@ -183,11 +184,27 @@ public class BatchEventPublisherService {
     if (lista == null) {
       return;
     }
-    for (SseEmitter emitter : lista) {
+    String payload;
+    try {
+      payload = data instanceof String texto ? texto : json.writeValueAsString(data);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+      LOG.warn("SSE payload no serializable expediente={}: {}", batchId, ex.getMessage());
+      return;
+    }
+    for (SseEmitter emitter : new ArrayList<>(lista)) {
       try {
-        emitter.send(SseEmitter.event().name(evento).data(data));
+        emitter.send(SseEmitter.event().name(evento).data(payload));
       } catch (IOException | IllegalStateException ex) {
+        LOG.debug("SSE cerrado expediente={}: {}", batchId, ex.getMessage());
         emitter.complete();
+        quitarEmisor(batchId, emitter);
+      } catch (Exception ex) {
+        LOG.warn("SSE emitir falló expediente={}: {}", batchId, ex.getMessage());
+        try {
+          emitter.complete();
+        } catch (RuntimeException ignored) {
+          /* ya estaba cerrado */
+        }
         quitarEmisor(batchId, emitter);
       }
     }

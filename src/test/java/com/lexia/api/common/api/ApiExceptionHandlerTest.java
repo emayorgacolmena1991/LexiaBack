@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 class ApiExceptionHandlerTest {
 
@@ -60,6 +61,11 @@ class ApiExceptionHandlerTest {
         respuesta.getBody().get("message"));
     String volcado = logs.list.stream().map(ILoggingEvent::getFormattedMessage).reduce("", String::concat);
     assertFalse(volcado.contains(CEDULA));
+  }
+
+  @Test
+  void asyncCerradoNoDevuelveCuerpo() {
+    handler.asyncNotUsable(new AsyncRequestNotUsableException(null, new IllegalStateException("desconectado")));
   }
 
   private static DataIntegrityViolationException violacion(String constraint, String valor) {

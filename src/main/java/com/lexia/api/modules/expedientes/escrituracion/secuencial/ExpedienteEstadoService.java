@@ -46,6 +46,8 @@ import org.springframework.util.StringUtils;
 @Service
 public class ExpedienteEstadoService {
 
+  public record EtapaOperativa(String code, String label) {}
+
   private static final Pattern OBS =
       Pattern.compile("^\\[(HIGH|MEDIUM|LOW)]\\s+([^:]+):\\s*(.*)$");
 
@@ -102,11 +104,17 @@ public class ExpedienteEstadoService {
   @Transactional(readOnly = true)
   public String etiquetaEtapaOperativa(
       com.lexia.api.modules.expedientes.caso.LegalCase legalCase, UUID tenantId) {
+    return etapaOperativa(legalCase, tenantId).label();
+  }
+
+  @Transactional(readOnly = true)
+  public EtapaOperativa etapaOperativa(
+      com.lexia.api.modules.expedientes.caso.LegalCase legalCase, UUID tenantId) {
     UUID caseId = legalCase.getId();
     if (notaryRemisiones
         .findFirstByFirmTenantIdAndFirmLegalCaseIdOrderByEmitidoEnDesc(tenantId, caseId)
         .isPresent()) {
-      return "Notaría";
+      return new EtapaOperativa("notary", "Notaría");
     }
 
     ProcessStageDef stage = resolveStage(legalCase, tenantId);
@@ -143,10 +151,15 @@ public class ExpedienteEstadoService {
           default -> "e1";
         };
 
+    String label;
     if (stage != null && effectiveCode.equalsIgnoreCase(stage.getCode())) {
-      return stage.getLabel();
+      label = stage.getLabel();
+    } else {
+      label =
+          etiquetaPorCodigoEtapa(
+              legalCase.getProcessDefinitionId(), tenantId, effectiveCode, stage);
     }
-  return etiquetaPorCodigoEtapa(legalCase.getProcessDefinitionId(), tenantId, effectiveCode, stage);
+    return new EtapaOperativa(effectiveCode.toLowerCase(Locale.ROOT), label);
   }
 
   private String etiquetaPorCodigoEtapa(
