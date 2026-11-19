@@ -161,6 +161,7 @@ public class WorkspaceService {
             .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
             .orElseThrow(
                 () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    CaseReadScope.assertCanRead(authorization, legalCase.getResponsibleMembershipId());
 
     validationEvaluation.refreshForCase(legalCase);
     gateEvaluation.refreshForCase(legalCase);

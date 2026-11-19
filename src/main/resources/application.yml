@@ -53,12 +53,19 @@ spring:
       hibernate.jdbc.time_zone: America/Bogota
 
 lexia:
-  # Almacenamiento de archivos (ArchivoStorage). Hoy solo `local`; en el futuro habrá `b2`.
-  # Claves nuevas: relativas a local-root ({tenant}/expedientes/{caso}/...). Las filas antiguas
-  # guardan rutas absolutas y se leen solo si caen dentro de los storage-dir de abajo.
+  # Almacenamiento de archivos (ArchivoStorage). `local` o `b2` (Backblaze, API compatible con S3).
+  # Claves nuevas: relativas ({tenant}/expedientes/{caso}/... o {tenant}/coactivas/...).
+  # Las filas antiguas guardan rutas absolutas y se leen del disco si caen en los storage-dir.
+  # Con `b2` el bucket debe ser privado y con cifrado en reposo; la descarga sale por la API.
   storage:
     provider: ${LEXIA_STORAGE_PROVIDER:local}
     local-root: ${LEXIA_STORAGE_LOCAL_ROOT:./data}
+    b2:
+      key-id: ${LEXIA_B2_KEY_ID:}
+      application-key: ${LEXIA_B2_APP_KEY:}
+      bucket: ${LEXIA_B2_BUCKET:}
+      endpoint: ${LEXIA_B2_ENDPOINT:}
+      region: ${LEXIA_B2_REGION:us-east-005}
   minutas:
     storage-dir: ${LEXIA_MINUTAS_DIR:./data/minutas}
     # Opcional: ejecutable de LibreOffice (soffice) para la vista previa PDF con máxima fidelidad.
@@ -325,6 +332,7 @@ lexia:
     allowed-origins:
       - http://localhost:4200
       - http://127.0.0.1:4200
+      - https://lexia.appcolmena.com
   auth:
     enabled: true
     session-hours: 8

@@ -62,7 +62,7 @@ public final class PlatformDtos {
       String inviteAcceptUrl) {}
 
   public record ProvisionTenantRequest(
-      @NotBlank @Size(max = 64) @Pattern(regexp = "[a-z0-9][a-z0-9-]{1,62}[a-z0-9]") String code,
+      @Size(max = 64) @Pattern(regexp = "[a-z0-9][a-z0-9-]{1,62}[a-z0-9]") String code,
       @NotBlank @Size(max = 200) String name,
       @NotBlank @Pattern(regexp = "LEGAL_FIRM|NOTARY") String tenantKind,
       @Size(max = 64) String timezone,
@@ -113,4 +113,26 @@ public final class PlatformDtos {
       Instant invitationExpiresAt,
       String inviteToken,
       String inviteAcceptUrl) {}
+
+  public record PlatformReport(
+      OrganizationStats organizations,
+      CaseStats cases,
+      DocumentStats documents,
+      AiStats ai,
+      UserStats users,
+      List<MonthPoint> organizationsByMonth,
+      List<MonthPoint> casesByMonth) {}
+
+  public record OrganizationStats(
+      long total, long firms, long notaries, long active, long suspended, long createdLast30Days) {}
+
+  public record CaseStats(long total, long createdLast30Days) {}
+
+  public record DocumentStats(long total, long classifiedByAi, long pendingClassification) {}
+
+  public record AiStats(long calls, long promptTokens, long completionTokens, long callsLast30Days) {}
+
+  public record UserStats(long total, long active, long locked, long withSessionLast7Days) {}
+
+  public record MonthPoint(String month, long count) {}
 }

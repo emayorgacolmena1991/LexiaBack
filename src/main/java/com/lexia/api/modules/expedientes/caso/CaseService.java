@@ -105,6 +105,10 @@ public class CaseService {
           predicates.add(cb.equal(root.get("tenantId"), tenantId));
           predicates.add(cb.isNull(root.get("deletedAt")));
           predicates.add(cb.equal(root.get("caseType"), "EJD"));
+          if (!CaseReadScope.canReadAll(authorization)) {
+            predicates.add(
+                cb.equal(root.get("responsibleMembershipId"), AuthContext.require().membershipId()));
+          }
           if (statusCode != null) {
             predicates.add(cb.equal(cb.upper(root.get("status")), statusCode));
           }
@@ -150,10 +154,14 @@ public class CaseService {
   @Transactional(readOnly = true)
   public List<CaseSummaryItem> listCases() {
     authorization.requirePermission("expedientes:caso:leer");
-    UUID tenantId = AuthContext.require().tenantId();
-    return legalCases.findByTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(tenantId).stream()
-        .map(this::toSummary)
-        .toList();
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    List<LegalCase> rows =
+        CaseReadScope.canReadAll(authorization)
+            ? legalCases.findByTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(tenantId)
+            : legalCases.findByTenantIdAndResponsibleMembershipIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+                tenantId, principal.membershipId());
+    return rows.stream().map(this::toSummary).toList();
   }
 
   @Transactional(readOnly = true)
@@ -166,6 +174,7 @@ public class CaseService {
     authorization.requirePermission("expedientes:caso:leer");
     UUID tenantId = AuthContext.require().tenantId();
     LegalCase legalCase = resolveCase(tenantId, ref);
+    CaseReadScope.assertCanRead(authorization, legalCase.getResponsibleMembershipId());
     EstadoEscrituracion estado = expedienteEstado.estadoFlujo(legalCase.getId());
     return toDetail(legalCase, estado);
   }

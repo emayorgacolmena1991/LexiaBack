@@ -45,6 +45,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -86,6 +87,7 @@ public class PlatformTenantService {
   private final UserCredentialRepository credentials;
   private final BrevoProperties brevoProperties;
   private final SessionInvalidationService sessionInvalidation;
+  private final JdbcTemplate jdbc;
   private final TransactionTemplate provisionFullTx;
 
   public PlatformTenantService(
@@ -108,6 +110,7 @@ public class PlatformTenantService {
       UserCredentialRepository credentials,
       BrevoProperties brevoProperties,
       SessionInvalidationService sessionInvalidation,
+      JdbcTemplate jdbc,
       PlatformTransactionManager transactionManager) {
     this.tenants = tenants;
     this.tenantModules = tenantModules;
@@ -128,6 +131,7 @@ public class PlatformTenantService {
     this.credentials = credentials;
     this.brevoProperties = brevoProperties;
     this.sessionInvalidation = sessionInvalidation;
+    this.jdbc = jdbc;
     this.provisionFullTx = new TransactionTemplate(transactionManager);
     this.provisionFullTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
@@ -345,10 +349,7 @@ public class PlatformTenantService {
   }
 
   private ProvisionResult executeProvision(PlatformDtos.ProvisionTenantRequest request) {
-    String code = request.code().trim().toLowerCase(Locale.ROOT);
-    if (tenants.findByCode(code).isPresent()) {
-      throw new AuthException(HttpStatus.CONFLICT, "TENANT_CODE_EXISTS", "Ya existe un tenant con ese código.");
-    }
+    String code = uniqueCode(request);
 
     String kind = request.tenantKind().trim().toUpperCase(Locale.ROOT);
     if (!ALLOWED_KINDS.contains(kind)) {
@@ -369,7 +370,10 @@ public class PlatformTenantService {
         status -> {
           Tenant savedTenant = persistControlTenantShell(request, code, kind, timezone);
           tenantBinder.bind(savedTenant.getId());
-          return completeProvisionAppLayer(savedTenant, request, kind, timezone);
+          ProvisionResult result = completeProvisionAppLayer(savedTenant, request, kind, timezone);
+          tenants.flush();
+          jdbc.queryForObject("SELECT app.seed_tenant_masters(?)", Integer.class, savedTenant.getId());
+          return result;
         });
   }
 
@@ -625,6 +629,55 @@ public class PlatformTenantService {
         tenant.getMaxCases(),
         tenant.getCreatedAt(),
         tenant.getUpdatedAt());
+  }
+
+  private String uniqueCode(PlatformDtos.ProvisionTenantRequest request) {
+    String provided = request.code() == null ? "" : request.code().trim().toLowerCase(Locale.ROOT);
+    String base = provided.isBlank() ? slugify(request.name()) : provided;
+    if (!base.matches("[a-z0-9][a-z0-9-]{1,62}[a-z0-9]")) {
+      throw new AuthException(
+          HttpStatus.BAD_REQUEST, "INVALID_TENANT_CODE", "No se pudo generar un código válido para la organización.");
+    }
+    String candidate = base;
+    for (int n = 2; n <= 50 && tenants.findByCode(candidate).isPresent(); n++) {
+      String suffix = "-" + n;
+      String stem = base;
+      int max = 64 - suffix.length();
+      if (stem.length() > max) {
+        stem = stem.substring(0, max).replaceAll("-+$", "");
+      }
+      if (stem.length() < 2) {
+        stem = "org";
+      }
+      candidate = stem + suffix;
+    }
+    if (tenants.findByCode(candidate).isPresent()) {
+      throw new AuthException(HttpStatus.CONFLICT, "TENANT_CODE_EXISTS", "Ya existe un tenant con ese código.");
+    }
+    return candidate;
+  }
+
+  static String slugify(String value) {
+    String ascii = java.text.Normalizer.normalize(value == null ? "" : value, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "");
+    String slug = ascii.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("^-+|-+$", "");
+    if (slug.length() > 48) {
+      slug = slug.substring(0, 48).replaceAll("-+$", "");
+    }
+    if (slug.length() < 3) {
+      slug = (slug + "org").replaceAll("[^a-z0-9-]", "");
+    }
+    if (!slug.matches("^[a-z0-9].*")) {
+      slug = "o" + slug;
+    }
+    if (!slug.matches(".*[a-z0-9]$")) {
+      slug = slug + "x";
+    }
+    return slug.length() > 64 ? slug.substring(0, 64) : slug;
+  }
+
+  public void assertPlatformOperator() {
+    requirePlatformOperator();
   }
 
   private void requirePlatformOperator() {

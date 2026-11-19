@@ -312,10 +312,12 @@ public class ExpedienteSeguimientoService {
   private CaseFileContext requireCase(UUID caseId) {
     authorization.requirePermission("expedientes:caso:leer");
     AuthPrincipal auth = AuthContext.require();
-    legalCases
-        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, auth.tenantId())
-        .orElseThrow(
-            () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    LegalCase legalCase =
+        legalCases
+            .findByIdAndTenantIdAndDeletedAtIsNull(caseId, auth.tenantId())
+            .orElseThrow(
+                () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    CaseReadScope.assertCanRead(authorization, legalCase.getResponsibleMembershipId());
     CaseFileContext ctx = caseDocs.context(caseId.toString());
     if (ctx == null) {
       throw ApiException.notFound("Expediente no encontrado.");

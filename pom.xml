@@ -11,6 +11,7 @@
 	<groupId>com.lexia</groupId>
 	<artifactId>lexia-api</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
+	<packaging>war</packaging>
 	<name>lexia-api</name>
 	<description>LEXIA API scaffold</description>
 	<url/>
@@ -60,6 +61,12 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
+		<!-- Tomcat externo (Tomcat 11). El plugin de Spring Boot sigue pudiendo ejecutar el WAR en local. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-tomcat</artifactId>
+			<scope>provided</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
@@ -86,6 +93,16 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>s3</artifactId>
+			<version>2.31.50</version>
+		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>url-connection-client</artifactId>
+			<version>2.31.50</version>
 		</dependency>
 		<dependency>
 			<groupId>com.google.genai</groupId>
@@ -144,6 +161,7 @@
 	</dependencies>
 
 	<build>
+		<finalName>lexia-api</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>

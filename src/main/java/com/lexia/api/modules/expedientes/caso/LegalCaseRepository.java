@@ -11,6 +11,9 @@ public interface LegalCaseRepository
 
   List<LegalCase> findByTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(UUID tenantId);
 
+  List<LegalCase> findByTenantIdAndResponsibleMembershipIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+      UUID tenantId, UUID responsibleMembershipId);
+
   long countByTenantIdAndDeletedAtIsNull(UUID tenantId);
 
   Optional<LegalCase> findByIdAndTenantIdAndDeletedAtIsNull(UUID id, UUID tenantId);
