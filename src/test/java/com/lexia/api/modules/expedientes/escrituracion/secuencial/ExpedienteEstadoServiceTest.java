@@ -103,7 +103,8 @@ class ExpedienteEstadoServiceTest {
             minutas,
             caseStages,
             stageDefs,
-            mock(ObservacionesPorDocumento.class));
+            mock(ObservacionesPorDocumento.class),
+            mock(com.lexia.api.modules.notary.NotaryRemisionRepository.class));
 
     EstadoMinutaBorrador estado = service.hidratar(caseId);
 

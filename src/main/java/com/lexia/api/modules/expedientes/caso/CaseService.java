@@ -239,7 +239,7 @@ public class CaseService {
     String operacion = legalCase.getOperationTypeCode();
     String clienteOperacion =
         operacion == null || operacion.isBlank() ? cliente : cliente + " · " + operacion.trim();
-    String etapa = resolveCurrentStageLabel(legalCase, tenantId);
+    String etapa = expedienteEstado.etiquetaEtapaOperativa(legalCase, tenantId);
     Responsible responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
     return new EscrituracionBandejaItem(
         legalCase.getId(),
@@ -292,7 +292,7 @@ public class CaseService {
         formatSla(legalCase.getSlaDueAt()),
         GRID_DATE.format(legalCase.getCreatedAt()),
         GRID_DATE.format(legalCase.getUpdatedAt()),
-        resolveCurrentStageLabel(legalCase, legalCase.getTenantId()),
+        expedienteEstado.etiquetaEtapaOperativa(legalCase, legalCase.getTenantId()),
         false);
   }
 

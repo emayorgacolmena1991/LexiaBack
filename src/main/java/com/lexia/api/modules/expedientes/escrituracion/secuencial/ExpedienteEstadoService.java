@@ -29,6 +29,7 @@ import com.lexia.api.modules.ia.llm.ProcesarExpedienteCompletoPayload.Persona;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore.DocumentoExtraidoDTO;
 import com.lexia.api.modules.identity.AuthorizationService;
+import com.lexia.api.modules.notary.NotaryRemisionRepository;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -61,6 +62,7 @@ public class ExpedienteEstadoService {
   private final CaseStageRepository caseStages;
   private final ProcessStageDefRepository stageDefs;
   private final ObservacionesPorDocumento porDocumento;
+  private final NotaryRemisionRepository notaryRemisiones;
 
   public ExpedienteEstadoService(
       AuthorizationService authorization,
@@ -75,7 +77,8 @@ public class ExpedienteEstadoService {
       MinutaGenerationService minutas,
       CaseStageRepository caseStages,
       ProcessStageDefRepository stageDefs,
-      ObservacionesPorDocumento porDocumento) {
+      ObservacionesPorDocumento porDocumento,
+      NotaryRemisionRepository notaryRemisiones) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -89,6 +92,80 @@ public class ExpedienteEstadoService {
     this.caseStages = caseStages;
     this.stageDefs = stageDefs;
     this.porDocumento = porDocumento;
+    this.notaryRemisiones = notaryRemisiones;
+  }
+
+  /**
+   * Etapa visible en bandeja y panel: combina etapa formal (EJD), avance real del wizard (borrador,
+   * estudio) y envío a notaría. Evita que todo quede en «Recepción» si el avance formal quedó en e1.
+   */
+  @Transactional(readOnly = true)
+  public String etiquetaEtapaOperativa(
+      com.lexia.api.modules.expedientes.caso.LegalCase legalCase, UUID tenantId) {
+    UUID caseId = legalCase.getId();
+    if (notaryRemisiones
+        .findFirstByFirmTenantIdAndFirmLegalCaseIdOrderByEmitidoEnDesc(tenantId, caseId)
+        .isPresent()) {
+      return "Notaría";
+    }
+
+    ProcessStageDef stage = resolveStage(legalCase, tenantId);
+    String etapaCodigo = stage == null ? "e1" : stage.getCode();
+    int etapaIndex = stage == null ? 1 : Math.max(stage.getSortOrder(), 1);
+
+    WritingFile file =
+        writingFiles.findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId).orElse(null);
+    boolean hasDraft = false;
+    boolean hasEstudio = false;
+    if (file != null) {
+      hasDraft =
+          minutaDrafts
+              .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(file.getId(), tenantId)
+              .isPresent();
+      hasEstudio =
+          titleStudies
+              .findFirstByWritingFileIdAndTenantIdOrderByCreatedAtDesc(file.getId(), tenantId)
+              .isPresent();
+    }
+    boolean hasProducto =
+        StringUtils.hasText(legalCase.getProductCode())
+            || (file != null && StringUtils.hasText(file.getProductCode()));
+
+    int wizard =
+        wizardStep(
+            etapaCodigo, etapaIndex, hasDraft, hasEstudio, false, hasProducto);
+
+    String effectiveCode =
+        switch (wizard) {
+          case 5 -> "e4";
+          case 4 -> etapaIndex >= 3 || "e3".equalsIgnoreCase(etapaCodigo) ? "e3" : "e2";
+          case 3 -> "e2";
+          default -> "e1";
+        };
+
+    if (stage != null && effectiveCode.equalsIgnoreCase(stage.getCode())) {
+      return stage.getLabel();
+    }
+  return etiquetaPorCodigoEtapa(legalCase.getProcessDefinitionId(), tenantId, effectiveCode, stage);
+  }
+
+  private String etiquetaPorCodigoEtapa(
+      UUID processDefinitionId, UUID tenantId, String code, ProcessStageDef currentFallback) {
+    if (processDefinitionId != null) {
+      for (ProcessStageDef def :
+          stageDefs.findByProcessDefinitionIdAndTenantIdOrderBySortOrderAsc(
+              processDefinitionId, tenantId)) {
+        if (code.equalsIgnoreCase(def.getCode())) {
+          return def.getLabel();
+        }
+      }
+    }
+    return switch (code.toLowerCase(Locale.ROOT)) {
+      case "e2" -> "Estudio de título (OCR / IA)";
+      case "e3" -> "Regularización / subsanación";
+      case "e4" -> "Minutas y contrato de mutuo";
+      default -> currentFallback != null ? currentFallback.getLabel() : "Recepción e ingesta / producto";
+    };
   }
 
   /** Paso del wizard para retomar el flujo al salir y volver. */

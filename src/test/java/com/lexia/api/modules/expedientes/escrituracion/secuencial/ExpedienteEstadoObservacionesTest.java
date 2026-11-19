@@ -93,7 +93,8 @@ class ExpedienteEstadoObservacionesTest {
             mock(MinutaGenerationService.class),
             mock(CaseStageRepository.class),
             mock(ProcessStageDefRepository.class),
-            new ObservacionesPorDocumento(documents, versions, studies, observaciones, mock(CargaDocumentoService.class)));
+            new ObservacionesPorDocumento(documents, versions, studies, observaciones, mock(CargaDocumentoService.class)),
+            mock(com.lexia.api.modules.notary.NotaryRemisionRepository.class));
 
     EstadoEscrituracion estado = service.estadoFlujo(CASO);
 
@@ -137,7 +138,8 @@ class ExpedienteEstadoObservacionesTest {
             mock(ProcessStageDefRepository.class),
             new ObservacionesPorDocumento(
                 mock(LegalDocumentRepository.class), mock(DocumentVersionRepository.class), studies, observaciones,
-                mock(CargaDocumentoService.class)));
+                mock(CargaDocumentoService.class)),
+            mock(com.lexia.api.modules.notary.NotaryRemisionRepository.class));
 
     EstadoEscrituracion estado = service.estadoFlujo(CASO);
 
