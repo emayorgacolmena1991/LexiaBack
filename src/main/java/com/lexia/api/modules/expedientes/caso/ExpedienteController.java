@@ -4,6 +4,7 @@ import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ActuacionItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.AuditoriaItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryPage;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ExcepcionItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ValidacionItem;
@@ -142,16 +143,32 @@ public class ExpedienteController {
       @RequestParam(required = false) Integer page,
       @RequestParam(required = false) Integer size,
       @RequestParam(required = false) String search,
-      @RequestParam(required = false) String estado) {
+      @RequestParam(required = false) String estado,
+      @RequestParam(required = false) String vertical,
+      @RequestParam(required = false) String responsable,
+      @RequestParam(required = false) String prioridad,
+      @RequestParam(required = false) String desde,
+      @RequestParam(required = false) String hasta,
+      @RequestParam(required = false) Boolean soloMios) {
     if (caseService == null) {
       return page == null && size == null
           ? List.<CaseSummaryItem>of()
-          : EscrituracionBandejaPage.empty(page == null ? 0 : page, size == null ? 20 : size);
+          : CaseSummaryPage.empty(page == null ? 0 : page, size == null ? 20 : size);
     }
-    if (search != null || estado != null || page != null || size != null) {
+    if (search != null
+        || estado != null
+        || vertical != null
+        || responsable != null
+        || prioridad != null
+        || desde != null
+        || hasta != null
+        || soloMios != null
+        || page != null
+        || size != null) {
       int safePage = page == null ? 0 : page;
       int safeSize = size == null ? 20 : size;
-      return caseService.bandeja(search, estado, safePage, safeSize);
+      return caseService.listCasesPage(
+          search, estado, vertical, responsable, prioridad, desde, hasta, soloMios, safePage, safeSize);
     }
     return caseService.listCases();
   }

@@ -5,6 +5,7 @@ import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryPage;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
@@ -149,6 +150,134 @@ public class CaseService {
             .toList();
     return new EscrituracionBandejaPage(
         content, result.getTotalElements(), result.getTotalPages(), result.getNumber(), result.getSize());
+  }
+
+  @Transactional(readOnly = true)
+  public CaseSummaryPage listCasesPage(
+      String search,
+      String estado,
+      String vertical,
+      String responsable,
+      String prioridad,
+      String desde,
+      String hasta,
+      Boolean soloMios,
+      int page,
+      int size) {
+    authorization.requirePermission("expedientes:caso:leer");
+    UUID tenantId = AuthContext.require().tenantId();
+    AuthPrincipal principal = AuthContext.require();
+    int safeSize = Math.min(Math.max(size <= 0 ? 20 : size, 1), 100);
+    int safePage = Math.max(page, 0);
+    String statusCode = normalizeStatusFilter(estado);
+    String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+    String verticalFilter = vertical == null ? "" : vertical.trim();
+    String owner = responsable == null ? "" : responsable.trim();
+    String priorityCode = normalizePriorityFilter(prioridad);
+    Instant createdFrom = parseFilterDateStart(desde);
+    Instant createdTo = parseFilterDateEnd(hasta);
+    boolean restrictMine = Boolean.TRUE.equals(soloMios) || !CaseReadScope.canReadAll(authorization);
+
+    Specification<LegalCase> spec =
+        (root, query, cb) -> {
+          List<Predicate> predicates = new ArrayList<>();
+          predicates.add(cb.equal(root.get("tenantId"), tenantId));
+          predicates.add(cb.isNull(root.get("deletedAt")));
+          if (restrictMine) {
+            predicates.add(cb.equal(root.get("responsibleMembershipId"), principal.membershipId()));
+          }
+          if (statusCode != null) {
+            predicates.add(cb.equal(cb.upper(root.get("status")), statusCode));
+          }
+          if (!verticalFilter.isEmpty()) {
+            predicates.add(cb.equal(cb.lower(root.get("vertical")), verticalFilter.toLowerCase(Locale.ROOT)));
+          }
+          if (priorityCode != null) {
+            predicates.add(cb.equal(cb.upper(root.get("priority")), priorityCode));
+          }
+          if (createdFrom != null) {
+            predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), createdFrom));
+          }
+          if (createdTo != null) {
+            predicates.add(cb.lessThanOrEqualTo(root.get("createdAt"), createdTo));
+          }
+          if (!owner.isEmpty()) {
+            String likeOwner = "%" + owner.toLowerCase(Locale.ROOT) + "%";
+            Subquery<UUID> userIds = query.subquery(UUID.class);
+            Root<AppUser> userRoot = userIds.from(AppUser.class);
+            userIds
+                .select(userRoot.get("id"))
+                .where(cb.like(cb.lower(userRoot.get("displayName")), likeOwner));
+            Subquery<UUID> membershipIds = query.subquery(UUID.class);
+            Root<Membership> membershipRoot = membershipIds.from(Membership.class);
+            membershipIds
+                .select(membershipRoot.get("id"))
+                .where(
+                    cb.equal(membershipRoot.get("tenantId"), tenantId),
+                    cb.isNull(membershipRoot.get("deletedAt")),
+                    membershipRoot.get("userId").in(userIds));
+            predicates.add(root.get("responsibleMembershipId").in(membershipIds));
+          }
+          if (!term.isEmpty()) {
+            String like = "%" + term + "%";
+            Subquery<UUID> clients = query.subquery(UUID.class);
+            Root<CaseParty> party = clients.from(CaseParty.class);
+            clients
+                .select(party.get("caseId"))
+                .where(
+                    cb.equal(party.get("caseId"), root.get("id")),
+                    cb.equal(party.get("tenantId"), tenantId),
+                    cb.isNull(party.get("deletedAt")),
+                    cb.like(cb.lower(party.get("displayName")), like));
+            predicates.add(
+                cb.or(
+                    cb.like(cb.lower(root.get("code")), like),
+                    cb.like(cb.lower(root.get("subject")), like),
+                    cb.like(cb.lower(cb.coalesce(root.get("operationTypeCode"), "")), like),
+                    cb.exists(clients)));
+          }
+          return cb.and(predicates.toArray(Predicate[]::new));
+        };
+
+    Page<LegalCase> result =
+        legalCases.findAll(
+            spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
+    List<CaseSummaryItem> content = result.getContent().stream().map(this::toSummary).toList();
+    return new CaseSummaryPage(
+        content,
+        result.getTotalElements(),
+        result.getTotalPages(),
+        result.getNumber(),
+        result.getSize());
+  }
+
+  private static String normalizePriorityFilter(String prioridad) {
+    if (prioridad == null || prioridad.isBlank()) {
+      return null;
+    }
+    return normalizePriority(prioridad);
+  }
+
+  private static Instant parseFilterDateStart(String isoDate) {
+    if (isoDate == null || isoDate.isBlank()) {
+      return null;
+    }
+    try {
+      return java.time.LocalDate.parse(isoDate.trim()).atStartOfDay().toInstant(ZoneOffset.UTC);
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private static Instant parseFilterDateEnd(String isoDate) {
+    if (isoDate == null || isoDate.isBlank()) {
+      return null;
+    }
+    try {
+      return java.time.LocalDate.parse(isoDate.trim()).plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC).minusNanos(1);
+    } catch (Exception ignored) {
+      return null;
+    }
   }
 
   @Transactional(readOnly = true)

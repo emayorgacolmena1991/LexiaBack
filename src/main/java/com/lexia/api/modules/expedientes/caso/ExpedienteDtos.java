@@ -86,6 +86,23 @@ public final class ExpedienteDtos {
     }
   }
 
+  public record CaseSummaryPage(
+      List<CaseSummaryItem> content,
+      long totalElements,
+      int totalPages,
+      int number,
+      int size) {
+
+    public CaseSummaryPage {
+      content = content == null ? List.of() : List.copyOf(content);
+    }
+
+    public static CaseSummaryPage empty(int page, int size) {
+      int safeSize = size <= 0 ? 20 : size;
+      return new CaseSummaryPage(List.of(), 0, 0, Math.max(page, 0), safeSize);
+    }
+  }
+
   public record CaseSummaryItem(
       UUID id,
       String code,
