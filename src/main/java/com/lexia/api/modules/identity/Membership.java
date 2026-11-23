@@ -74,14 +74,25 @@ public class Membership {
   }
 
   public static Membership invited(UUID userId, UUID tenantId) {
+    return invited(userId, tenantId, null);
+  }
+
+  public static Membership invited(UUID userId, UUID tenantId, UUID legalEntityId) {
     Membership membership = new Membership();
     membership.id = UUID.randomUUID();
     membership.userId = userId;
     membership.tenantId = tenantId;
+    membership.legalEntityId = legalEntityId;
     membership.status = "INVITED";
     Instant now = Instant.now();
     membership.createdAt = now;
     membership.updatedAt = now;
+    return membership;
+  }
+
+  public static Membership active(UUID userId, UUID tenantId, UUID legalEntityId) {
+    Membership membership = invited(userId, tenantId, legalEntityId);
+    membership.status = "ACTIVE";
     return membership;
   }
 }

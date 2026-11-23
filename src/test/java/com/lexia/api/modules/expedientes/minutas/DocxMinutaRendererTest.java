@@ -84,13 +84,16 @@ class DocxMinutaRendererTest {
       String resource = catalog.require("VIV_HIPOTECADA_BIESS", kind).classpathResource();
       assertTrue(resource.contains("/VIVIENDA HIPOTECADA BIESS/"), resource);
     }
-    ApiException e =
-        assertThrows(
-            ApiException.class, () -> catalog.require("VIV_TERMINADA_IND", "CONTRATO_MUTUO"));
-    assertTrue(e.getMessage().contains("aún no es generable"), e.getMessage());
-    for (MinutaTemplateDescriptor d : catalog.sinConectar()) {
-      assertFalse(d.classpathResource().startsWith(dir), d.classpathResource());
-    }
+    String terminada = "templates/escrituracion/VIVIENDA TERMINADA INDIVIDUAL - SOLIDARIA/";
+    assertEquals(
+        terminada + "minuta_vivienda_terminada_compraventa_hipoteca.docx",
+        catalog.require("VIV_TERMINADA_IND", "MINUTA_COMPRAVENTA").classpathResource());
+    assertEquals(
+        terminada + "contrato_vivienda_terminada.docx",
+        catalog.require("VIV_TERMINADA_SOLID", "CONTRATO_MUTUO").classpathResource());
+    assertEquals(
+        catalog.require("VIV_TERMINADA_IND", "MINUTA_COMPRAVENTA").classpathResource(),
+        catalog.require("VIV_TERMINADA_SOLID", "MINUTA_COMPRAVENTA").classpathResource());
   }
 
   @Test
@@ -115,16 +118,13 @@ class DocxMinutaRendererTest {
   }
 
   @Test
-  void plantillasSinConectarCarganYReportanTagsSinResolver() {
-    for (MinutaTemplateDescriptor descriptor : catalog.sinConectar()) {
-      assertFalse(
-          renderer.tags(descriptor).isEmpty(), "Sin tags: " + descriptor.classpathResource());
-      System.out.println(
-          descriptor.productCode()
-              + " "
-              + descriptor.templateKind()
-              + " sin resolver: "
-              + renderer.tagsSinResolver(descriptor));
+  void minutaTerminadaNoDejaTagsSinCampo() {
+    for (String product :
+        List.of(
+            MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_IND,
+            MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_SOLID)) {
+      MinutaTemplateDescriptor descriptor = catalog.require(product, "MINUTA_COMPRAVENTA");
+      assertEquals(List.of(), renderer.tagsSinResolver(descriptor), product);
     }
   }
 
@@ -168,13 +168,7 @@ class DocxMinutaRendererTest {
   @Test
   void contratoTerminadaSolidariaSeRenderizaSoloConAliases() throws Exception {
     MinutaTemplateDescriptor descriptor =
-        catalog.sinConectar().stream()
-            .filter(
-                d ->
-                    d.productCode().equals(MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_SOLID)
-                        && d.templateKind().equals("CONTRATO_MUTUO"))
-            .findFirst()
-            .orElseThrow();
+        catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_SOLID, "CONTRATO_MUTUO");
     assertEquals(List.of(), renderer.tagsSinResolver(descriptor));
 
     MinutaViviendaData data = datosCompletos();
@@ -184,7 +178,7 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("{{"), "Quedaron placeholders");
     assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
     assertTrue(text.contains("V_nombre_conyuge_1"));
-    assertTrue(text.contains("V_cedula_conyuge_2"));
+    assertTrue(text.contains(CEDULA_LETRAS + " (" + CEDULA + ")"));
     assertTrue(text.contains("V_nombre_afiliado"));
     assertTrue(text.contains("Plazo 300 meses,"));
     assertFalse(text.contains("meses meses"));
@@ -193,10 +187,7 @@ class DocxMinutaRendererTest {
   @Test
   void camposPendientesReportaCampoCanonicoDeLosAliases() {
     MinutaTemplateDescriptor descriptor =
-        catalog.sinConectar().stream()
-            .filter(d -> d.classpathResource().endsWith("contrato_vivienda_terminada.docx"))
-            .findFirst()
-            .orElseThrow();
+        catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_IND, "CONTRATO_MUTUO");
     MinutaViviendaData data = datosCompletos();
     data.setNombreConyuge1("");
     data.setPlazoCredito("");
@@ -234,12 +225,33 @@ class DocxMinutaRendererTest {
     assertFalse(text.contains("{{"), "Quedaron placeholders");
     assertFalse(text.contains("nodata"), "Quedaron datos sin resolver");
     assertFalse(text.matches("(?s).*[Xx]{4,}.*"), "Quedaron marcadores XXXX");
-    assertTrue(text.contains("USD $ 85,000.00"));
+    assertTrue(text.contains("USD 85.000,00"), "Monto en formato 120.000,00");
+    assertFalse(text.contains("USD $"), "La moneda va una sola vez");
     assertTrue(text.contains("5.99%"));
     assertFalse(text.contains("5.99%%"));
     assertTrue(text.contains("Plazo 300 meses,"));
-    assertTrue(text.contains("V_monto_prestamo_letras"));
-    assertTrue(text.contains("V_cedula_apoderado_biess"));
+    assertTrue(text.contains("OCHENTA Y CINCO MIL CON 00/100"), "Letras en formato bancario");
+    assertTrue(
+        text.contains(
+            "Monto:  OCHENTA Y CINCO MIL CON 00/100 Dólares de los Estados Unidos de América\n"
+                + "(USD 85.000,00) más"),
+        "Monto: letras primero y la cifra entre paréntesis");
+    assertFalse(text.contains("Son:"));
+    assertTrue(text.contains(CEDULA_LETRAS));
+  }
+
+  @Test
+  void hipotecadaEscribeElCelularDelCompradorEnLetras() throws Exception {
+    MinutaTemplateDescriptor descriptor =
+        catalog.require(MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS, "MINUTA_COMPRAVENTA");
+    MinutaViviendaData data =
+        new ObjectMapper().updateValue(datosCompletos(), Map.of("celular_comprador", "0954656732"));
+    String text = renderYLeer(descriptor, data, "hipotecada_minuta_compraventa.docx");
+
+    assertTrue(
+        text.contains(
+            "celular CERO NUEVE CINCO CUATRO SEIS CINCO SEIS SIETE TRES DOS (0954656732)"),
+        text);
   }
 
   @Test
@@ -289,11 +301,26 @@ class DocxMinutaRendererTest {
     }
   }
 
-  /** Cada campo con el valor {@code V_<tag>} para rastrear dónde cae en el documento. */
+  private static final List<String> DIGITO_A_DIGITO =
+      List.of(
+          "cedula_conyuge_1",
+          "cedula_conyuge_2",
+          "cedula_apoderado_biess",
+          "telefono_vendedor",
+          "telefono_deudor",
+          "celular_vendedor",
+          "celular_comprador");
+  private static final String CEDULA = "0912345678";
+  private static final String CEDULA_LETRAS = "CERO NUEVE UNO DOS TRES CUATRO CINCO SEIS SIETE OCHO";
+
+  /**
+   * Cada campo con el valor {@code V_<tag>} para rastrear dónde cae en el documento; los que se
+   * leen dígito a dígito llevan una cédula.
+   */
   private static MinutaViviendaData datosCompletos() {
     Map<String, String> values = new LinkedHashMap<>();
     for (String key : new MinutaViviendaData().toTemplateMap().keySet()) {
-      values.put(key, "V_" + key);
+      values.put(key, DIGITO_A_DIGITO.contains(key) ? CEDULA : "V_" + key);
     }
     return new ObjectMapper().convertValue(values, MinutaViviendaData.class);
   }

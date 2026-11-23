@@ -5,7 +5,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import com.lexia.api.modules.auth.AuthContext;
+import com.lexia.api.modules.auth.AuthPrincipal;
+import com.lexia.api.modules.tenancy.TenantContext;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -34,8 +38,21 @@ public class OcrSessionCacheService {
     return CACHE_KEY_PREFIX + sessionId + CACHE_KEY_SUFFIX;
   }
 
+  /**
+   * Clave interna tenant + sesión: el mapa es de todo el nodo y el sessionId lo manda el cliente.
+   * Sin tenant (tareas internas, tests) va a un espacio propio que ningún request autenticado ve.
+   */
+  private static String clave(String sessionId) {
+    AuthPrincipal principal = AuthContext.get();
+    UUID tenant =
+        principal != null && principal.tenantId() != null
+            ? principal.tenantId()
+            : TenantContext.getTenantId();
+    return (tenant == null ? "-" : tenant.toString()) + "|" + sessionId;
+  }
+
   public void putResult(String sessionId, OcrFileResult result) {
-    SessionEntry entry = sessions.computeIfAbsent(sessionId, id -> new SessionEntry());
+    SessionEntry entry = sessions.computeIfAbsent(clave(sessionId), id -> new SessionEntry());
     synchronized (entry) {
       entry.touch();
       entry.results.put(result.fileId(), result);
@@ -44,7 +61,7 @@ public class OcrSessionCacheService {
   }
 
   public List<OcrFileResult> listResults(String sessionId) {
-    SessionEntry entry = sessions.get(sessionId);
+    SessionEntry entry = sessions.get(clave(sessionId));
     if (entry == null || entry.expired(ttl)) {
       return List.of();
     }
@@ -55,7 +72,7 @@ public class OcrSessionCacheService {
   }
 
   public void putConsolidated(String sessionId, String consolidatedContent) {
-    SessionEntry entry = sessions.computeIfAbsent(sessionId, id -> new SessionEntry());
+    SessionEntry entry = sessions.computeIfAbsent(clave(sessionId), id -> new SessionEntry());
     synchronized (entry) {
       entry.touch();
       entry.consolidatedContent =
@@ -64,7 +81,7 @@ public class OcrSessionCacheService {
   }
 
   public String getConsolidated(String sessionId) {
-    SessionEntry entry = sessions.get(sessionId);
+    SessionEntry entry = sessions.get(clave(sessionId));
     if (entry == null || entry.expired(ttl)) {
       return null;
     }
@@ -75,7 +92,7 @@ public class OcrSessionCacheService {
   }
 
   public void clear(String sessionId) {
-    sessions.remove(sessionId);
+    sessions.remove(clave(sessionId));
   }
 
   @Scheduled(fixedDelayString = "${lexia.ocr.cache-cleanup-ms:300000}")

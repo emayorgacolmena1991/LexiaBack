@@ -65,7 +65,9 @@ Cookies `HttpOnly` + `SameSite=Lax` (`LEXIA_SID`, `LEXIA_RT`). CSRF en cookie `X
 
 | Ruta | Uso |
 |---|---|
-| `POST /api/v1/auth/login` | Correo + contraseña. Puede devolver `MFA_REQUIRED` |
+| `POST /api/v1/auth/login` | Correo + contraseña. Puede devolver `MFA_REQUIRED` o `TENANT_SELECTION_REQUIRED` |
+| `POST /api/v1/auth/select-tenant` | Tras multi-org, elige tenant con `challengeId` + `tenantId` |
+| `GET /api/v1/auth/tenant-selection/{challengeId}/options` | Opciones de org para un reto de selección |
 | `POST /api/v1/auth/mfa/verify` | Código TOTP o de recuperación |
 | `GET /api/v1/auth/me` | Sesión actual |
 | `POST /api/v1/auth/logout` | Cierra sesión |
@@ -73,7 +75,7 @@ Cookies `HttpOnly` + `SameSite=Lax` (`LEXIA_SID`, `LEXIA_RT`). CSRF en cookie `X
 | `POST /api/v1/auth/mfa/confirm` | Activa 2FA y entrega códigos de recuperación |
 | `POST /api/v1/auth/mfa/disable` | Apaga 2FA (pide un código) |
 
-Usuario demo: `laura.gomez@lexia.demo` (rol `ABOGADO_SENIOR`). Contraseña: `LEXIA_DEMO_PASSWORD` (por defecto `Lexia-Demo-2026!`). En producción define `LEXIA_CRYPTO_KEY` y `LEXIA_COOKIE_SECURE=true`.
+Usuario demo: `laura.gomez@lexia.demo` (rol `ABOGADO_SENIOR`). Contraseña: la que definas en `LEXIA_BOOTSTRAP_PASSWORD` (o `LEXIA_DEMO_PASSWORD`) en `backend/.env`; no hay valor por defecto. En producción define `LEXIA_CRYPTO_KEY` y `LEXIA_COOKIE_SECURE=true`.
 
 Para ver un expediente coactivo: con este API en `8081` y el frontend en `4200`, inicia sesión en `/login` y abre `/coactivas`. El detalle está en `/coactivas/expedientes/{id}`. El frontend no omite el guard de sesión.
 
@@ -91,6 +93,12 @@ Para ver un expediente coactivo: con este API en `8081` y el frontend en `4200`,
 - Scripts: `scripts/ci-init-db.sh`, `scripts/ci-post-migrate.sql`, `scripts/run-ci-e2e-local.sh`.
 - Docker: `docker-compose.ci.yml` (Postgres 16 efímero).
 - Workflow GitHub: `.github/workflows/ci.yml` (backend test + frontend build + Playwright).
+
+### Multi-tenant y confianza E2E (bootstrap)
+
+Operación login multi-org, tenants de `emayorga@colmenas.ec`, checklist manual y scripts Playwright: **[docs/operacion-multi-tenant.md](../docs/operacion-multi-tenant.md)**.
+
+En **producción** mantener `LEXIA_E2E_ENABLED=false`. Con E2E activo (solo dev/CI), `LEXIA_E2E_TRUST_BOOTSTRAP_EMAILS` (por defecto igual a `LEXIA_E2E_ENABLED`) permite omitir contraseña y MFA en login y en `POST /api/v1/auth/e2e/session` para correos en `LEXIA_AUTH_BOOTSTRAP_EMAILS` y cuentas `*@lexia.demo`. Eso no debe estar habilitado en ambientes expuestos a usuarios reales.
 
 ## Fuera de alcance
 

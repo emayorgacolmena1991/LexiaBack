@@ -6,6 +6,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
@@ -174,7 +175,7 @@ public class AzureDocumentIntelligenceClient {
     HttpResponse<String> last = null;
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
       awaitRateSlot();
-      last = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      last = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       markRequestSent();
       if (last.statusCode() != 429) {
         return last;

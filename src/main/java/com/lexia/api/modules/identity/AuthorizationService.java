@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +41,11 @@ public class AuthorizationService {
 
   @Transactional(readOnly = true)
   public boolean hasPermission(String permissionCode) {
+    Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+    if (auth != null
+        && auth.getAuthorities().stream().anyMatch(a -> permissionCode.equals(a.getAuthority()))) {
+      return true;
+    }
     return permissionsForCurrentMembership().contains(permissionCode);
   }
 

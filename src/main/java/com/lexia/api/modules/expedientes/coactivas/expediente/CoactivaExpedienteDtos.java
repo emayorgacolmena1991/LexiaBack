@@ -1,8 +1,12 @@
 package com.lexia.api.modules.expedientes.coactivas.expediente;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.DelegadoItem;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoDtos.OficinaItem;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -37,6 +41,7 @@ public final class CoactivaExpedienteDtos {
       String etapaReportadaTexto,
       String etapaVerificada,
       String etapaLabel,
+      String etapaSugeridaIa,
       String semaforo,
       String semaforoMotivo,
       String siguienteAccion,
@@ -52,7 +57,8 @@ public final class CoactivaExpedienteDtos {
       long total,
       Map<String, Long> porSemaforo,
       Map<String, Long> porEtapa,
-      Map<String, Long> porEstado) {}
+      Map<String, Long> porEstado,
+      long sugerenciasIa) {}
 
   public record ParticipanteItem(
       UUID id,
@@ -178,7 +184,12 @@ public final class CoactivaExpedienteDtos {
       List<String> etapasPermitidas,
       Instant createdAt,
       Instant updatedAt,
-      Long rowVersion) {}
+      Long rowVersion,
+      Integer completitudIa,
+      String estadoVerificacion,
+      String verificadoPorUsuario,
+      Instant fechaVerificacion,
+      String justificacionJuridica) {}
 
   public record CreateExpedienteRequest(
       @NotBlank @Size(max = 40) String nroJuicio,
@@ -218,6 +229,59 @@ public final class CoactivaExpedienteDtos {
 
   public record HitoAcumulado(String hito, Integer foja, String fechaHito, String origenArchivoId) {}
 
+  public record EvidenciaEtapa(
+      String documentoOrigen, Integer fojaPagina, String fechaDocumento, String extractoTexto) {}
+
+  /**
+   * {@code clasificacionIndeterminada}: la IA no halló evidencia para ninguna etapa del catálogo.
+   * {@code archivoId}/{@code archivoNombre}: PDF del que salió la evidencia; {@code archivoDisponible}
+   * indica si ese PDF está en el almacenamiento de este servidor.
+   */
+  public record EtapaSugeridaIa(
+      String codigo,
+      String nombre,
+      String justificacionJuridica,
+      EvidenciaEtapa evidencia,
+      List<EvidenciaEtapa> documentosEvidencia,
+      boolean clasificacionIndeterminada,
+      UUID archivoId,
+      String archivoNombre,
+      boolean archivoDisponible) {}
+
+  public record SuficienciaDocumental(String estadoDiagnostico, List<String> requisitosFaltantes) {}
+
+  public record AccionSugeridaIa(String codigoAccion, String titulo, String descripcion, String prioridad) {}
+
+  public record TareaSugeridaItem(
+      UUID id,
+      UUID expedienteId,
+      UUID analisisId,
+      String titulo,
+      String descripcion,
+      String prioridad,
+      String estado,
+      boolean origenIa,
+      Instant creadoEn) {}
+
+  public record ConfirmarEtapaRequest(
+      @JsonAlias("etapa_confirmada_id") @NotBlank @Size(max = 32) String etapaConfirmadaId,
+      @Size(max = 600) String observaciones) {}
+
+  public record EvidenciaLote(
+      @JsonAlias("documento_origen") @NotBlank @Size(max = 240) String documentoOrigen,
+      @JsonAlias("foja_pagina") Integer fojaPagina,
+      @JsonAlias("fecha_documento") @Size(max = 40) String fechaDocumento,
+      @JsonAlias("extracto_texto") @Size(max = 500) String extractoTexto,
+      @JsonAlias("justificacion_juridica") @NotBlank @Size(max = 600) String justificacionJuridica) {}
+
+  public record BatchConfirmarItem(
+      @JsonAlias("expediente_id") @NotNull UUID expedienteId,
+      @JsonAlias("etapa_confirmada_id") @NotBlank @Size(max = 32) String etapaConfirmadaId,
+      @Size(max = 600) String observaciones,
+      @NotNull @Valid EvidenciaLote evidencia) {}
+
+  public record BatchConfirmarRequest(@NotEmpty @Size(max = 50) @Valid List<BatchConfirmarItem> items) {}
+
   public record AnalisisResponse(
       String estadoAnalisis,
       UUID analisisId,
@@ -233,7 +297,24 @@ public final class CoactivaExpedienteDtos {
       Instant createdAt,
       List<DocumentoProcesado> documentosProcesados,
       List<HitoAcumulado> hitosAcumulados,
-      UUID analisisPadreId) {
+      UUID analisisPadreId,
+      EtapaSugeridaIa etapaSugerida,
+      SuficienciaDocumental suficienciaDocumental,
+      List<AccionSugeridaIa> accionesSugeridas,
+      String estadoEtapa) {
+
+    /** El análisis está corriendo. */
+    public static final String ETAPA_EN_CURSO = "EN_CURSO";
+    /** No hay ningún diagnóstico de etapa del expediente. */
+    public static final String ETAPA_SIN_DIAGNOSTICO = "SIN_DIAGNOSTICO";
+    /** Solo hay intentos fallidos; {@code error} trae el motivo. */
+    public static final String ETAPA_FALLIDO = "FALLIDO";
+    /** La IA leyó el OCR y no halló evidencia suficiente para una etapa. */
+    public static final String ETAPA_INDETERMINADA = "INDETERMINADA";
+    /** Diagnóstico de formato anterior: etapa sin justificación ni evidencia; no es una sugerencia válida. */
+    public static final String ETAPA_ANTIGUO = "ANTIGUO";
+    /** Etapa sugerida con justificación basada en el OCR. */
+    public static final String ETAPA_SUGERIDA = "SUGERIDA";
 
     public static AnalisisResponse enCurso(UUID archivoId) {
       return new AnalisisResponse(
@@ -251,7 +332,11 @@ public final class CoactivaExpedienteDtos {
           null,
           List.of(),
           List.of(),
-          null);
+          null,
+          null,
+          null,
+          List.of(),
+          ETAPA_EN_CURSO);
     }
 
     /** Expediente anterior al análisis: 200 con listas vacías, sin 404. */
@@ -271,7 +356,11 @@ public final class CoactivaExpedienteDtos {
           null,
           List.of(),
           List.of(),
-          null);
+          null,
+          null,
+          null,
+          List.of(),
+          ETAPA_SIN_DIAGNOSTICO);
     }
   }
 

@@ -13,6 +13,7 @@ import com.lexia.api.modules.identity.Role;
 import com.lexia.api.modules.identity.RoleRepository;
 import com.lexia.api.modules.notifications.EmailNotificationService;
 import com.lexia.api.modules.notifications.InAppNotificationService;
+import com.lexia.api.modules.notary.TenantKind;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantBinder;
 import com.lexia.api.modules.tenancy.TenantParameterService;
@@ -44,6 +45,7 @@ public class AuthService {
       DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.forLanguageTag("es-CO"));
 
   private final AuthProperties properties;
+  private final E2eProperties e2eProperties;
   private final AppUserRepository users;
   private final UserCredentialRepository credentials;
   private final MembershipRepository memberships;
@@ -70,6 +72,7 @@ public class AuthService {
 
   public AuthService(
       AuthProperties properties,
+      E2eProperties e2eProperties,
       AppUserRepository users,
       UserCredentialRepository credentials,
       MembershipRepository memberships,
@@ -94,6 +97,7 @@ public class AuthService {
       AuthorizationService authorization,
       TenantParameterService tenantParameters) {
     this.properties = properties;
+    this.e2eProperties = e2eProperties;
     this.users = users;
     this.credentials = credentials;
     this.memberships = memberships;
@@ -126,6 +130,7 @@ public class AuthService {
     String ip = clientIp(http);
     String userAgent = userAgent(http);
     rejectIfIpThrottled(ip);
+    rejectIfEmailIpThrottled(email, ip);
 
     Optional<AppUser> found = users.findByEmail(email);
     if (found.isEmpty()) {
@@ -139,10 +144,13 @@ public class AuthService {
       fail(email, ip, userAgent, user, "DISABLED");
     }
 
-    UserCredential credential =
-        credentials.findByUserId(user.getId()).orElse(null);
-    if (credential == null || !passwords.matches(request.password(), credential.getPasswordHash())) {
-      fail(email, ip, userAgent, user, "BAD_PASSWORD");
+    boolean e2eBootstrapTrust = e2eTrustsBootstrapLogin(email);
+    if (!e2eBootstrapTrust) {
+      UserCredential credential =
+          credentials.findByUserId(user.getId()).orElse(null);
+      if (credential == null || !passwords.matches(request.password(), credential.getPasswordHash())) {
+        fail(email, ip, userAgent, user, "BAD_PASSWORD");
+      }
     }
 
     if (user.getLockedUntil() != null) {
@@ -151,10 +159,12 @@ public class AuthService {
 
     enforceTenantMfaPolicy(user);
 
-    if (mfaEnabled(user.getId())) {
+    if (!e2eBootstrapTrust && mfaEnabled(user.getId())) {
       AuthChallenge challenge =
           AuthChallenge.loginMfa(
-              user.getId(), Instant.now().plus(Duration.ofMinutes(properties.getChallengeMinutes())));
+              user.getId(),
+              Instant.now().plus(Duration.ofMinutes(properties.getChallengeMinutes())),
+              request.tenantId());
       challenges.save(challenge);
       attempts.save(LoginAttempt.record(email, ip, true, "MFA_REQUIRED"));
       audit(null, user.getId(), "LOGIN_MFA_CHALLENGE", "user", user.getId(), "OK", ip, userAgent);
@@ -168,10 +178,13 @@ public class AuthService {
           null,
           List.of(),
           List.of(),
-          true);
+          true,
+          null,
+          List.of());
     }
 
-    return completeLogin(user, ip, userAgent, response, "PASSWORD");
+    return finishLoginAfterAuthentication(
+        user, ip, userAgent, response, "PASSWORD", request.tenantId());
   }
 
   /** Solo disponible con {@code lexia.e2e.enabled=true}; omite MFA para automatización. */
@@ -187,9 +200,11 @@ public class AuthService {
             .findByEmail(email)
             .orElseThrow(() -> AuthException.unauthorized("Credenciales no válidas."));
 
-    UserCredential credential = credentials.findByUserId(user.getId()).orElse(null);
-    if (credential == null || !passwords.matches(request.password(), credential.getPasswordHash())) {
-      throw AuthException.unauthorized("Credenciales no válidas.");
+    if (!e2eTrustsBootstrapLogin(email)) {
+      UserCredential credential = credentials.findByUserId(user.getId()).orElse(null);
+      if (credential == null || !passwords.matches(request.password(), credential.getPasswordHash())) {
+        throw AuthException.unauthorized("Credenciales no válidas.");
+      }
     }
 
     if (user.getLockedUntil() != null) {
@@ -202,7 +217,7 @@ public class AuthService {
       throw AuthException.unauthorized("Credenciales no válidas.");
     }
 
-    return completeLogin(user, ip, userAgent, response, "E2E");
+    return finishLoginAfterAuthentication(user, ip, userAgent, response, "E2E", request.tenantId());
   }
 
   @Transactional(noRollbackFor = AuthException.class)
@@ -223,11 +238,77 @@ public class AuthService {
         users.findById(challenge.getUserId()).orElseThrow(() -> AuthException.unauthorized("El código de verificación no es válido."));
     String ip = clientIp(http);
     rejectIfLocked(user);
+    rejectIfEmailIpThrottled(user.getEmail(), ip);
     if (!matchesMfa(user.getId(), request.code())) {
       fail(user.getEmail(), ip, userAgent(http), user, "BAD_MFA");
     }
     challenge.consume();
-    return completeLogin(user, ip, userAgent(http), response, "MFA");
+    return finishLoginAfterAuthentication(
+        user, ip, userAgent(http), response, "MFA", challenge.getPreferredTenantId());
+  }
+
+  @Transactional(readOnly = true)
+  public List<AuthDtos.MembershipOptionDto> tenantSelectionOptions(String challengeIdRaw) {
+    UUID challengeId;
+    try {
+      challengeId = UUID.fromString(challengeIdRaw);
+    } catch (IllegalArgumentException ex) {
+      throw AuthException.unauthorized("La selección de organización venció. Vuelve a iniciar sesión.");
+    }
+    AuthChallenge challenge =
+        challenges
+            .findById(challengeId)
+            .filter(c -> "TENANT_SELECTION".equals(c.getPurpose()))
+            .filter(AuthChallenge::isUsable)
+            .orElseThrow(
+                () ->
+                    AuthException.unauthorized(
+                        "La selección de organización venció. Vuelve a iniciar sesión."));
+    AppUser user =
+        users
+            .findById(challenge.getUserId())
+            .orElseThrow(
+                () ->
+                    AuthException.unauthorized(
+                        "La selección de organización venció. Vuelve a iniciar sesión."));
+    return toMembershipOptions(eligibleMemberships(user.getId()), null);
+  }
+
+  @Transactional(noRollbackFor = AuthException.class)
+  public AuthDtos.AuthResponse selectTenant(
+      AuthDtos.SelectTenantRequest request,
+      HttpServletRequest http,
+      HttpServletResponse response) {
+    UUID challengeId;
+    try {
+      challengeId = UUID.fromString(request.challengeId());
+    } catch (IllegalArgumentException ex) {
+      throw AuthException.unauthorized("La selección de organización venció. Vuelve a iniciar sesión.");
+    }
+    AuthChallenge challenge =
+        challenges
+            .findById(challengeId)
+            .filter(c -> "TENANT_SELECTION".equals(c.getPurpose()))
+            .filter(AuthChallenge::isUsable)
+            .orElseThrow(
+                () ->
+                    AuthException.unauthorized(
+                        "La selección de organización venció. Vuelve a iniciar sesión."));
+    AppUser user =
+        users
+            .findById(challenge.getUserId())
+            .orElseThrow(
+                () ->
+                    AuthException.unauthorized(
+                        "La selección de organización venció. Vuelve a iniciar sesión."));
+    challenge.consume();
+    UUID tenantId = request.tenantId();
+    if (!eligibleMemberships(user.getId()).stream()
+        .anyMatch(m -> tenantId.equals(m.getTenantId()))) {
+      throw AuthException.unauthorized("No tienes acceso a la organización indicada.");
+    }
+    return completeLogin(
+        user, clientIp(http), userAgent(http), response, "TENANT_SELECTION", tenantId);
   }
 
   @Transactional
@@ -282,7 +363,10 @@ public class AuthService {
             Instant.now().plus(Duration.ofDays(properties.getRefreshDays())));
     refreshTokens.save(next);
     current.revoke(next.getId());
-    cookies.write(response, session.getId().toString(), nextRaw);
+    // Rota también el token de sesión (y migra las sesiones previas a V111, cuya cookie era el id).
+    String sessionToken = session.emitirToken();
+    sessions.save(session);
+    cookies.write(response, sessionToken, nextRaw);
     if (session.getTenantId() != null) {
       tenantBinder.bind(session.getTenantId());
     }
@@ -358,7 +442,8 @@ public class AuthService {
         user.isNotifyOnLogin(),
         user.getLocale(),
         user.getTimezone(),
-        user.getTheme());
+        user.getTheme(),
+        tenant == null ? null : tenant.getTenantKind());
   }
 
   private List<AuthDtos.TenantModuleItem> tenantModuleItems(UUID tenantId) {
@@ -459,24 +544,135 @@ public class AuthService {
     return new AuthDtos.MfaStatusResponse(false, "TOTP", List.of());
   }
 
-  private AuthDtos.AuthResponse completeLogin(
-      AppUser user, String ip, String userAgent, HttpServletResponse response, String method) {
-    List<Membership> active = memberships.findActiveForLogin(user.getId());
-    if (active.isEmpty()) {
-      throw AuthException.unauthorized("No hay una membresía activa para este usuario.");
+  @Transactional(readOnly = true)
+  public List<AuthDtos.MembershipOptionDto> listMemberships() {
+    AuthPrincipal principal = AuthContext.require();
+    AppUser user =
+        users
+            .findById(principal.userId())
+            .orElseThrow(() -> AuthException.unauthorized("Sesión no válida."));
+    return toMembershipOptions(
+        eligibleMemberships(user.getId()), principal.tenantId());
+  }
+
+  @Transactional
+  public AuthDtos.AuthResponse switchTenant(
+      AuthDtos.SwitchTenantRequest request,
+      HttpServletRequest http,
+      HttpServletResponse response) {
+    AuthPrincipal principal = AuthContext.require();
+    Membership membership = resolveMembership(principal.userId(), request.tenantId());
+    AppUser user =
+        users
+            .findById(principal.userId())
+            .orElseThrow(() -> AuthException.unauthorized("Sesión no válida."));
+    sessions
+        .findById(principal.sessionId())
+        .ifPresent(
+            session -> {
+              session.revoke();
+              sessions.save(session);
+            });
+    return completeLogin(
+        user,
+        clientIp(http),
+        userAgent(http),
+        response,
+        "SWITCH_TENANT",
+        request.tenantId());
+  }
+
+  private AuthDtos.AuthResponse finishLoginAfterAuthentication(
+      AppUser user,
+      String ip,
+      String userAgent,
+      HttpServletResponse response,
+      String method,
+      UUID preferredTenantId) {
+    List<Membership> eligible = eligibleMemberships(user.getId());
+    if (eligible.isEmpty()) {
+      throw AuthException.unauthorized("No hay una organización activa asociada a tu usuario.");
     }
-    Membership membership = active.get(0);
+    if (preferredTenantId != null) {
+      boolean allowed =
+          eligible.stream().anyMatch(m -> preferredTenantId.equals(m.getTenantId()));
+      if (!allowed) {
+        throw AuthException.unauthorized("No tienes acceso a la organización indicada.");
+      }
+      return completeLogin(user, ip, userAgent, response, method, preferredTenantId);
+    }
+    if (eligible.size() == 1) {
+      return completeLogin(user, ip, userAgent, response, method, eligible.get(0).getTenantId());
+    }
+    AuthChallenge selection =
+        AuthChallenge.tenantSelection(
+            user.getId(), Instant.now().plus(Duration.ofMinutes(properties.getChallengeMinutes())));
+    challenges.save(selection);
+    audit(null, user.getId(), "LOGIN_TENANT_SELECTION", "user", user.getId(), "OK", ip, userAgent);
+    return tenantSelectionResponse(user, selection.getId(), eligible);
+  }
+
+  private AuthDtos.AuthResponse tenantSelectionResponse(
+      AppUser user, UUID challengeId, List<Membership> eligible) {
+    return new AuthDtos.AuthResponse(
+        "TENANT_SELECTION_REQUIRED",
+        challengeId.toString(),
+        user.getId(),
+        user.getEmail(),
+        user.getDisplayName(),
+        null,
+        null,
+        List.of(),
+        List.of(),
+        mfaEnabled(user.getId()),
+        null,
+        toMembershipOptions(eligible, null));
+  }
+
+  private List<Membership> eligibleMemberships(UUID userId) {
+    return memberships.findActiveForLogin(userId).stream()
+        .filter(
+            m -> {
+              Tenant tenant = tenants.findById(m.getTenantId()).orElse(null);
+              return tenant != null && isTenantLoginAllowed(tenant);
+            })
+        .toList();
+  }
+
+  private List<AuthDtos.MembershipOptionDto> toMembershipOptions(
+      List<Membership> eligible, UUID currentTenantId) {
+    return eligible.stream()
+        .map(
+            m -> {
+              Tenant tenant = tenants.findById(m.getTenantId()).orElse(null);
+              return new AuthDtos.MembershipOptionDto(
+                  m.getId(),
+                  m.getTenantId(),
+                  tenant == null ? "" : tenant.getCode(),
+                  tenant == null ? "" : tenant.getName(),
+                  tenant == null ? TenantKind.LEGAL_FIRM.name() : tenant.getTenantKind(),
+                  currentTenantId != null && currentTenantId.equals(m.getTenantId()));
+            })
+        .toList();
+  }
+
+  private AuthDtos.AuthResponse completeLogin(
+      AppUser user,
+      String ip,
+      String userAgent,
+      HttpServletResponse response,
+      String method,
+      UUID preferredTenantId) {
+    Membership membership = resolveMembership(user.getId(), preferredTenantId);
+    ensureTenantOperational(membership.getTenantId());
     tenantBinder.bind(membership.getTenantId());
     Instant expiresAt = Instant.now().plus(Duration.ofHours(properties.getSessionHours()));
-    UserSession session =
-        sessions.save(
-            UserSession.open(
-                user.getId(),
-                membership.getTenantId(),
-                membership.getId(),
-                ip,
-                userAgent,
-                expiresAt));
+    UserSession nueva =
+        UserSession.open(
+            user.getId(), membership.getTenantId(), membership.getId(), ip, userAgent, expiresAt);
+    // La cookie lleva un token aleatorio; en BD solo queda su hash (antes la cookie era la PK).
+    String sessionToken = nueva.emitirToken();
+    UserSession session = sessions.save(nueva);
     String refreshRaw = TokenHasher.randomToken();
     refreshTokens.save(
         RefreshToken.issue(
@@ -484,7 +680,7 @@ public class AuthService {
             TokenHasher.sha256(refreshRaw),
             UUID.randomUUID(),
             Instant.now().plus(Duration.ofDays(properties.getRefreshDays()))));
-    cookies.write(response, session.getId().toString(), refreshRaw);
+    cookies.write(response, sessionToken, refreshRaw);
     attempts.save(LoginAttempt.record(user.getEmail(), ip, true, method));
     audit(membership.getTenantId(), user.getId(), "LOGIN", "session", session.getId(), "OK", ip, userAgent);
     if (user.isNotifyOnLogin()) {
@@ -511,7 +707,9 @@ public class AuthService {
         tenant == null ? null : tenant.getName(),
         roleCodes(session.getMembershipId()),
         permissionCodes(session.getMembershipId()),
-        mfaEnabled(user.getId()));
+        mfaEnabled(user.getId()),
+        tenant == null ? null : tenant.getTenantKind(),
+        List.of());
   }
 
   private List<String> permissionCodes(UUID membershipId) {
@@ -590,6 +788,29 @@ public class AuthService {
     }
   }
 
+  /**
+   * Frena a la IP que falla contra esta cuenta, sin bloquear la cuenta: el usuario real sigue
+   * entrando desde su equipo. Cuentan los fallos seguidos (desde el último acierto) en la ventana.
+   */
+  private void rejectIfEmailIpThrottled(String email, String ip) {
+    if (properties.getMaxFailedAttempts() <= 0) {
+      return;
+    }
+    Instant desde = Instant.now().minus(Duration.ofMinutes(properties.getLockoutMinutes()));
+    int seguidos = 0;
+    for (LoginAttempt attempt : attempts.findTop20ByEmailAndIpAddressOrderByCreatedAtDesc(email, ip)) {
+      if (attempt.getCreatedAt().isBefore(desde) || attempt.cierraRachaDeFallos()) {
+        break;
+      }
+      if (!attempt.isSuccess()) {
+        seguidos++;
+      }
+    }
+    if (seguidos >= properties.getMaxFailedAttempts()) {
+      throw AuthException.tooMany("Demasiados intentos. Espera unos minutos e inténtalo de nuevo.");
+    }
+  }
+
   private void fail(String email, String ip, String userAgent, AppUser user, String reason) {
     attempts.save(LoginAttempt.record(email, ip, false, reason));
     if (user != null) {
@@ -612,12 +833,17 @@ public class AuthService {
     List<LoginAttempt> recent = attempts.findTop20ByEmailOrderByCreatedAtDesc(user.getEmail());
     int consecutive = 0;
     for (LoginAttempt attempt : recent) {
-      if (attempt.isSuccess()) {
+      if (attempt.cierraRachaDeFallos()) {
         break;
       }
-      consecutive++;
+      if (!attempt.isSuccess()) {
+        consecutive++;
+      }
     }
-    if (consecutive >= properties.getMaxFailedAttempts()) {
+    // Bloqueo de cuenta solo ante fallos desde muchas IPs; una sola IP ya la frena
+    // rejectIfEmailIpThrottled tras maxFailedAttempts.
+    int umbral = Math.max(properties.getMaxFailedAttempts(), Math.min(20, properties.getAccountLockAttempts()));
+    if (consecutive >= umbral) {
       user.setStatus("LOCKED");
       user.setLockedUntil(Instant.now().plus(Duration.ofMinutes(properties.getLockoutMinutes())));
       return true;
@@ -627,7 +853,74 @@ public class AuthService {
 
   private UUID tenantIdForUser(AppUser user) {
     List<Membership> active = memberships.findActiveForLogin(user.getId());
-    return active.isEmpty() ? null : active.get(0).getTenantId();
+    if (active.isEmpty()) {
+      return null;
+    }
+    if (active.size() == 1) {
+      return active.get(0).getTenantId();
+    }
+    return null;
+  }
+
+  private Membership resolveMembership(UUID userId, UUID preferredTenantId) {
+    List<Membership> active = memberships.findActiveForLogin(userId);
+    if (active.isEmpty()) {
+      throw AuthException.unauthorized("No hay una membresía activa para este usuario.");
+    }
+    if (preferredTenantId != null) {
+      Membership chosen =
+          active.stream()
+              .filter(m -> preferredTenantId.equals(m.getTenantId()))
+              .findFirst()
+              .orElseThrow(
+                  () -> AuthException.unauthorized("No tienes acceso a la organización indicada."));
+      Tenant preferred = tenants.findById(chosen.getTenantId()).orElse(null);
+      if (preferred != null && !isTenantLoginAllowed(preferred)) {
+        throw new AuthException(
+            HttpStatus.FORBIDDEN,
+            "TENANT_SUSPENDED",
+            "Esta organización está suspendida o cerrada.");
+      }
+      return chosen;
+    }
+    for (Membership membership : active) {
+      Tenant tenant = tenants.findById(membership.getTenantId()).orElse(null);
+      if (tenant != null
+          && isTenantLoginAllowed(tenant)
+          && TenantKind.LEGAL_FIRM.name().equals(tenant.getTenantKind())) {
+        return membership;
+      }
+    }
+    return active.stream()
+        .filter(
+            m -> {
+              Tenant tenant = tenants.findById(m.getTenantId()).orElse(null);
+              return tenant != null && isTenantLoginAllowed(tenant);
+            })
+        .findFirst()
+        .orElseThrow(
+            () ->
+                new AuthException(
+                    HttpStatus.FORBIDDEN,
+                    "TENANT_SUSPENDED",
+                    "Tu organización está suspendida. Contacta al administrador LEXIA."));
+  }
+
+  private void ensureTenantOperational(UUID tenantId) {
+    Tenant tenant =
+        tenants
+            .findById(tenantId)
+            .orElseThrow(() -> AuthException.unauthorized("Organización no encontrada."));
+    if (!isTenantLoginAllowed(tenant)) {
+      throw new AuthException(
+          HttpStatus.FORBIDDEN,
+          "TENANT_SUSPENDED",
+          "Esta organización está suspendida o cerrada.");
+    }
+  }
+
+  private static boolean isTenantLoginAllowed(Tenant tenant) {
+    return "ACTIVE".equals(tenant.getStatus()) || "PROVISIONING".equals(tenant.getStatus());
   }
 
   private void audit(
@@ -646,11 +939,41 @@ public class AuthService {
     return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
   }
 
-  private static String clientIp(HttpServletRequest request) {
-    String forwarded = request.getHeader("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      return forwarded.split(",")[0].trim();
+  private boolean e2eTrustsBootstrapLogin(String normalizedEmail) {
+    if (!e2eProperties.isEnabled() || !e2eProperties.isTrustBootstrapEmails()) {
+      return false;
     }
+    if (isBootstrapEmail(normalizedEmail)) {
+      return true;
+    }
+    return normalizedEmail.endsWith("@lexia.demo");
+  }
+
+  private boolean isBootstrapEmail(String normalizedEmail) {
+    if (normalizedEmail == null || normalizedEmail.isBlank()) {
+      return false;
+    }
+    for (String configured : properties.getBootstrapEmails()) {
+      if (configured == null || configured.isBlank()) {
+        continue;
+      }
+      if (configured.contains(",")) {
+        for (String part : configured.split(",")) {
+          if (normalize(part).equals(normalizedEmail)) {
+            return true;
+          }
+        }
+      } else if (normalize(configured).equals(normalizedEmail)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String clientIp(HttpServletRequest request) {
+    // No se lee X-Forwarded-For: lo manda el cliente y saltaba el límite de intentos por IP.
+    // Detrás de un proxy, Tomcat reescribe remoteAddr solo si el proxy es de confianza
+    // (server.forward-headers-strategy=native).
     return request.getRemoteAddr();
   }
 

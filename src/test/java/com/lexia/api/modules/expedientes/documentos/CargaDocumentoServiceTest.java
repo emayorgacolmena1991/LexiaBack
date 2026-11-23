@@ -2,6 +2,7 @@ package com.lexia.api.modules.expedientes.documentos;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 
@@ -42,7 +44,9 @@ class CargaDocumentoServiceTest {
   @BeforeEach
   void setUp() {
     AuthContext.set(new AuthPrincipal(USER, UUID.randomUUID(), TENANT, UUID.randomUUID()));
-    service = new CargaDocumentoService(actos, null, ocr, productos, borradores, caseDocs);
+    service =
+        new CargaDocumentoService(
+            actos, null, ocr, productos, borradores, caseDocs, mock(ObjectProvider.class));
   }
 
   @AfterEach

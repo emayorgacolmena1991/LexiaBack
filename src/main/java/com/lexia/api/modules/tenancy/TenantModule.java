@@ -36,4 +36,14 @@ public class TenantModule {
   public boolean isEnabled() {
     return enabled;
   }
+
+  public static TenantModule enable(UUID tenantId, String moduleCode) {
+    TenantModule row = new TenantModule();
+    row.id = UUID.randomUUID();
+    row.tenantId = tenantId;
+    row.moduleCode = moduleCode.trim().toUpperCase();
+    row.enabled = true;
+    row.createdAt = java.time.Instant.now();
+    return row;
+  }
 }

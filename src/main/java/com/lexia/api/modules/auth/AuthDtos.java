@@ -2,6 +2,7 @@ package com.lexia.api.modules.auth;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
@@ -12,7 +13,18 @@ public final class AuthDtos {
 
   public record LoginRequest(
       @NotBlank @Email @Size(max = 320) String email,
-      @NotBlank @Size(min = 8, max = 200) String password) {}
+      @NotBlank @Size(min = 8, max = 200) String password,
+      UUID tenantId) {}
+
+  public record SwitchTenantRequest(@NotNull UUID tenantId) {}
+
+  public record MembershipOptionDto(
+      UUID membershipId,
+      UUID tenantId,
+      String tenantCode,
+      String tenantName,
+      String tenantKind,
+      boolean current) {}
 
   public record MfaVerifyRequest(
       @NotBlank String challengeId, @NotBlank @Size(min = 6, max = 20) String code) {}
@@ -29,7 +41,12 @@ public final class AuthDtos {
       String tenantName,
       List<String> roles,
       List<String> permissions,
-      boolean mfaEnabled) {}
+      boolean mfaEnabled,
+      String tenantKind,
+      List<MembershipOptionDto> membershipOptions) {}
+
+  public record SelectTenantRequest(
+      @NotBlank String challengeId, @NotNull UUID tenantId) {}
 
   public record MfaEnrollResponse(String secret, String otpauthUrl, String issuer) {}
 
@@ -50,7 +67,8 @@ public final class AuthDtos {
       boolean notifyOnLogin,
       String locale,
       String timezone,
-      String theme) {}
+      String theme,
+      String tenantKind) {}
 
   public record ProfileUpdateRequest(@NotBlank @Size(max = 160) String displayName) {}
 

@@ -20,11 +20,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
-import com.lexia.api.modules.expedientes.escrituracion.TitleObservation;
-import com.lexia.api.modules.expedientes.escrituracion.TitleObservationRepository;
-import com.lexia.api.modules.expedientes.escrituracion.TitleStudyRepository;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservation;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleObservationRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 
 /**
  * POST /api/v1/expedientes/{id}/validar-ia — devuelve el dictamen persistido por analizar-ia; solo

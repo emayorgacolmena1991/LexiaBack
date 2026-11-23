@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ValorExtraido;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ValorExtraido;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta.CampoPlantilla;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import java.math.BigDecimal;
@@ -57,11 +57,18 @@ public class ExpedienteVariablesService {
     this.mapper = mapper;
   }
 
-  /** Variables del acto: catálogo del prompt en su orden + tags de la plantilla no catalogados. */
+  /**
+   * Variables del acto: catálogo del prompt + tags de la plantilla + campos de captura BIESS (para
+   * que monto/tasa/plazo/cuota/apoderado aparezcan aunque el prompt del producto no los liste).
+   */
   public List<String> camposDelActo(MinutaTemplateDescriptor descriptor) {
     LinkedHashSet<String> campos =
         new LinkedHashSet<>(
             catalogo.resolve(descriptor.productCode(), descriptor.templateKind()).campos());
+    for (CampoPlantilla campo : CampoPlantilla.values()) {
+      campos.add(campo.tag());
+    }
+    campos.add(MONTO_LETRAS);
     Set<String> conocidos = new MinutaViviendaData().toTemplateMap().keySet();
     for (String tag : renderer.tags(descriptor)) {
       String campo = MinutaTagAliases.canonico(tag);

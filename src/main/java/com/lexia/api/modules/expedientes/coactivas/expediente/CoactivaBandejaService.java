@@ -132,6 +132,7 @@ public class CoactivaBandejaService {
               e.getEtapaReportadaTexto(),
               e.getEtapaVerificada(),
               e.getEtapaVerificada() == null ? null : CoactivaExpedienteService.etapaLabel(e.getEtapaVerificada()),
+              e.getEtapaSugeridaIa(),
               e.getSemaforo(),
               e.getSemaforoMotivo(),
               semaforo.siguienteAccion(e, delegado != null && delegado.vigenteEn(hoy)),
@@ -148,7 +149,8 @@ public class CoactivaBandejaService {
         result.getTotalElements(),
         toMap(expedientes.contarPorSemaforo(tenantId)),
         toMap(expedientes.contarPorEtapa(tenantId)),
-        toMap(expedientes.contarPorEstado(tenantId)));
+        toMap(expedientes.contarPorEstado(tenantId)),
+        expedientes.contarConEtapaSugerida(tenantId));
   }
 
   private static Specification<CoactivaExpediente> specification(UUID tenantId, Filtro filtro) {
@@ -168,6 +170,9 @@ public class CoactivaBandejaService {
         } else {
           predicates.add(cb.equal(root.get("etapaVerificada"), filtro.etapa()));
         }
+      }
+      if (Boolean.TRUE.equals(filtro.sugerenciaIa())) {
+        predicates.add(cb.isNotNull(root.get("etapaSugeridaIa")));
       }
       if (filtro.semaforo() != null) {
         predicates.add(cb.equal(root.get("semaforo"), filtro.semaforo()));
@@ -310,7 +315,13 @@ public class CoactivaBandejaService {
   }
 
   public record Filtro(
-      String oficina, UUID delegadoId, String etapa, String semaforo, String estadoOperativo, String q) {
+      String oficina,
+      UUID delegadoId,
+      String etapa,
+      String semaforo,
+      String estadoOperativo,
+      String q,
+      Boolean sugerenciaIa) {
 
     public Filtro {
       oficina = upper(oficina);

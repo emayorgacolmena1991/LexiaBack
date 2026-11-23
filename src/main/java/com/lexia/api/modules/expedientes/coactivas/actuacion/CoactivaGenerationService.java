@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.common.storage.ArchivoStorage;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.coactivas.CoactivaPermisos;
@@ -25,9 +26,8 @@ import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser;
 import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
 import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.identity.AuthorizationService;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -57,6 +57,8 @@ public class CoactivaGenerationService {
               + "nombre_garante|cedula_garante|numero_resolucion_delegacion)");
   private static final Set<String> OPI = Set.of("OPI_EMITIDA", "NOTIFICACION_COA");
   private static final String PREFIJO = "templates/coactivas/";
+  private static final String MIME_DOCX =
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   private static final int MAX_VALOR = 500;
   private static final TypeReference<Map<String, String>> MAPA = new TypeReference<>() {};
 
@@ -74,7 +76,7 @@ public class CoactivaGenerationService {
   private final DocxMinutaRenderer renderer;
   private final DocxPdfConverter pdf;
   private final ObjectMapper json;
-  private final Path storageDir;
+  private final ArchivoStorage archivosStorage;
   private final ZoneId zona;
 
   public CoactivaGenerationService(
@@ -91,7 +93,7 @@ public class CoactivaGenerationService {
       DocxMinutaRenderer renderer,
       DocxPdfConverter pdf,
       ObjectMapper json,
-      @Value("${lexia.coactivas.documentos.storage-dir:./data/coactivas}") String storageDir,
+      ArchivoStorage archivosStorage,
       @Value("${lexia.coactivas.plantillas.zona-horaria:America/Guayaquil}") String zonaHoraria) {
     this.authorization = authorization;
     this.expedientes = expedientes;
@@ -107,11 +109,11 @@ public class CoactivaGenerationService {
     this.renderer = renderer;
     this.pdf = pdf;
     this.json = json;
-    this.storageDir = Path.of(storageDir).toAbsolutePath().normalize();
+    this.archivosStorage = archivosStorage;
     this.zona = ZoneId.of(zonaHoraria);
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public VariablesDocumentoResponse variables(UUID expedienteId, String tipo) {
     authorization.requirePermission(CoactivaPermisos.LEER);
     AuthPrincipal principal = AuthContext.require();
@@ -120,9 +122,43 @@ public class CoactivaGenerationService {
         drafts
             .findByTenantIdAndExpedienteIdAndActuacionTipo(
                 principal.tenantId(), expedienteId, ctx.tipo())
-            .orElse(null);
-    Resultado resuelto = resolver(ctx, draft == null ? Map.of() : leerOverrides(draft.getOverrides()));
+            .orElseGet(
+                () ->
+                    drafts.save(
+                        CoactivaDocumentoDraft.crear(
+                            principal.tenantId(),
+                            expedienteId,
+                            ctx.plantilla().getId(),
+                            ctx.tipo(),
+                            principal.userId())));
+    Map<String, String> overrides = leerOverrides(draft.getOverrides());
+    Resultado resuelto = resolver(ctx, overrides);
+    if (!CoactivaDocumentoDraft.LISTO.equals(draft.getStatus())) {
+      draft.guardar(
+          escribir(sinMarcador(resuelto.variables())),
+          escribir(resuelto.datosExtraidos()),
+          escribir(overrides),
+          draft.getStoragePath(),
+          resuelto.pendientes().size());
+      drafts.save(draft);
+    }
     return respuesta(draft, ctx.plantilla(), resuelto);
+  }
+
+  /** Payload persistido: sin null ni {@link CoactivaVariableBinder#NODATA}. Esos tags siguen en {@code pendientes}. */
+  private static Map<String, String> sinMarcador(Map<String, String> variables) {
+    Map<String, String> out = new LinkedHashMap<>();
+    if (variables == null) {
+      return out;
+    }
+    variables.forEach(
+        (k, v) -> {
+          String texto = CoactivaVariableBinder.limpio(v);
+          if (k != null && texto != null) {
+            out.put(k, texto);
+          }
+        });
+    return out;
   }
 
   @Transactional
@@ -147,12 +183,12 @@ public class CoactivaGenerationService {
     aplicar(overrides, ctx.tags(), request);
     Resultado resuelto = resolver(ctx, overrides);
     byte[] docx = renderer.renderPlantilla(ctx.ruta(), new LinkedHashMap<>(resuelto.variables()));
-    Path stored = persistDocx(draft.getId(), ctx.plantilla().getNombre(), docx);
+    String stored = persistDocx(draft, ctx.plantilla().getNombre(), docx);
     draft.guardar(
         escribir(resuelto.variables()),
         escribir(resuelto.datosExtraidos()),
         escribir(overrides),
-        stored.toString(),
+        stored,
         resuelto.pendientes().size());
     drafts.save(draft);
     return new Preview(draft.getId(), pdf.toPdf(docx), respuesta(draft, ctx.plantilla(), resuelto));
@@ -232,7 +268,10 @@ public class CoactivaGenerationService {
         "Documento listo para firma: " + ctx.plantilla().getNombre(),
         criticas.isEmpty()
             ? "Estado GENERADO."
-            : "Estado GENERADO. Campos críticos confirmados en nodata: " + String.join(", ", criticas),
+            : "Estado GENERADO. Campos críticos confirmados en "
+                + CoactivaVariableBinder.NODATA
+                + ": "
+                + String.join(", ", criticas),
         principal.userId(),
         archivoId);
     ctx.expediente().setFechaUltimaActuacion(LocalDate.now(zona));
@@ -254,7 +293,9 @@ public class CoactivaGenerationService {
         .map(a -> parser.parse(a.getResultado()))
         .filter(parse -> parse.diagnostico() != null)
         .map(parse -> parse.diagnostico().datosExtraidos())
+        .map(CoactivaPlantillaDataMapper::normalizarExtraidos)
         .ifPresent(extraidos -> aplanar(extraidos, ia));
+    // Mapper (ya normalizado + aliases de plantilla) prevalece sobre el OCR crudo aplanado.
     datos.valores()
         .forEach(
             (tag, valor) -> {
@@ -293,17 +334,18 @@ public class CoactivaGenerationService {
       String key = String.valueOf(entry.getKey());
       Object value = entry.getValue();
       if (value instanceof Map<?, ?>) {
-        aplanar(value, out);
+        // Grupos anidados ya los expandió normalizarExtraidos; no aplastar hojas ambiguas (p. ej. total).
+        continue;
       } else if (value instanceof Collection<?> lista) {
         List<String> partes = new ArrayList<>();
         for (Object item : lista) {
           if (item instanceof Map<?, ?>) {
-            aplanar(item, out);
-          } else {
-            String texto = CoactivaVariableBinder.limpio(item == null ? null : item.toString());
-            if (texto != null) {
-              partes.add(texto);
-            }
+            // Listas estructuradas (cuentas_embargadas) las resuelve el mapper; no pisar tags planos.
+            continue;
+          }
+          String texto = CoactivaVariableBinder.limpio(item == null ? null : item.toString());
+          if (texto != null) {
+            partes.add(texto);
           }
         }
         if (!partes.isEmpty()) {
@@ -434,31 +476,30 @@ public class CoactivaGenerationService {
     }
   }
 
-  private Path persistDocx(UUID draftId, String nombre, byte[] bytes) {
-    try {
-      Files.createDirectories(storageDir);
-      String safe = nombreArchivo(nombre, ".docx").replaceAll("[^a-zA-Z0-9._-]", "_");
-      Path target = storageDir.resolve(draftId + "_" + safe);
-      Files.write(target, bytes);
-      return target;
-    } catch (IOException e) {
-      throw ApiException.badRequest("No se pudo guardar el DOCX generado.");
-    }
+  /**
+   * Clave nueva en cada render ({@code {tenant}/coactivas/borradores/{draftId}_{uuid}_{nombre}}):
+   * nunca sobrescribe. Commit borra el .docx anterior del borrador; rollback, el nuevo.
+   */
+  String persistDocx(CoactivaDocumentoDraft draft, String nombre, byte[] bytes) {
+    String safe = nombreArchivo(nombre, ".docx").replaceAll("[^a-zA-Z0-9._-]", "_");
+    String clave =
+        draft.getTenantId()
+            + "/coactivas/borradores/"
+            + draft.getId()
+            + "_"
+            + UUID.randomUUID()
+            + "_"
+            + safe;
+    archivosStorage.guardar(clave, new ByteArrayInputStream(bytes), bytes.length, MIME_DOCX);
+    archivosStorage.sustituirAlTerminar(clave, draft.getStoragePath());
+    return clave;
   }
 
-  private byte[] leerDocx(CoactivaDocumentoDraft draft) {
+  byte[] leerDocx(CoactivaDocumentoDraft draft) {
     if (draft.getStoragePath() == null || draft.getStoragePath().isBlank()) {
       throw ApiException.badRequest("Todavía no hay un .docx generado.");
     }
-    Path path = Path.of(draft.getStoragePath()).toAbsolutePath().normalize();
-    if (!path.startsWith(storageDir)) {
-      throw ApiException.badRequest("La ruta del borrador no es válida.");
-    }
-    try {
-      return Files.readAllBytes(path);
-    } catch (IOException e) {
-      throw ApiException.badRequest("No se pudo leer el DOCX generado.");
-    }
+    return archivosStorage.leer(draft.getStoragePath());
   }
 
   private static boolean compatible(String plantillaEtapa, String etapaVerificada) {

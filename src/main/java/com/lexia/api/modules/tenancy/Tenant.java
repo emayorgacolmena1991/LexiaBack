@@ -38,6 +38,9 @@ public class Tenant {
   @Column(name = "max_cases")
   private Integer maxCases;
 
+  @Column(name = "tenant_kind", nullable = false, length = 32)
+  private String tenantKind;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -87,12 +90,47 @@ public class Tenant {
     return maxCases;
   }
 
+  public String getTenantKind() {
+    return tenantKind;
+  }
+
   public Instant getCreatedAt() {
     return createdAt;
   }
 
+  public Instant getDeletedAt() {
+    return deletedAt;
+  }
+
   public Instant getUpdatedAt() {
     return updatedAt;
+  }
+
+  public static Tenant provision(
+      String code,
+      String name,
+      String tenantKind,
+      String timezone,
+      String isolationMode,
+      String planCode,
+      Integer maxUsers,
+      Integer maxCases) {
+    Tenant tenant = new Tenant();
+    tenant.id = UUID.randomUUID();
+    tenant.code = code.trim().toLowerCase();
+    tenant.name = name.trim();
+    tenant.status = "ACTIVE";
+    tenant.timezone = timezone != null && !timezone.isBlank() ? timezone.trim() : "America/Guayaquil";
+    tenant.isolationMode =
+        isolationMode != null && !isolationMode.isBlank() ? isolationMode.trim() : "SHARED";
+    tenant.planCode = planCode != null && !planCode.isBlank() ? planCode.trim() : null;
+    tenant.maxUsers = maxUsers != null && maxUsers > 0 ? maxUsers : null;
+    tenant.maxCases = maxCases != null && maxCases > 0 ? maxCases : null;
+    tenant.tenantKind = tenantKind != null && !tenantKind.isBlank() ? tenantKind.trim() : "LEGAL_FIRM";
+    Instant now = Instant.now();
+    tenant.createdAt = now;
+    tenant.updatedAt = now;
+    return tenant;
   }
 
   public void updateSettings(String name, String timezone, Integer maxUsers) {
@@ -105,6 +143,24 @@ public class Tenant {
     if (maxUsers != null) {
       this.maxUsers = maxUsers <= 0 ? null : maxUsers;
     }
+    this.updatedAt = Instant.now();
+  }
+
+  public void updatePlatformGovernance(
+      String name, String timezone, String planCode, Integer maxUsers, Integer maxCases) {
+    updateSettings(name, timezone, maxUsers);
+    if (planCode != null) {
+      String trimmed = planCode.trim();
+      this.planCode = trimmed.isEmpty() ? null : trimmed;
+    }
+    if (maxCases != null) {
+      this.maxCases = maxCases <= 0 ? null : maxCases;
+    }
+    this.updatedAt = Instant.now();
+  }
+
+  public void setOperationalStatus(String status) {
+    this.status = status.trim().toUpperCase();
     this.updatedAt = Instant.now();
   }
 }

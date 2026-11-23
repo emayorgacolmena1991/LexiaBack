@@ -74,6 +74,66 @@ public class EmailNotificationService {
   }
 
   @Async
+  public void sendNotariaRemisionFromBufete(
+      UUID tenantId,
+      String email,
+      String displayName,
+      String expedienteCodigo,
+      String asunto,
+      String emitidoPor,
+      String notariaNombre,
+      String observaciones,
+      String bandejaUrl) {
+    deliver(
+        tenantId,
+        email,
+        "notaria-remision-inbound",
+        "notaria-remision:" + expedienteCodigo + ":" + System.currentTimeMillis() / 60_000,
+        () ->
+            emailClient.send(
+                email,
+                displayName,
+                "Nuevo expediente desde bufete · " + expedienteCodigo,
+                EmailTemplates.notariaRemisionFromBufete(
+                    displayName,
+                    expedienteCodigo,
+                    asunto,
+                    emitidoPor,
+                    notariaNombre,
+                    observaciones,
+                    bandejaUrl)));
+  }
+
+  @Async
+  public void sendNotariaDevolucionAlBufete(
+      UUID tenantId,
+      String email,
+      String displayName,
+      String expedienteCodigo,
+      String asunto,
+      String notariaNombre,
+      String observacionesNotaria,
+      String expedienteUrl) {
+    deliver(
+        tenantId,
+        email,
+        "notaria-devolucion-bufete",
+        "notaria-devolucion:" + expedienteCodigo + ":" + System.currentTimeMillis() / 60_000,
+        () ->
+            emailClient.send(
+                email,
+                displayName,
+                "Expediente devuelto desde notaría · " + expedienteCodigo,
+                EmailTemplates.notariaDevolucionAlBufete(
+                    displayName,
+                    expedienteCodigo,
+                    asunto,
+                    notariaNombre,
+                    observacionesNotaria,
+                    expedienteUrl)));
+  }
+
+  @Async
   public void sendLoginAlert(
       UUID tenantId,
       String email,

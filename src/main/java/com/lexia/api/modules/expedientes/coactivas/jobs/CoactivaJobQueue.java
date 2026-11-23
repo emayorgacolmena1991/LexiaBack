@@ -1,0 +1,309 @@
+package com.lexia.api.modules.expedientes.coactivas.jobs;
+
+import com.lexia.api.common.api.ApiException;
+import jakarta.persistence.EntityManager;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Cola en Postgres. {@code app.jobs} no tiene RLS: el worker reclama de cualquier tenant
+ * y luego fija {@code app.current_tenant_id}.
+ * El candado {@code locked_until} evita que otro nodo reclame un job vivo.
+ */
+@Repository
+public class CoactivaJobQueue {
+
+  private static final Logger LOG = LoggerFactory.getLogger(CoactivaJobQueue.class);
+
+  public record Job(UUID id, UUID tenantId, String tipo, String payload, int intentos) {}
+
+  private final EntityManager entityManager;
+
+  public CoactivaJobQueue(EntityManager entityManager) {
+    this.entityManager = entityManager;
+  }
+
+  @Transactional
+  public UUID encolar(UUID tenantId, String tipo, String payload) {
+    return encolar(tenantId, tipo, payload, 0);
+  }
+
+  @Transactional
+  public UUID encolar(UUID tenantId, String tipo, String payload, int prioridad) {
+    UUID id = UUID.randomUUID();
+    entityManager
+        .createNativeQuery(
+            """
+            INSERT INTO app.jobs (id, tenant_id, tipo, payload, prioridad)
+            VALUES (:id, :tenantId, :tipo, CAST(:payload AS jsonb), :prioridad)
+            """)
+        .setParameter("id", id)
+        .setParameter("tenantId", tenantId)
+        .setParameter("tipo", tipo)
+        .setParameter("payload", payload)
+        .setParameter("prioridad", prioridad)
+        .executeUpdate();
+    return id;
+  }
+
+  /**
+   * Una sola fila viva por clave. El índice parcial suelta la clave cuando el job sale de PENDIENTE/EN_PROCESO,
+   * así un reintento posterior sí puede encolar.
+   */
+  @Transactional
+  public UUID encolar(UUID tenantId, String tipo, String payload, int prioridad, String clave) {
+    if (clave == null || clave.isBlank()) {
+      return encolar(tenantId, tipo, payload, prioridad);
+    }
+    UUID id = UUID.randomUUID();
+    int filas =
+        entityManager
+            .createNativeQuery(
+                """
+                INSERT INTO app.jobs (id, tenant_id, tipo, payload, prioridad, idempotency_key)
+                VALUES (:id, :tenantId, :tipo, CAST(:payload AS jsonb), :prioridad, :clave)
+                ON CONFLICT DO NOTHING
+                """)
+            .setParameter("id", id)
+            .setParameter("tenantId", tenantId)
+            .setParameter("tipo", tipo)
+            .setParameter("payload", payload)
+            .setParameter("prioridad", prioridad)
+            .setParameter("clave", clave)
+            .executeUpdate();
+    if (filas == 1) {
+      return id;
+    }
+    LOG.warn("job duplicado tipo={} clave={}", tipo, clave);
+    @SuppressWarnings("unchecked")
+    List<?> rows =
+        entityManager
+            .createNativeQuery(
+                """
+                SELECT id FROM app.jobs
+                WHERE tenant_id = :tenant AND tipo = :tipo AND idempotency_key = :clave
+                  AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                ORDER BY created_at
+                LIMIT 1
+                """)
+            .setParameter("tenant", tenantId)
+            .setParameter("tipo", tipo)
+            .setParameter("clave", clave)
+            .getResultList();
+    if (rows.isEmpty()) {
+      return id;
+    }
+    return UUID.fromString(String.valueOf(rows.get(0)));
+  }
+
+  /** No apila otro análisis si ya hay uno pendiente o en curso para el expediente. */
+  @Transactional
+  public UUID encolarSiActivo(UUID tenantId, String tipo, String expedienteId, String payload) {
+    @SuppressWarnings("unchecked")
+    List<?> rows =
+        entityManager
+            .createNativeQuery(
+                """
+                SELECT id FROM app.jobs
+                WHERE tenant_id = :tenant AND tipo = :tipo
+                  AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                  AND payload->>'expedienteId' = :expediente
+                ORDER BY created_at DESC
+                LIMIT 1
+                """)
+            .setParameter("tenant", tenantId)
+            .setParameter("tipo", tipo)
+            .setParameter("expediente", expedienteId)
+            .getResultList();
+    if (!rows.isEmpty()) {
+      UUID id = UUID.fromString(String.valueOf(rows.get(0)));
+      entityManager
+          .createNativeQuery(
+              """
+              UPDATE app.jobs
+              SET payload = CAST(:payload AS jsonb)
+              WHERE id = :id AND estado = 'PENDIENTE'
+              """)
+          .setParameter("payload", payload)
+          .setParameter("id", id)
+          .executeUpdate();
+      return id;
+    }
+    return encolar(tenantId, tipo, payload);
+  }
+
+  /**
+   * Reclama un job de {@code tipos}. El filtro aplica a pendientes y a leases vencidos: un módulo no
+   * toma el trabajo de otro ni recupera un candado ajeno.
+   */
+  @Transactional
+  public Optional<Job> reclamar(String workerId, Collection<String> tipos) {
+    if (tipos == null || tipos.isEmpty()) {
+      return Optional.empty();
+    }
+    @SuppressWarnings("unchecked")
+    List<Object[]> rows =
+        entityManager
+            .createNativeQuery(
+                """
+                SELECT id, tenant_id, tipo, CAST(payload AS text), intentos
+                FROM app.jobs
+                WHERE tipo IN (:tipos)
+                  AND (
+                        (estado = 'PENDIENTE' AND run_at <= now())
+                     OR (estado = 'EN_PROCESO' AND (locked_until IS NULL OR locked_until < now()))
+                  )
+                ORDER BY prioridad DESC, created_at
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """)
+            .setParameter("tipos", tipos)
+            .getResultList();
+    if (rows.isEmpty()) {
+      return Optional.empty();
+    }
+    Object[] row = rows.get(0);
+    UUID id = UUID.fromString(String.valueOf(row[0]));
+    entityManager
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET estado = 'EN_PROCESO',
+                worker_id = :worker,
+                locked_until = now() + interval '3 minutes',
+                intentos = intentos + 1,
+                run_at = now()
+            WHERE id = :id
+            """)
+        .setParameter("id", id)
+        .setParameter("worker", workerId)
+        .executeUpdate();
+    return Optional.of(
+        new Job(
+            id,
+            UUID.fromString(String.valueOf(row[1])),
+            String.valueOf(row[2]),
+            String.valueOf(row[3]),
+            ((Number) row[4]).intValue() + 1));
+  }
+
+  /** Jobs del mismo archivo aún en cola o en curso, incluido el que está corriendo. */
+  @Transactional(readOnly = true)
+  public int activos(UUID tenantId, String tipo, String batchId, String clientRowId) {
+    Number n =
+        (Number)
+            entityManager
+                .createNativeQuery(
+                    """
+                    SELECT count(*) FROM app.jobs
+                    WHERE tenant_id = :tenant
+                      AND tipo = :tipo
+                      AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                      AND payload->>'batchId' = :batch
+                      AND payload->>'clientRowId' = :fila
+                    """)
+                .setParameter("tenant", tenantId)
+                .setParameter("tipo", tipo)
+                .setParameter("batch", batchId)
+                .setParameter("fila", clientRowId)
+                .getSingleResult();
+    return n == null ? 0 : n.intValue();
+  }
+
+  @Transactional(readOnly = true)
+  public int activosEnLote(UUID tenantId, String tipo, String batchId) {
+    Number n =
+        (Number)
+            entityManager
+                .createNativeQuery(
+                    """
+                    SELECT count(*) FROM app.jobs
+                    WHERE tenant_id = :tenant
+                      AND tipo = :tipo
+                      AND estado IN ('PENDIENTE', 'EN_PROCESO')
+                      AND payload->>'batchId' = :batch
+                    """)
+                .setParameter("tenant", tenantId)
+                .setParameter("tipo", tipo)
+                .setParameter("batch", batchId)
+                .getSingleResult();
+    return n == null ? 0 : n.intValue();
+  }
+
+  @Transactional
+  public void completar(UUID id, String workerId) {
+    entityManager
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET estado = 'COMPLETADO', run_at = now(), locked_until = NULL
+            WHERE id = :id AND worker_id = :worker
+            """)
+        .setParameter("id", id)
+        .setParameter("worker", workerId)
+        .executeUpdate();
+  }
+
+  /** Falta OCR: espera 30 s. Al décimo intento queda en ERROR. */
+  @Transactional
+  public void reprogramar(UUID id, String workerId, String motivo) {
+    entityManager
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET estado = CASE WHEN intentos >= 10 THEN 'ERROR' ELSE 'PENDIENTE' END,
+                error_log = :motivo,
+                worker_id = NULL,
+                locked_until = NULL,
+                run_at = now() + interval '30 seconds'
+            WHERE id = :id AND worker_id = :worker
+            """)
+        .setParameter("motivo", motivo)
+        .setParameter("id", id)
+        .setParameter("worker", workerId)
+        .executeUpdate();
+  }
+
+  /** Backoff 15 s, 30 s, 60 s… Al tercer intento queda en {@code ERROR} (DLQ). */
+  @Transactional
+  public void fallar(UUID id, String workerId, String error) {
+    entityManager
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET estado = CASE WHEN intentos >= 3 THEN 'ERROR' ELSE 'PENDIENTE' END,
+                error_log = :error,
+                worker_id = NULL,
+                locked_until = NULL,
+                run_at = now() + make_interval(secs => 15 * power(2, GREATEST(intentos - 1, 0)))
+            WHERE id = :id AND worker_id = :worker
+            """)
+        .setParameter("id", id)
+        .setParameter("worker", workerId)
+        .setParameter("error", error == null ? "error" : error.substring(0, Math.min(error.length(), 800)))
+        .executeUpdate();
+  }
+
+  @Transactional
+  public void latido(String workerId) {
+    entityManager
+        .createNativeQuery(
+            """
+            UPDATE app.jobs
+            SET locked_until = now() + interval '3 minutes'
+            WHERE worker_id = :worker AND estado = 'EN_PROCESO'
+            """)
+        .setParameter("worker", workerId)
+        .executeUpdate();
+  }
+
+  public static ApiException noEsJob(String tipo) {
+    return ApiException.badRequest("Tipo de job desconocido: " + tipo);
+  }
+}

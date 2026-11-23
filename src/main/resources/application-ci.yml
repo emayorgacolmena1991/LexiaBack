@@ -17,5 +17,8 @@ lexia:
     allowed-origins:
       - http://localhost:4200
       - http://127.0.0.1:4200
+  auth:
+    bootstrap-emails: emayorga@colmenas.ec,admin.demo@lexia.demo,laura.gomez@lexia.demo,bufete.gye@lexia.demo
   e2e:
     enabled: true
+    trust-bootstrap-emails: true

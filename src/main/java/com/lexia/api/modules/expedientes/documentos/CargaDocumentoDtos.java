@@ -40,8 +40,71 @@ public final class CargaDocumentoDtos {
 
   public record TipoPermitidoDTO(String codigo, String nombre) {}
 
+  /**
+   * Documento cargado (borrador o expediente). {@code tipoSugerido}/{@code clasificacionEstado}/
+   * {@code clasificacionOrigen}: resultado del clasificador automático; null si no corrió.
+   */
   public record DocumentoCargadoDTO(
-      String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {}
+      String idDocumento,
+      String nombreOriginal,
+      String tamano,
+      String codigoTipoDocumento,
+      String tipoSugerido,
+      String clasificacionEstado,
+      String clasificacionOrigen,
+      String subidoPor,
+      java.time.Instant subidoEn,
+      String observacion) {
+
+    public DocumentoCargadoDTO(
+        String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {
+      this(idDocumento, nombreOriginal, tamano, codigoTipoDocumento, null, null, null);
+    }
+
+    public DocumentoCargadoDTO(
+        String idDocumento,
+        String nombreOriginal,
+        String tamano,
+        String codigoTipoDocumento,
+        String tipoSugerido,
+        String clasificacionEstado,
+        String clasificacionOrigen) {
+      this(
+          idDocumento,
+          nombreOriginal,
+          tamano,
+          codigoTipoDocumento,
+          tipoSugerido,
+          clasificacionEstado,
+          clasificacionOrigen,
+          null,
+          null,
+          null);
+    }
+
+    /** Mismo valor que {@code codigoTipoDocumento}, con el nombre que usa el resto del API. */
+    @com.fasterxml.jackson.annotation.JsonProperty("tipoDocumento")
+    public String tipoDocumento() {
+      return codigoTipoDocumento;
+    }
+  }
+
+  /**
+   * Respuesta del upload. {@code ocrOk}: resultado del OCR síncrono en un expediente persistido;
+   * {@code null} en un borrador, donde el OCR lo dispara el wizard.
+   */
+  public record DocumentoSubidoDTO(
+      String idDocumento,
+      String nombreOriginal,
+      String tamano,
+      String codigoTipoDocumento,
+      Boolean ocrOk) {
+
+    public static DocumentoSubidoDTO de(DocumentoCargadoDTO doc, Boolean ocrOk) {
+      return new DocumentoSubidoDTO(
+          doc.idDocumento(), doc.nombreOriginal(), doc.tamano(), doc.codigoTipoDocumento(), ocrOk);
+    }
+  }
 
   public record ActualizarTipoRequest(@NotBlank @Size(max = 64) String codigoTipoDocumento) {}
 

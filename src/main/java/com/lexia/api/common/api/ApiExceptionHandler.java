@@ -3,18 +3,29 @@ package com.lexia.api.common.api;
 import com.lexia.api.modules.auth.AuthException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
+import org.hibernate.exception.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.orm.jpa.JpaSystemException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+  static final String INDICE_REMISION_ABIERTA = "ux_notary_remision_abierta";
+  private static final String MENSAJE_REMISION_ABIERTA =
+      "El expediente ya tiene una remisión abierta.";
+  private static final String MENSAJE_INTEGRIDAD =
+      "No fue posible completar la operación porque ya existe un registro relacionado.";
+  private static final Pattern NOMBRE_CONSTRAINT = Pattern.compile("[A-Za-z0-9_.]+");
 
   private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
@@ -80,12 +91,56 @@ public class ApiExceptionHandler {
 
   @ExceptionHandler(DataIntegrityViolationException.class)
   public ResponseEntity<Map<String, String>> integrity(DataIntegrityViolationException exception) {
-    return ResponseEntity.status(409)
+    String constraint = constraintName(exception);
+    LOG.warn("Integridad de datos: constraint={}", constraint == null ? "desconocido" : constraint);
+    String message =
+        INDICE_REMISION_ABIERTA.equals(constraint) ? MENSAJE_REMISION_ABIERTA : MENSAJE_INTEGRIDAD;
+    return ResponseEntity.status(409).body(Map.of("code", "CONFLICT", "message", message));
+  }
+
+  /** Nombre del constraint, o el índice de remisión abierta si solo aparece en el mensaje. */
+  private static String constraintName(Throwable error) {
+    String porMensaje = null;
+    Throwable actual = error;
+    while (actual != null) {
+      if (actual instanceof ConstraintViolationException violation) {
+        String nombre = violation.getConstraintName();
+        if (nombre != null && NOMBRE_CONSTRAINT.matcher(nombre).matches()) {
+          return nombre;
+        }
+      }
+      String message = actual.getMessage();
+      if (message != null && message.contains(INDICE_REMISION_ABIERTA)) {
+        porMensaje = INDICE_REMISION_ABIERTA;
+      }
+      actual = actual.getCause();
+    }
+    return porMensaje;
+  }
+
+  @ExceptionHandler(JpaSystemException.class)
+  public ResponseEntity<Map<String, String>> jpa(JpaSystemException exception) {
+    LOG.error("JPA error", exception);
+    String detail = exception.getMostSpecificCause().getMessage();
+    return ResponseEntity.internalServerError()
         .body(
             Map.of(
                 "code",
-                "CONFLICT",
+                "INTERNAL_ERROR",
                 "message",
-                "No fue posible completar la operación porque ya existe un registro relacionado."));
+                detail != null && !detail.isBlank() ? detail : "Error de persistencia."));
+  }
+
+  /** Cliente SSE/async desconectado: no intentar escribir JSON sobre text/event-stream. */
+  @ExceptionHandler(AsyncRequestNotUsableException.class)
+  public void asyncNotUsable(AsyncRequestNotUsableException exception) {
+    LOG.debug("Conexión async cerrada: {}", exception.getMessage());
+  }
+
+  @ExceptionHandler(Exception.class)
+  public ResponseEntity<Map<String, String>> unexpected(Exception exception) {
+    LOG.error("Unhandled API error", exception);
+    return ResponseEntity.internalServerError()
+        .body(Map.of("code", "INTERNAL_ERROR", "message", "Error interno del servidor."));
   }
 }

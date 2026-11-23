@@ -12,11 +12,13 @@ import java.util.regex.Pattern;
 
 /**
  * Fusiona las capas de una actuación. Precedencia: IA &lt; sistema (delegado y liquidación) &lt;
- * overrides. Un tag sin dato queda como el literal {@code nodata}.
+ * overrides. {@code null} queda como {@code [NO ENCONTRADO EN EXPEDIENTE]}.
+ * El marcador de lectura fallida se conserva tal cual.
  */
 public class CoactivaVariableBinder {
 
-  public static final String NODATA = "nodata";
+  public static final String NODATA = "[NO ENCONTRADO EN EXPEDIENTE]";
+  public static final String NO_EXTRAIDO = "[DATO EN TEXTO NO EXTRAÍDO POR IA]";
   public static final String IA = "IA";
   public static final String SISTEMA = "SISTEMA";
   public static final String MANUAL = "MANUAL";
@@ -56,8 +58,12 @@ public class CoactivaVariableBinder {
     Map<String, String> manual = overrides == null ? Map.of() : overrides;
     boolean vigente = liquidacionVigente(capaSistema, capaIa, hoy);
     if (!vigente) {
+      String deuda = primero(capaSistema, capaIa, "monto_deuda_total");
+      String deudaLetras = primero(capaSistema, capaIa, "monto_deuda_total_letras");
       capaIa = sinLiquidacion(capaIa);
       capaSistema = sinLiquidacion(capaSistema);
+      // Vigencia caduca fechas/montos de liquidación, no la deuda del expediente.
+      restaurarDeudaComoLiquidacion(capaSistema, deuda, deudaLetras);
     }
 
     Map<String, String> extraidos = new LinkedHashMap<>();
@@ -87,7 +93,7 @@ public class CoactivaVariableBinder {
       } else {
         valor = null;
       }
-      String visible = valor == null ? NODATA : valor;
+      String visible = valor == null ? NODATA : (NO_EXTRAIDO.equals(valor) ? NO_EXTRAIDO : valor);
       variables.put(tag, visible);
       if (NODATA.equals(visible)) {
         pendientes.add(tag);
@@ -141,6 +147,23 @@ public class CoactivaVariableBinder {
           }
         });
     return out;
+  }
+
+  /**
+   * Tras caducar la liquidación se eliminan tags {@code *liquidacion*}. Si el monto de deuda
+   * sigue disponible, se reexpone como {@code monto_liquidacion*} (alias de plantilla) sin
+   * reintroducir fechas vencidas.
+   */
+  private static void restaurarDeudaComoLiquidacion(
+      Map<String, String> sistema, String deuda, String deudaLetras) {
+    if (deuda == null) {
+      return;
+    }
+    // Tag de sistema: la deuda reexpuesta sigue la capa sistema (precedencia sobre IA).
+    sistema.put("monto_liquidacion", deuda);
+    if (deudaLetras != null) {
+      sistema.put("monto_liquidacion_letras", deudaLetras);
+    }
   }
 
   private static String primero(Map<String, String> sistema, Map<String, String> ia, String... keys) {

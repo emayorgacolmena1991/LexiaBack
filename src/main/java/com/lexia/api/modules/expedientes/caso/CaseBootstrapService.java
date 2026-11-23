@@ -11,8 +11,8 @@ import java.util.Locale;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import com.lexia.api.modules.expedientes.escrituracion.CollectionFile;
-import com.lexia.api.modules.expedientes.escrituracion.CollectionFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.CollectionFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.CollectionFileRepository;
 import com.lexia.api.modules.expedientes.documentos.IngestionMode;
 import com.lexia.api.modules.expedientes.proceso.GateDef;
 import com.lexia.api.modules.expedientes.proceso.GateDefRepository;
@@ -23,8 +23,8 @@ import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
 import com.lexia.api.modules.expedientes.proceso.ValidationDef;
 import com.lexia.api.modules.expedientes.proceso.ValidationDefRepository;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFile;
-import com.lexia.api.modules.expedientes.escrituracion.WritingFileRepository;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")

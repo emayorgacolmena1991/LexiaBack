@@ -1,0 +1,142 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ------------------------< com.lexia:lexia-api >-------------------------
+[INFO] Building lexia-api 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] >>> spring-boot:4.1.1:run (default-cli) > test-compile @ lexia-api >>>
+[INFO] 
+[INFO] --- resources:3.5.0:resources (default-resources) @ lexia-api ---
+[INFO] Copying 4 resources from src\main\resources to target\classes
+[INFO] Copying 124 resources from src\main\resources to target\classes
+[INFO] 
+[INFO] --- compiler:3.15.0:compile (default-compile) @ lexia-api ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.5.0:testResources (default-testResources) @ lexia-api ---
+[INFO] Copying 1 resource from src\test\resources to target\test-classes
+[INFO] 
+[INFO] --- compiler:3.15.0:testCompile (default-testCompile) @ lexia-api ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] <<< spring-boot:4.1.1:run (default-cli) < test-compile @ lexia-api <<<
+[INFO] 
+[INFO] 
+[INFO] --- spring-boot:4.1.1:run (default-cli) @ lexia-api ---
+[INFO] Attaching agents: []
+11:45:42.276 [main] INFO com.lexia.api.config.EnvFileLoader -- Variables cargadas desde C:\Users\evillamar\Documents\lexia\backend\.env
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v4.1.1)
+
+2026-11-04T11:45:42.907-05:00  INFO 20368 --- [lexia-api] [           main] com.lexia.api.LexiaApiApplication        : Starting LexiaApiApplication using Java 17 with PID 20368 (C:\Users\evillamar\Documents\lexia\backend\target\classes started by evillamar in C:\Users\evillamar\Documents\lexia\backend)
+2026-11-04T11:45:42.909-05:00  INFO 20368 --- [lexia-api] [           main] com.lexia.api.LexiaApiApplication        : No active profile set, falling back to 1 default profile: "default"
+2026-11-04T11:45:43.877-05:00  INFO 20368 --- [lexia-api] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-11-04T11:45:44.078-05:00  INFO 20368 --- [lexia-api] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 194 ms. Found 92 JPA repository interfaces.
+2026-11-04T11:45:44.650-05:00  INFO 20368 --- [lexia-api] [           main] o.s.boot.tomcat.TomcatWebServer          : Tomcat initialized with port 8081 (http)
+2026-11-04T11:45:44.660-05:00  INFO 20368 --- [lexia-api] [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-11-04T11:45:44.660-05:00  INFO 20368 --- [lexia-api] [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/11.0.24]
+2026-11-04T11:45:44.706-05:00  INFO 20368 --- [lexia-api] [           main] b.w.c.s.WebApplicationContextInitializer : Root WebApplicationContext: initialization completed in 1744 ms
+2026-11-04T11:45:45.866-05:00  INFO 20368 --- [lexia-api] [           main] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://51.79.11.21:5432/lexia (PostgreSQL 18.6)
+2026-11-04T11:45:47.333-05:00  INFO 20368 --- [lexia-api] [           main] o.f.core.internal.command.DbValidate     : Successfully validated 92 migrations (execution time 00:00.551s)
+2026-11-04T11:45:49.506-05:00  INFO 20368 --- [lexia-api] [           main] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 91
+2026-11-04T11:45:49.609-05:00  INFO 20368 --- [lexia-api] [           main] o.f.core.internal.command.DbMigrate      : Schema "public" is up to date. No migration necessary.
+2026-11-04T11:45:50.415-05:00  INFO 20368 --- [lexia-api] [           main] org.hibernate.orm.jpa                    : HHH008540: Processing PersistenceUnitInfo [name: default]
+2026-11-04T11:45:50.495-05:00  INFO 20368 --- [lexia-api] [           main] org.hibernate.orm.core                   : HHH000001: Hibernate ORM core version 7.4.5.Final
+2026-11-04T11:45:51.298-05:00  INFO 20368 --- [lexia-api] [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-11-04T11:45:51.343-05:00  INFO 20368 --- [lexia-api] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-11-04T11:45:52.365-05:00  INFO 20368 --- [lexia-api] [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@552b15f6
+2026-11-04T11:45:52.368-05:00  INFO 20368 --- [lexia-api] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-11-04T11:45:53.293-05:00  INFO 20368 --- [lexia-api] [           main] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [undefined/unknown]
+	Database driver: undefined/unknown
+	Database dialect: PostgreSQLDialect
+	Database version: 18.6
+	Default catalog/schema: unknown/unknown
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	JDBC fetch size: undefined/unknown
+	Pool: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-11-04T11:45:57.080-05:00  INFO 20368 --- [lexia-api] [           main] org.hibernate.orm.core                   : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-11-04T11:45:58.710-05:00  INFO 20368 --- [lexia-api] [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-11-04T11:45:58.833-05:00  INFO 20368 --- [lexia-api] [           main] o.s.d.j.r.query.QueryEnhancerFactories   : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-11-04T11:45:59.318-05:00  INFO 20368 --- [lexia-api] [           main] o.s.boot.web.servlet.RegistrationBean    : Filter sessionAuthRegistration was not registered (disabled)
+2026-11-04T11:46:05.048-05:00  INFO 20368 --- [lexia-api] [           main] r$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with UserDetailsService bean with name userDetailsService
+2026-11-04T11:46:05.399-05:00 DEBUG 20368 --- [lexia-api] [           main] o.s.s.web.DefaultSecurityFilterChain     : Will secure any request with filters: DisableEncodeUrlFilter, WebAsyncManagerIntegrationFilter, SecurityContextHolderFilter, SessionAuthFilter, HeaderWriterFilter, CorsFilter, CsrfFilter, CsrfCookieFilter, LogoutFilter, RequestCacheAwareFilter, SecurityContextHolderAwareRequestFilter, AnonymousAuthenticationFilter, SessionManagementFilter, ExceptionTranslationFilter, AuthorizationFilter
+2026-11-04T11:46:06.251-05:00  INFO 20368 --- [lexia-api] [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-11-04T11:46:06.447-05:00  INFO 20368 --- [lexia-api] [           main] o.s.boot.tomcat.TomcatWebServer          : Tomcat started on port 8081 (http) with context path '/'
+2026-11-04T11:46:06.468-05:00  INFO 20368 --- [lexia-api] [           main] com.lexia.api.LexiaApiApplication        : Started LexiaApiApplication in 24.033 seconds (process running for 24.492)
+2026-11-04T11:46:07.359-05:00  INFO 20368 --- [lexia-api] [           main] com.lexia.api.config.FlywayStartupLog    : Flyway config: ignore-migration-patterns=*:missing activo. Verifica log de arranque: 'Current version: 87' + 'Migrating to 88' o 'up to date'.
+2026-11-04T11:46:07.608-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:08.647-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:11.122-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:12.145-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:14.599-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:15.623-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:18.066-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:19.093-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:21.554-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:22.573-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:25.027-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:26.045-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:28.279-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:29.292-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:31.316-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:32.330-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:34.803-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:35.819-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:38.265-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:39.279-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:41.735-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:42.770-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:45.205-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:46.224-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:48.695-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:49.711-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:52.149-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:53.183-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:55.429-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:56.442-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:46:58.476-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:46:59.494-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:01.960-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:02.988-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:05.431-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:06.565-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:09.039-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:10.056-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:12.514-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:13.528-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:16.029-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:17.111-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:19.594-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:20.648-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:23.169-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:24.203-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:26.662-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:27.698-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:30.248-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:31.284-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:33.860-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:34.948-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:37.411-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:38.451-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:40.898-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:41.921-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:44.353-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:45.375-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:47.812-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:48.834-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:51.285-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:52.315-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false
+2026-11-04T11:47:54.762-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll tick
+2026-11-04T11:47:55.794-05:00  INFO 20368 --- [lexia-api] [   scheduling-1] c.l.a.m.e.e.masivo.IngestaJobWorker      : ingesta poll documento=false ia=false

@@ -1,8 +1,8 @@
 package com.lexia.api.modules.expedientes.minutas;
 
 import com.lexia.api.common.api.ApiException;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ParrafoEditado;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ParrafoMinuta;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ParrafoEditado;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ParrafoMinuta;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

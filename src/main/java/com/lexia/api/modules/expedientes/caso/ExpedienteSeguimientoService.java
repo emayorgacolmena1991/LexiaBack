@@ -11,6 +11,7 @@ import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ValidacionItem;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoCargadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.DocumentoOcrResultadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.ClasificacionBorrador;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoService.StoredDoc;
 import com.lexia.api.modules.expedientes.documentos.CaseDocumentoStore;
 import com.lexia.api.modules.expedientes.documentos.CaseDocumentoStore.CaseFileContext;
@@ -78,13 +79,20 @@ public class ExpedienteSeguimientoService {
       return;
     }
     Map<String, String> ids = new LinkedHashMap<>();
+    Map<String, ClasificacionBorrador> clasificaciones = carga.clasificacionesDelBorrador(draftId);
     for (StoredDoc doc : docsDelBorrador(draftId)) {
       if (doc.bytes() == null || doc.bytes().length == 0) {
         continue;
       }
       DocumentoCargadoDTO saved =
           caseDocs.subir(ctx, doc.nombreOriginal(), doc.mimeType(), doc.bytes());
-      if (StringUtils.hasText(doc.codigoTipoDocumento())) {
+      ClasificacionBorrador clasificacion = clasificaciones.get(doc.idDocumento());
+      if (clasificacion != null && !ctx.ingestionMode().isFisicoEscaneado()) {
+        // Hereda tipo, sugerido, confianza, origen y estado tal cual: no se reclasifica.
+        caseDocs.copiarClasificacion(
+            ctx, saved.idDocumento(), doc.codigoTipoDocumento(), clasificacion);
+      } else if (StringUtils.hasText(doc.codigoTipoDocumento())) {
+        // Sin clasificación registrada el tipo lo puso el usuario: MANUAL.
         caseDocs.actualizarTipo(ctx, saved.idDocumento(), doc.codigoTipoDocumento());
       }
       ids.put(doc.idDocumento(), saved.idDocumento());
@@ -117,6 +125,36 @@ public class ExpedienteSeguimientoService {
             tenantId, caseId, titulo, "DOCUMENTO_SUBIDO", "COMPLETED", userId, Instant.now()));
     auditEvents.save(
         AuditEvent.of(tenantId, userId, "DOCUMENTO_SUBIDO", OBJETO, caseId, "OK", null, null));
+  }
+
+  /** El evento lleva el ID del documento: audit_event solo tiene un object_id, y es el expediente. */
+  @Transactional
+  public void documentoEliminado(UUID caseId, UUID tenantId, UUID documentId, String nombre) {
+    String titulo =
+        "Eliminación de documento" + (StringUtils.hasText(nombre) ? ": " + cortar(nombre, 180) : "");
+    AuthPrincipal auth = AuthContext.get();
+    UUID userId = auth == null ? null : auth.userId();
+    actions.save(
+        CaseAction.create(
+            tenantId, caseId, titulo, "DOCUMENTO_ELIMINADO", "COMPLETED", userId, Instant.now()));
+    auditEvents.save(
+        AuditEvent.of(
+            tenantId, userId, "DOCUMENTO_ELIMINADO:" + documentId, OBJETO, caseId, "OK", null, null));
+  }
+
+  @Transactional
+  public void documentoVisto(UUID caseId, UUID tenantId, UUID documentId) {
+    AuthPrincipal auth = AuthContext.get();
+    auditEvents.save(
+        AuditEvent.of(
+            tenantId,
+            auth == null ? null : auth.userId(),
+            "DOCUMENTO_VISTO:" + documentId,
+            OBJETO,
+            caseId,
+            "OK",
+            null,
+            null));
   }
 
   @Transactional
@@ -212,7 +250,7 @@ public class ExpedienteSeguimientoService {
     for (DocumentoOcrResultadoDTO row : ocr) {
       String result = resultadoIa(row.estado());
       String label = cortar(texto(row.tipoDocumento(), row.nombreOriginal(), "Documento"), 200);
-      String evidence = cortar(texto(row.motivo(), row.analisisJson(), row.estado()), 2000);
+      String evidence = cortar(evidenciaIa(row), 2000);
       CaseValidation validation =
           CaseValidation.create(tenantId, caseId, null, label, KIND_IA, result, "ocr");
       validation.applyEvaluation(result, evidence, "ocr");
@@ -274,10 +312,12 @@ public class ExpedienteSeguimientoService {
   private CaseFileContext requireCase(UUID caseId) {
     authorization.requirePermission("expedientes:caso:leer");
     AuthPrincipal auth = AuthContext.require();
-    legalCases
-        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, auth.tenantId())
-        .orElseThrow(
-            () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    LegalCase legalCase =
+        legalCases
+            .findByIdAndTenantIdAndDeletedAtIsNull(caseId, auth.tenantId())
+            .orElseThrow(
+                () -> new AuthException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Expediente no encontrado."));
+    CaseReadScope.assertCanRead(authorization, legalCase.getResponsibleMembershipId());
     CaseFileContext ctx = caseDocs.context(caseId.toString());
     if (ctx == null) {
       throw ApiException.notFound("Expediente no encontrado.");
@@ -285,11 +325,25 @@ public class ExpedienteSeguimientoService {
     return ctx;
   }
 
-  private String actor(UUID userId) {
+  public String actor(UUID userId) {
     if (userId == null) {
       return "Sistema";
     }
     return users.findById(userId).map(AppUser::getDisplayName).orElse("Sistema");
+  }
+
+  /** Nunca el JSON crudo del análisis: lo lee un abogado. */
+  static String evidenciaIa(DocumentoOcrResultadoDTO row) {
+    String documento = "'" + texto(row.nombreOriginal(), row.tipoDocumento(), "Documento") + "'";
+    String confianza = row.confianza() == null ? "" : " (confianza " + row.confianza() + " %)";
+    if (StringUtils.hasText(row.motivo())) {
+      return "La IA indica sobre " + documento + confianza + ": " + row.motivo().trim();
+    }
+    return switch (resultadoIa(row.estado())) {
+      case "PASS" -> "La IA leyó " + documento + " sin observaciones" + confianza + ".";
+      case "FAIL" -> "La IA no pudo leer " + documento + confianza + "; revise el archivo.";
+      default -> "La IA tiene dudas sobre " + documento + confianza + "; revíselo manualmente.";
+    };
   }
 
   private static String resultadoIa(String estado) {

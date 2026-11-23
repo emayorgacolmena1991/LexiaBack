@@ -88,6 +88,14 @@ public class DocumentVersion implements Persistable<UUID> {
     return documentId;
   }
 
+  public UUID getTenantId() {
+    return tenantId;
+  }
+
+  public String getContentHash() {
+    return contentHash;
+  }
+
   public String getStorageKey() {
     return storageKey;
   }

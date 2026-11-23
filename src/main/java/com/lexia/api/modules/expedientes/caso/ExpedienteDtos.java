@@ -65,7 +65,9 @@ public final class ExpedienteDtos {
       String atencion,
       String responsable,
       String iniciales,
-      String vencimiento) {}
+      String vencimiento,
+      String creado,
+      boolean tieneGatesPendientes) {}
 
   public record EscrituracionBandejaPage(
       List<EscrituracionBandejaItem> content,
@@ -81,6 +83,23 @@ public final class ExpedienteDtos {
     public static EscrituracionBandejaPage empty(int page, int size) {
       int safeSize = size <= 0 ? 20 : size;
       return new EscrituracionBandejaPage(List.of(), 0, 0, Math.max(page, 0), safeSize);
+    }
+  }
+
+  public record CaseSummaryPage(
+      List<CaseSummaryItem> content,
+      long totalElements,
+      int totalPages,
+      int number,
+      int size) {
+
+    public CaseSummaryPage {
+      content = content == null ? List.of() : List.copyOf(content);
+    }
+
+    public static CaseSummaryPage empty(int page, int size) {
+      int safeSize = size <= 0 ? 20 : size;
+      return new CaseSummaryPage(List.of(), 0, 0, Math.max(page, 0), safeSize);
     }
   }
 

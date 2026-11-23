@@ -2,7 +2,9 @@ package com.lexia.api.modules.expedientes.minutas;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.StringJoiner;
 import java.util.regex.Pattern;
 
 /**
@@ -12,7 +14,9 @@ import java.util.regex.Pattern;
  */
 public final class NumeroALetras {
 
-  private static final long MAXIMO = 999_999_999_999L;
+  private static final long BILLON = 1_000_000_000_000L;
+  private static final long MAXIMO = 999_999 * BILLON + (BILLON - 1);
+  private static final Locale ES = Locale.forLanguageTag("es");
 
   private static final String[] UNIDADES = {
     "", "un", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve",
@@ -29,9 +33,13 @@ public final class NumeroALetras {
   };
 
   private static final Pattern PREFIJO_MONEDA = Pattern.compile("(?i)^(USD|US\\$|\\$)+");
+  /** Capturas BIESS traen sufijo: {@code $ 84,500.00 USD}. */
+  private static final Pattern SUFIJO_MONEDA = Pattern.compile("(?i)(USD|US\\$|D[OÓ]LARES?)$");
   private static final Pattern SOLO_CIFRA = Pattern.compile("[0-9.,]+");
   private static final Pattern ENTERO_SIN_GRUPOS = Pattern.compile("\\d+");
   private static final Pattern ENTERO_AGRUPADO = Pattern.compile("\\d{1,3}(?:([.,])\\d{3})(?:\\1\\d{3})*");
+  private static final Pattern LETRAS_Y_CIFRA = Pattern.compile("([A-ZÁÉÍÓÚÑ ]+) \\(([^()]*\\d[^()]*)\\)");
+  private static final Pattern CIFRA_Y_LETRAS = Pattern.compile("(.*\\d.*?) \\(([A-ZÁÉÍÓÚÑ ]+)\\)");
 
   private NumeroALetras() {}
 
@@ -48,6 +56,54 @@ public final class NumeroALetras {
     return centavos == 0 ? letras : letras + String.format(" con %02d/100", centavos);
   }
 
+  private static final String[] DIGITOS = {
+    "CERO", "UNO", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"
+  };
+
+  /** Dígito a dígito, ignorando lo que no sea dígito: {@code "095-41" → "CERO NUEVE CINCO CUATRO UNO"}. */
+  public static String digitosALetras(String texto) {
+    StringJoiner out = new StringJoiner(" ");
+    if (texto != null) {
+      texto.chars().filter(c -> c >= '0' && c <= '9').forEach(c -> out.add(DIGITOS[c - '0']));
+    }
+    return out.toString();
+  }
+
+  /** Formato de notaría: letras primero y la cifra entre paréntesis, «CERO NUEVE (09)». */
+  public static String conCifra(String letras, String cifra) {
+    return letras + " (" + cifra + ")";
+  }
+
+  /**
+   * Cifra de un valor ya leído dígito a dígito por {@link #digitosALetras}: «CERO NUEVE (09)» o el
+   * formato anterior «09 (CERO NUEVE)» → «09». Vacío si no lo es o si las letras no coinciden.
+   */
+  public static Optional<String> cifraLeida(String valor) {
+    if (valor == null) {
+      return Optional.empty();
+    }
+    String t = valor.trim();
+    var nuevo = LETRAS_Y_CIFRA.matcher(t);
+    if (nuevo.matches() && nuevo.group(1).trim().equals(digitosALetras(nuevo.group(2)))) {
+      return Optional.of(nuevo.group(2).trim());
+    }
+    var anterior = CIFRA_Y_LETRAS.matcher(t);
+    if (anterior.matches() && anterior.group(2).equals(digitosALetras(anterior.group(1)))) {
+      return Optional.of(anterior.group(1).trim());
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Formato bancario, centavos siempre: {@code 120000 → "CIENTO VEINTE MIL CON 00/100"}. Sin
+   * "DÓLARES…": las plantillas ya lo escriben después del tag.
+   */
+  public static String montoBancario(BigDecimal valor) {
+    BigDecimal redondeado = valor.setScale(2, RoundingMode.HALF_UP);
+    int centavos = redondeado.remainder(BigDecimal.ONE).movePointRight(2).intValue();
+    return (entero(redondeado.longValue()) + String.format(" con %02d/100", centavos)).toUpperCase(ES);
+  }
+
   /**
    * Interpreta "85,000.00", "85.000,00", "85000", "$ 85.000,50": el último separador seguido de
    * 1-2 dígitos es el decimal; el resto son de miles (agrupados de a tres, un solo tipo).
@@ -58,6 +114,7 @@ public final class NumeroALetras {
     }
     String s = raw.replaceAll("[\\s\\u00A0]", "");
     s = PREFIJO_MONEDA.matcher(s).replaceFirst("");
+    s = SUFIJO_MONEDA.matcher(s).replaceFirst("");
     if (s.isEmpty() || !SOLO_CIFRA.matcher(s).matches() || !s.matches(".*\\d.*")) {
       return Optional.empty();
     }
@@ -95,9 +152,18 @@ public final class NumeroALetras {
     if (n == 0) {
       return "cero";
     }
-    long millones = n / 1_000_000;
+    long billones = n / BILLON;
+    long millones = n % BILLON / 1_000_000;
     long resto = n % 1_000_000;
     StringBuilder out = new StringBuilder();
+    if (billones == 1) {
+      out.append("un billón");
+    } else if (billones > 1) {
+      out.append(hastaMillon(billones)).append(" billones");
+    }
+    if (millones > 0 && !out.isEmpty()) {
+      out.append(' ');
+    }
     if (millones == 1) {
       out.append("un millón");
     } else if (millones > 1) {

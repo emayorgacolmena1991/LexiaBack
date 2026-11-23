@@ -91,7 +91,11 @@ public class CapturaBiessService {
     }
 
     String texto = textoEtiquetaValor(layout);
-    LOG.info("Captura BIESS case={} texto enviado al LLM:\n{}", caseId, texto);
+    // Sin el texto: lleva montos, cuotas y el nombre del apoderado (datos personales y financieros).
+    LOG.info(
+        "Captura BIESS case={} texto enviado al LLM chars={}",
+        caseId,
+        texto == null ? 0 : texto.length());
 
     ExtraccionCapturaBiess extraccion = analisis.extraerCapturaBiess(texto);
     if (extraccion == null || "ERROR".equals(extraccion.estado())) {

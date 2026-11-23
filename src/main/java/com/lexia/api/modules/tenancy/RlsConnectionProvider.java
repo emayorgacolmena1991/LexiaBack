@@ -3,6 +3,7 @@ package com.lexia.api.modules.tenancy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.UUID;
 import javax.sql.DataSource;
 import org.hibernate.engine.jdbc.connections.spi.MultiTenantConnectionProvider;
 import org.springframework.context.annotation.Profile;
@@ -55,6 +56,15 @@ public class RlsConnectionProvider implements MultiTenantConnectionProvider<Stri
   @Override
   public <T> T unwrap(Class<T> unwrapType) {
     return unwrapType.cast(this);
+  }
+
+  /** Fija el tenant del hilo. Hibernate lo aplica en la conexión con {@code set_config}. */
+  public static void setTenantId(UUID tenantId) {
+    if (tenantId == null) {
+      TenantContext.clear();
+    } else {
+      TenantContext.setTenantId(tenantId);
+    }
   }
 
   static void applyTenant(Connection connection, String tenantIdentifier) throws SQLException {

@@ -28,12 +28,21 @@ public class AuthChallenge {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
-  public static AuthChallenge loginMfa(UUID userId, Instant expiresAt) {
-    return create(userId, "LOGIN_MFA", expiresAt);
+  @Column(name = "preferred_tenant_id")
+  private UUID preferredTenantId;
+
+  public static AuthChallenge loginMfa(UUID userId, Instant expiresAt, UUID preferredTenantId) {
+    AuthChallenge challenge = create(userId, "LOGIN_MFA", expiresAt);
+    challenge.preferredTenantId = preferredTenantId;
+    return challenge;
   }
 
   public static AuthChallenge passwordReset(UUID userId, Instant expiresAt) {
     return create(userId, "PASSWORD_RESET", expiresAt);
+  }
+
+  public static AuthChallenge tenantSelection(UUID userId, Instant expiresAt) {
+    return create(userId, "TENANT_SELECTION", expiresAt);
   }
 
   private static AuthChallenge create(UUID userId, String purpose, Instant expiresAt) {
@@ -64,5 +73,9 @@ public class AuthChallenge {
 
   public void consume() {
     this.consumedAt = Instant.now();
+  }
+
+  public UUID getPreferredTenantId() {
+    return preferredTenantId;
   }
 }

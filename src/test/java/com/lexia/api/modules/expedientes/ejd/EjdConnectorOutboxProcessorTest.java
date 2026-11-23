@@ -40,7 +40,7 @@ class EjdConnectorOutboxProcessorTest {
   void processMarksCallSucceededAndPublishesOutbox() throws Exception {
     OutboxEvent event = OutboxEvent.create(TENANT_ID, EjdConnectorOutboxProcessor.OUTBOX_TYPE, "{}");
     setField(event, "id", OUTBOX_ID);
-    when(outboxEvents.findById(OUTBOX_ID)).thenReturn(Optional.of(event));
+    when(outboxEvents.bloquearSiLibre(OUTBOX_ID)).thenReturn(Optional.of(event));
 
     EjdConnectorOutboxPayload payload =
         new EjdConnectorOutboxPayload(
@@ -75,6 +75,16 @@ class EjdConnectorOutboxProcessorTest {
     ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
     verify(outboxEvents).save(outboxCaptor.capture());
     assertTrue(outboxCaptor.getValue().isPublished());
+  }
+
+  @Test
+  void eventoBloqueadoPorOtroNodoNoInvocaElConector() {
+    when(outboxEvents.bloquearSiLibre(OUTBOX_ID)).thenReturn(Optional.empty());
+
+    processor.process(OUTBOX_ID);
+
+    org.mockito.Mockito.verifyNoInteractions(liveClient, integrationCalls, integrations);
+    verify(outboxEvents, org.mockito.Mockito.never()).save(any());
   }
 
   private static void setField(Object target, String field, Object value) {

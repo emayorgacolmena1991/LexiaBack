@@ -42,10 +42,12 @@ public class EjdConnectorOutboxProcessor {
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void process(UUID outboxEventId) {
-    OutboxEvent event =
-        outboxEvents
-            .findById(outboxEventId)
-            .orElseThrow(() -> new IllegalStateException("Outbox event missing: " + outboxEventId));
+    // Otro nodo con el mismo evento lo salta en vez de invocar el conector dos veces.
+    OutboxEvent event = outboxEvents.bloquearSiLibre(outboxEventId).orElse(null);
+    if (event == null) {
+      LOG.info("Outbox {} en proceso por otro nodo o inexistente; se omite", outboxEventId);
+      return;
+    }
     if (event.isPublished()) {
       return;
     }

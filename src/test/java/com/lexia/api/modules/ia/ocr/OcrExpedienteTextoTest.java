@@ -3,6 +3,7 @@ package com.lexia.api.modules.ia.ocr;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.lexia.api.modules.expedientes.documentos.LegalDocument;
 import com.lexia.api.modules.ia.ocr.OcrExpedienteTexto.DocOcr;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -23,5 +24,30 @@ class OcrExpedienteTextoTest {
     assertTrue(payload.contains("JUAN PEREZ"));
     assertTrue(payload.contains("</expediente_ocr>"));
     assertFalse(payload.contains("%PDF"));
+  }
+
+  @Test
+  void excluyeSoportesDeNotariaDelTextoDeAnalisis() {
+    String payload =
+        OcrExpedienteTexto.documentos(
+            List.of(
+                new DocOcr("cedula-1", "CEDULA", "cedula.pdf", "JUAN PEREZ"),
+                new DocOcr(
+                    "rol-1",
+                    LegalDocument.TIPO_SOPORTE_INGRESOS,
+                    "roles.pdf",
+                    "SUELDO 1200 NO DEBE IR A IA"),
+                new DocOcr(
+                    "minuta-1",
+                    LegalDocument.TIPO_MINUTA_TERCERO,
+                    "minuta.pdf",
+                    "MINUTA TERCERO TAMPOCO")));
+
+    assertTrue(payload.contains("JUAN PEREZ"));
+    assertTrue(payload.contains("tipo=\"CEDULA\""));
+    assertFalse(payload.contains("SOPORTE_INGRESOS"));
+    assertFalse(payload.contains("SUELDO 1200"));
+    assertFalse(payload.contains("MINUTA_COMPRAVENTA_TERCERO"));
+    assertFalse(payload.contains("MINUTA TERCERO"));
   }
 }

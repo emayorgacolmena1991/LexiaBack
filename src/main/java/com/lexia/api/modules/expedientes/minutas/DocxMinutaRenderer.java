@@ -11,8 +11,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,7 +74,7 @@ public class DocxMinutaRenderer {
       List<String> sinDato =
           aliases
               ? MinutaTagAliases.sinResolver(tags, safe.keySet())
-              : tags.stream().filter(t -> !safe.containsKey(t)).toList();
+              : tags.stream().filter(t -> !clavePresente(safe, t)).toList();
       if (!sinDato.isEmpty()) {
         template.close();
         throw ApiException.badRequest(
@@ -81,7 +83,8 @@ public class DocxMinutaRenderer {
                 + " tiene placeholders sin dato asociado: "
                 + String.join(", ", sinDato.stream().map(t -> "{{" + t + "}}").toList()));
       }
-      template.render(aliases ? MinutaTagAliases.valoresPorTag(tags, safe) : safe);
+      Map<String, Object> renderData = aliases ? MinutaTagAliases.valoresPorTag(tags, safe) : safe;
+      template.render(mapaPoi(tags, renderData));
       template.write(out);
       template.close();
       byte[] bytes = out.toByteArray();
@@ -226,6 +229,80 @@ public class DocxMinutaRenderer {
       throw ApiException.badRequest("Plantilla no encontrada en classpath: " + classpathResource);
     }
     return resource;
+  }
+
+  /** Llave presente aunque el valor sea vacío: el tag existe y poi-tl lo deja en blanco. */
+  static boolean clavePresente(Map<String, Object> data, String tag) {
+    if (tag == null || data == null) {
+      return false;
+    }
+    if (data.containsKey(tag)) {
+      return true;
+    }
+    String n = snake(tag);
+    if (n == null) {
+      return false;
+    }
+    for (String key : data.keySet()) {
+      if (n.equals(snake(key))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Mapa que entra a poi-tl. Null y {@code nodata} no se copian: si el tag existía, queda {@code ""}.
+   */
+  static Map<String, Object> mapaPoi(List<String> tags, Map<String, Object> data) {
+    Map<String, Object> out = new LinkedHashMap<>();
+    Map<String, Object> src = data == null ? Map.of() : data;
+    for (String tag : tags) {
+      Object v = valorResuelto(src, tag);
+      if (!vacioPoi(v)) {
+        out.put(tag, v);
+      } else if (clavePresente(src, tag)) {
+        out.put(tag, "");
+      }
+    }
+    return out;
+  }
+
+  private static Object valorResuelto(Map<String, Object> data, String tag) {
+    if (data.containsKey(tag) && !vacioPoi(data.get(tag))) {
+      return data.get(tag);
+    }
+    String n = snake(tag);
+    if (n != null) {
+      for (Map.Entry<String, Object> e : data.entrySet()) {
+        if (n.equals(snake(e.getKey())) && !vacioPoi(e.getValue())) {
+          return e.getValue();
+        }
+      }
+    }
+    return data.get(tag);
+  }
+
+  private static boolean vacioPoi(Object v) {
+    if (v == null) {
+      return true;
+    }
+    String t = v.toString().trim();
+    return t.isEmpty() || "null".equalsIgnoreCase(t) || "nodata".equalsIgnoreCase(t);
+  }
+
+  static String snake(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String s = raw.trim();
+    if (s.isEmpty()) {
+      return null;
+    }
+    s = s.replaceAll("([\\p{Ll}\\p{Nd}])(\\p{Lu})", "$1_$2");
+    s = s.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{Nd}]+", "_").replaceAll("_+", "_");
+    s = s.replaceAll("^_|_$", "");
+    return s.isEmpty() ? null : s;
   }
 
   private static List<String> tagNames(XWPFTemplate template) {

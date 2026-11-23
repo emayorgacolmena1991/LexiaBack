@@ -2,10 +2,10 @@ package com.lexia.api.modules.expedientes.reglas;
 
 import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.DocumentoRequisitoItem;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.PlantillaItem;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoDetalle;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.ProductoItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.DocumentoRequisitoItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.PlantillaItem;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ProductoDetalle;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ProductoItem;
 import com.lexia.api.modules.identity.Catalog;
 import com.lexia.api.modules.identity.CatalogItem;
 import com.lexia.api.modules.identity.CatalogItemRepository;

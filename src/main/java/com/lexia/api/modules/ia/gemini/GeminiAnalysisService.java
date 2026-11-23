@@ -10,6 +10,7 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaVariableBinder;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
+import com.lexia.api.modules.ia.llm.LlmTimeoutException;
 import com.lexia.api.modules.ia.prompt.ActoVariableCatalog;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionCapturaBiess;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ExtraccionExpedienteCompleto;
@@ -56,7 +57,8 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         "vendedor": {"nombres": "", "cedula": "", "estadoCivil": ""},
         "inmueble": {"claveCatastral": "", "linderos": "", "avaluo": 0}},
        "dictamen": {"estado": "APPROVED|WITH_OBSERVATIONS|REJECTED", "resumen": "",
-        "observaciones": [{"codigo": "", "severidad": "HIGH|MEDIUM|LOW", "mensaje": ""}]}}
+        "observaciones": [{"codigo": "", "severidad": "HIGH|MEDIUM|LOW", "mensaje": "",
+          "documentoId": null}]}}
       """;
 
   private final String apiKey;
@@ -244,7 +246,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -312,7 +319,12 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
             }
             ultimoDiagnostico = "modelo=" + modelo + " respuesta vacía";
             sleepBackoff(intento, false);
+          } catch (LlmTimeoutException timeout) {
+            throw timeout;
           } catch (Exception e) {
+            if (LlmTimeoutException.es(e)) {
+              throw new LlmTimeoutException(e.getMessage(), e);
+            }
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             String kind = classifyError(msg);
             ultimoDiagnostico = "modelo=" + modelo + " " + kind + ": " + truncate(msg, 180);
@@ -356,7 +368,7 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         for (int intento = 1; intento <= 2; intento++) {
           try {
             String raw = client.models.generateContent(modelo, content, config).text();
-            LOG.info("Gemini captura BIESS modelo={} respuesta cruda: {}", modelo, raw);
+            LOG.info("Gemini captura BIESS modelo={} respuesta chars={}", modelo, raw == null ? 0 : raw.length());
             if (StringUtils.hasText(raw)) {
               DatosBiessMinuta data =
                   objectMapper.readValue(GeminiJsonSanitizer.limpiar(raw), DatosBiessMinuta.class);

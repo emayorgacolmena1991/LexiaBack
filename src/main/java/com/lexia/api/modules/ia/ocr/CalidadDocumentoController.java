@@ -1,6 +1,9 @@
 package com.lexia.api.modules.ia.ocr;
 
 import com.lexia.api.common.api.ApiException;
+import com.lexia.api.modules.expedientes.PermisoExpediente;
+import com.lexia.api.modules.identity.AuthorizationService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
@@ -20,13 +23,19 @@ import org.springframework.web.multipart.MultipartFile;
 public class CalidadDocumentoController {
 
   private final AzureCalidadDocumentoService calidadService;
+  private final ObjectProvider<AuthorizationService> authorization;
 
-  public CalidadDocumentoController(AzureCalidadDocumentoService calidadService) {
+  public CalidadDocumentoController(
+      AzureCalidadDocumentoService calidadService,
+      ObjectProvider<AuthorizationService> authorization) {
     this.calidadService = calidadService;
+    this.authorization = authorization;
   }
 
+  /** Llama a Azure (coste por página): exige permiso de escritura, no solo sesión. */
   @PostMapping(value = "/calidad-documento", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public CalidadDocumentoResultado evaluar(@RequestParam("file") MultipartFile file) {
+    PermisoExpediente.escribir(authorization);
     if (file == null || file.isEmpty()) {
       throw ApiException.badRequest("Archivo requerido (campo multipart 'file').");
     }

@@ -5,6 +5,7 @@ import com.lexia.api.modules.auth.AuthException;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseDetailItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryItem;
+import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CaseSummaryPage;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.CreateCaseRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaItem;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
@@ -22,8 +23,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
@@ -36,8 +39,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.expedientes.sla.SlaCalendarService;
-import com.lexia.api.modules.expedientes.escrituracion.EscrituracionDtos.EstadoEscrituracion;
-import com.lexia.api.modules.expedientes.escrituracion.ExpedienteEstadoService;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.EstadoEscrituracion;
+import com.lexia.api.modules.expedientes.escrituracion.secuencial.ExpedienteEstadoService;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 
 @Service
@@ -59,6 +62,7 @@ public class CaseService {
   private final ProcessStageDefRepository stageDefs;
   private final CaseBootstrapService bootstrap;
   private final ExpedienteEstadoService expedienteEstado;
+  private final CaseGateRepository caseGates;
 
   public CaseService(
       LegalCaseRepository legalCases,
@@ -71,7 +75,8 @@ public class CaseService {
       CaseStageRepository caseStages,
       ProcessStageDefRepository stageDefs,
       CaseBootstrapService bootstrap,
-      ExpedienteEstadoService expedienteEstado) {
+      ExpedienteEstadoService expedienteEstado,
+      CaseGateRepository caseGates) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.tenantParameters = tenantParameters;
@@ -83,6 +88,7 @@ public class CaseService {
     this.stageDefs = stageDefs;
     this.bootstrap = bootstrap;
     this.expedienteEstado = expedienteEstado;
+    this.caseGates = caseGates;
   }
 
   @Transactional(readOnly = true)
@@ -100,6 +106,10 @@ public class CaseService {
           predicates.add(cb.equal(root.get("tenantId"), tenantId));
           predicates.add(cb.isNull(root.get("deletedAt")));
           predicates.add(cb.equal(root.get("caseType"), "EJD"));
+          if (!CaseReadScope.canReadAll(authorization)) {
+            predicates.add(
+                cb.equal(root.get("responsibleMembershipId"), AuthContext.require().membershipId()));
+          }
           if (statusCode != null) {
             predicates.add(cb.equal(cb.upper(root.get("status")), statusCode));
           }
@@ -127,19 +137,160 @@ public class CaseService {
     Page<LegalCase> result =
         legalCases.findAll(
             spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
+    List<LegalCase> rows = result.getContent();
+    Set<UUID> pendingGates =
+        rows.isEmpty()
+            ? Set.of()
+            : new HashSet<>(
+                caseGates.findCaseIdsWithPendingGates(
+                    tenantId, rows.stream().map(LegalCase::getId).toList()));
     List<EscrituracionBandejaItem> content =
-        result.getContent().stream().map(row -> toBandeja(row, tenantId)).toList();
+        rows.stream()
+            .map(row -> toBandeja(row, tenantId, pendingGates.contains(row.getId())))
+            .toList();
     return new EscrituracionBandejaPage(
         content, result.getTotalElements(), result.getTotalPages(), result.getNumber(), result.getSize());
   }
 
   @Transactional(readOnly = true)
-  public List<CaseSummaryItem> listCases() {
+  public CaseSummaryPage listCasesPage(
+      String search,
+      String estado,
+      String vertical,
+      String responsable,
+      String prioridad,
+      String desde,
+      String hasta,
+      Boolean soloMios,
+      int page,
+      int size) {
     authorization.requirePermission("expedientes:caso:leer");
     UUID tenantId = AuthContext.require().tenantId();
-    return legalCases.findByTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(tenantId).stream()
-        .map(this::toSummary)
-        .toList();
+    AuthPrincipal principal = AuthContext.require();
+    int safeSize = Math.min(Math.max(size <= 0 ? 20 : size, 1), 100);
+    int safePage = Math.max(page, 0);
+    String statusCode = normalizeStatusFilter(estado);
+    String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+    String verticalFilter = vertical == null ? "" : vertical.trim();
+    String owner = responsable == null ? "" : responsable.trim();
+    String priorityCode = normalizePriorityFilter(prioridad);
+    Instant createdFrom = parseFilterDateStart(desde);
+    Instant createdTo = parseFilterDateEnd(hasta);
+    boolean restrictMine = Boolean.TRUE.equals(soloMios) || !CaseReadScope.canReadAll(authorization);
+
+    Specification<LegalCase> spec =
+        (root, query, cb) -> {
+          List<Predicate> predicates = new ArrayList<>();
+          predicates.add(cb.equal(root.get("tenantId"), tenantId));
+          predicates.add(cb.isNull(root.get("deletedAt")));
+          if (restrictMine) {
+            predicates.add(cb.equal(root.get("responsibleMembershipId"), principal.membershipId()));
+          }
+          if (statusCode != null) {
+            predicates.add(cb.equal(cb.upper(root.get("status")), statusCode));
+          }
+          if (!verticalFilter.isEmpty()) {
+            predicates.add(cb.equal(cb.lower(root.get("vertical")), verticalFilter.toLowerCase(Locale.ROOT)));
+          }
+          if (priorityCode != null) {
+            predicates.add(cb.equal(cb.upper(root.get("priority")), priorityCode));
+          }
+          if (createdFrom != null) {
+            predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), createdFrom));
+          }
+          if (createdTo != null) {
+            predicates.add(cb.lessThanOrEqualTo(root.get("createdAt"), createdTo));
+          }
+          if (!owner.isEmpty()) {
+            String likeOwner = "%" + owner.toLowerCase(Locale.ROOT) + "%";
+            Subquery<UUID> userIds = query.subquery(UUID.class);
+            Root<AppUser> userRoot = userIds.from(AppUser.class);
+            userIds
+                .select(userRoot.get("id"))
+                .where(cb.like(cb.lower(userRoot.get("displayName")), likeOwner));
+            Subquery<UUID> membershipIds = query.subquery(UUID.class);
+            Root<Membership> membershipRoot = membershipIds.from(Membership.class);
+            membershipIds
+                .select(membershipRoot.get("id"))
+                .where(
+                    cb.equal(membershipRoot.get("tenantId"), tenantId),
+                    cb.isNull(membershipRoot.get("deletedAt")),
+                    membershipRoot.get("userId").in(userIds));
+            predicates.add(root.get("responsibleMembershipId").in(membershipIds));
+          }
+          if (!term.isEmpty()) {
+            String like = "%" + term + "%";
+            Subquery<UUID> clients = query.subquery(UUID.class);
+            Root<CaseParty> party = clients.from(CaseParty.class);
+            clients
+                .select(party.get("caseId"))
+                .where(
+                    cb.equal(party.get("caseId"), root.get("id")),
+                    cb.equal(party.get("tenantId"), tenantId),
+                    cb.isNull(party.get("deletedAt")),
+                    cb.like(cb.lower(party.get("displayName")), like));
+            predicates.add(
+                cb.or(
+                    cb.like(cb.lower(root.get("code")), like),
+                    cb.like(cb.lower(root.get("subject")), like),
+                    cb.like(cb.lower(cb.coalesce(root.get("operationTypeCode"), "")), like),
+                    cb.exists(clients)));
+          }
+          return cb.and(predicates.toArray(Predicate[]::new));
+        };
+
+    Page<LegalCase> result =
+        legalCases.findAll(
+            spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
+    List<CaseSummaryItem> content = result.getContent().stream().map(this::toSummary).toList();
+    return new CaseSummaryPage(
+        content,
+        result.getTotalElements(),
+        result.getTotalPages(),
+        result.getNumber(),
+        result.getSize());
+  }
+
+  private static String normalizePriorityFilter(String prioridad) {
+    if (prioridad == null || prioridad.isBlank()) {
+      return null;
+    }
+    return normalizePriority(prioridad);
+  }
+
+  private static Instant parseFilterDateStart(String isoDate) {
+    if (isoDate == null || isoDate.isBlank()) {
+      return null;
+    }
+    try {
+      return java.time.LocalDate.parse(isoDate.trim()).atStartOfDay().toInstant(ZoneOffset.UTC);
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private static Instant parseFilterDateEnd(String isoDate) {
+    if (isoDate == null || isoDate.isBlank()) {
+      return null;
+    }
+    try {
+      return java.time.LocalDate.parse(isoDate.trim()).plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC).minusNanos(1);
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  @Transactional(readOnly = true)
+  public List<CaseSummaryItem> listCases() {
+    authorization.requirePermission("expedientes:caso:leer");
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    List<LegalCase> rows =
+        CaseReadScope.canReadAll(authorization)
+            ? legalCases.findByTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(tenantId)
+            : legalCases.findByTenantIdAndResponsibleMembershipIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+                tenantId, principal.membershipId());
+    return rows.stream().map(this::toSummary).toList();
   }
 
   @Transactional(readOnly = true)
@@ -152,6 +303,7 @@ public class CaseService {
     authorization.requirePermission("expedientes:caso:leer");
     UUID tenantId = AuthContext.require().tenantId();
     LegalCase legalCase = resolveCase(tenantId, ref);
+    CaseReadScope.assertCanRead(authorization, legalCase.getResponsibleMembershipId());
     EstadoEscrituracion estado = expedienteEstado.estadoFlujo(legalCase.getId());
     return toDetail(legalCase, estado);
   }
@@ -205,7 +357,8 @@ public class CaseService {
     }
   }
 
-  private EscrituracionBandejaItem toBandeja(LegalCase legalCase, UUID tenantId) {
+  private EscrituracionBandejaItem toBandeja(
+      LegalCase legalCase, UUID tenantId, boolean tieneGatesPendientes) {
     CaseParty client =
         caseParties
             .findFirstByCaseIdAndTenantIdAndKindAndDeletedAtIsNull(
@@ -215,7 +368,7 @@ public class CaseService {
     String operacion = legalCase.getOperationTypeCode();
     String clienteOperacion =
         operacion == null || operacion.isBlank() ? cliente : cliente + " · " + operacion.trim();
-    String etapa = resolveCurrentStageLabel(legalCase, tenantId);
+    String etapa = expedienteEstado.etiquetaEtapaOperativa(legalCase, tenantId);
     Responsible responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
     return new EscrituracionBandejaItem(
         legalCase.getId(),
@@ -226,7 +379,9 @@ public class CaseService {
         atencion(legalCase),
         responsible.name(),
         responsible.initials(),
-        legalCase.getSlaDueAt() == null ? "—" : GRID_DATE.format(legalCase.getSlaDueAt()));
+        legalCase.getSlaDueAt() == null ? "—" : GRID_DATE.format(legalCase.getSlaDueAt()),
+        legalCase.getCreatedAt() == null ? "" : GRID_DATE.format(legalCase.getCreatedAt()),
+        tieneGatesPendientes);
   }
 
   private static String atencion(LegalCase legalCase) {
@@ -237,13 +392,17 @@ public class CaseService {
     return mapPriorityLabel(legalCase.getPriority());
   }
 
-  private static String normalizeStatusFilter(String estado) {
+  static String normalizeStatusFilter(String estado) {
     if (estado == null || estado.isBlank()) {
       return null;
     }
     return switch (estado.trim().toLowerCase(Locale.ROOT)) {
       case "en trámite", "en tramite", "draft" -> "DRAFT";
-      case "cerrado", "closed" -> "CLOSED";
+      case "en revisión", "en revision" -> "IN_REVIEW";
+      case "con observación", "con observacion" -> "WITH_OBSERVATION";
+      case "pendiente" -> "PENDING";
+      case "con excepción", "con excepcion" -> "EXCEPTION";
+      case "cerrado", "resuelto", "closed" -> "CLOSED";
       default -> estado.trim().toUpperCase(Locale.ROOT);
     };
   }
@@ -262,7 +421,7 @@ public class CaseService {
         formatSla(legalCase.getSlaDueAt()),
         GRID_DATE.format(legalCase.getCreatedAt()),
         GRID_DATE.format(legalCase.getUpdatedAt()),
-        resolveCurrentStageLabel(legalCase, legalCase.getTenantId()),
+        expedienteEstado.etiquetaEtapaOperativa(legalCase, legalCase.getTenantId()),
         false);
   }
 
@@ -406,9 +565,14 @@ public class CaseService {
     };
   }
 
-  private static String mapStatusLabel(String status) {
+  /** Inverso de normalizeStatusFilter: el frontend vuelve a filtrar las filas por esta etiqueta. */
+  static String mapStatusLabel(String status) {
     return switch (status) {
       case "DRAFT" -> "En trámite";
+      case "IN_REVIEW" -> "En revisión";
+      case "WITH_OBSERVATION" -> "Con observación";
+      case "PENDING" -> "Pendiente";
+      case "EXCEPTION" -> "Con excepción";
       case "CLOSED" -> "Cerrado";
       default -> status;
     };
