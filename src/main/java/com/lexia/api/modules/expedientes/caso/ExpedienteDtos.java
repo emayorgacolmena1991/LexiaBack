@@ -20,7 +20,8 @@ public final class ExpedienteDtos {
       @Size(max = 160) String stage,
       @Size(max = 16) String priority,
       @Size(max = 240) String participants,
-      @Size(max = 64) String operationTypeCode) {}
+      @Size(max = 64) String operationTypeCode,
+      @Size(max = 80) String numeroInstancia) {}
 
   public record CreateCaseRequest(
       @NotBlank @Size(max = 400) String subject,
@@ -34,7 +35,8 @@ public final class ExpedienteDtos {
       @Size(max = 64) String operationTypeCode,
       @Size(max = 64) String productCode,
       @Size(max = 32) String ingestionMode,
-      @Size(max = 64) String canton) {}
+      @Size(max = 64) String canton,
+      @Size(max = 80) String numeroInstancia) {}
 
   public record StageAdvanceRequest(
       @Size(max = 16) String targetStageCode, @Size(max = 500) String comment) {}
@@ -67,7 +69,11 @@ public final class ExpedienteDtos {
       String iniciales,
       String vencimiento,
       String creado,
-      boolean tieneGatesPendientes) {}
+      boolean tieneGatesPendientes,
+      String numeroInstancia,
+      String producto,
+      String ultimoEstatus,
+      String ultimoEstatusEn) {}
 
   public record EscrituracionBandejaPage(
       List<EscrituracionBandejaItem> content,
@@ -123,7 +129,8 @@ public final class ExpedienteDtos {
       DatosBiessMinuta datosBiess,
       boolean hasDraft,
       int etapaIndex,
-      int wizardStep) {}
+      int wizardStep,
+      String numeroInstancia) {}
 
   public record ExpedienteExtraidoDTO(
       List<ArchivoEstadoDTO> archivosProcesados, DatosExtraidosDTO datosExtraidos) {}

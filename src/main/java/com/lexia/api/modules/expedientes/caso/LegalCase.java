@@ -59,6 +59,9 @@ public class LegalCase implements Persistable<UUID> {
   @Column(name = "product_code", length = 64)
   private String productCode;
 
+  @Column(name = "numero_instancia", length = 80)
+  private String numeroInstancia;
+
   @Column(name = "ingestion_mode", length = 32)
   private String ingestionMode;
 
@@ -216,6 +219,15 @@ public class LegalCase implements Persistable<UUID> {
 
   public void setProductCode(String productCode) {
     this.productCode = productCode;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getNumeroInstancia() {
+    return numeroInstancia;
+  }
+
+  public void setNumeroInstancia(String numeroInstancia) {
+    this.numeroInstancia = numeroInstancia;
     this.updatedAt = Instant.now();
   }
 

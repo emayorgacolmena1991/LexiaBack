@@ -17,16 +17,23 @@ import com.lexia.api.modules.tenancy.TenantParameterService;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
+import com.lexia.api.common.api.ApiException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -46,6 +53,8 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
 public class CaseService {
 
+  private static final Logger LOG = LoggerFactory.getLogger(CaseService.class);
+
   private static final DateTimeFormatter GRID_DATE =
       DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.forLanguageTag("es-CO"))
           .withZone(ZoneOffset.UTC);
@@ -62,6 +71,7 @@ public class CaseService {
   private final CaseBootstrapService bootstrap;
   private final ExpedienteEstadoService expedienteEstado;
   private final CaseGateRepository caseGates;
+  private final EstatusProcesoRepository estatus;
 
   public CaseService(
       LegalCaseRepository legalCases,
@@ -75,7 +85,8 @@ public class CaseService {
       ProcessStageDefRepository stageDefs,
       CaseBootstrapService bootstrap,
       ExpedienteEstadoService expedienteEstado,
-      CaseGateRepository caseGates) {
+      CaseGateRepository caseGates,
+      EstatusProcesoRepository estatus) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.tenantParameters = tenantParameters;
@@ -88,19 +99,36 @@ public class CaseService {
     this.bootstrap = bootstrap;
     this.expedienteEstado = expedienteEstado;
     this.caseGates = caseGates;
+    this.estatus = estatus;
   }
 
   @Transactional(readOnly = true)
   public EscrituracionBandejaPage bandeja(String search, String estado, int page, int size) {
     authorization.requirePermission("expedientes:caso:leer");
     UUID tenantId = AuthContext.require().tenantId();
-    int safeSize = Math.min(Math.max(size <= 0 ? 20 : size, 1), 100);
+    int safeSize = Math.min(Math.max(size <= 0 ? 20 : size, 1), MAX_BANDEJA);
     int safePage = Math.max(page, 0);
-    String statusCode = normalizeStatusFilter(estado);
-    String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
-
     Specification<LegalCase> spec =
-        (root, query, cb) -> {
+        bandejaSpec(tenantId, normalizeStatusFilter(estado), search, null);
+
+    Page<LegalCase> result =
+        legalCases.findAll(
+            spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
+    List<EscrituracionBandejaItem> content = filasBandeja(tenantId, result.getContent());
+    return new EscrituracionBandejaPage(
+        content, result.getTotalElements(), result.getTotalPages(), result.getNumber(), result.getSize());
+  }
+
+  /** Cada fila hace varias consultas (cliente, etapa, responsable): la página no pasa de esto. */
+  static final int MAX_BANDEJA = 200;
+  /** Lo que la bandeja puede tener cargado: el Excel exporta esas filas. */
+  static final int MAX_EXPORTAR = 1000;
+
+  /** Mismo alcance que la bandeja (tenant, EJD, no borrados, responsable si no lee todo). */
+  private Specification<LegalCase> bandejaSpec(
+      UUID tenantId, String statusCode, String search, Collection<UUID> ids) {
+    String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+    return (root, query, cb) -> {
           List<Predicate> predicates = new ArrayList<>();
           predicates.add(cb.equal(root.get("tenantId"), tenantId));
           predicates.add(cb.isNull(root.get("deletedAt")));
@@ -108,6 +136,9 @@ public class CaseService {
           if (!CaseReadScope.canReadAll(authorization)) {
             predicates.add(
                 cb.equal(root.get("responsibleMembershipId"), AuthContext.require().membershipId()));
+          }
+          if (ids != null) {
+            predicates.add(root.get("id").in(ids));
           }
           if (statusCode != null) {
             predicates.add(cb.equal(cb.upper(root.get("status")), statusCode));
@@ -127,28 +158,25 @@ public class CaseService {
                 cb.or(
                     cb.like(cb.lower(root.get("code")), like),
                     cb.like(cb.lower(root.get("subject")), like),
+                    cb.like(cb.lower(cb.coalesce(root.get("numeroInstancia"), "")), like),
                     cb.like(cb.lower(cb.coalesce(root.get("operationTypeCode"), "")), like),
                     cb.exists(clients)));
           }
           return cb.and(predicates.toArray(Predicate[]::new));
         };
+  }
 
-    Page<LegalCase> result =
-        legalCases.findAll(
-            spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
-    List<LegalCase> rows = result.getContent();
+  private List<EscrituracionBandejaItem> filasBandeja(UUID tenantId, List<LegalCase> rows) {
     Set<UUID> pendingGates =
         rows.isEmpty()
             ? Set.of()
             : new HashSet<>(
                 caseGates.findCaseIdsWithPendingGates(
                     tenantId, rows.stream().map(LegalCase::getId).toList()));
-    List<EscrituracionBandejaItem> content =
-        rows.stream()
-            .map(row -> toBandeja(row, tenantId, pendingGates.contains(row.getId())))
-            .toList();
-    return new EscrituracionBandejaPage(
-        content, result.getTotalElements(), result.getTotalPages(), result.getNumber(), result.getSize());
+    Map<UUID, EstatusProceso> ultimos = ultimosEstatus(tenantId, rows);
+    return rows.stream()
+        .map(row -> toBandeja(row, tenantId, pendingGates.contains(row.getId()), ultimos.get(row.getId())))
+        .toList();
   }
 
   @Transactional(readOnly = true)
@@ -203,6 +231,9 @@ public class CaseService {
                 principal.membershipId(),
                 principal.userId(),
                 slaDue));
+    if (request.numeroInstancia() != null && !request.numeroInstancia().isBlank()) {
+      created.setNumeroInstancia(request.numeroInstancia().trim());
+    }
     bootstrap.bootstrap(created, request, tenantId, principal.userId());
     // Entidad ya managed: el flush de commit persiste productCode/etapa.
     // Segundo save() + WritingFile merge con @Version provocaba 409 concurrente.
@@ -228,8 +259,59 @@ public class CaseService {
     }
   }
 
+  @Transactional
+  public CaseDetailItem actualizarNumeroInstancia(UUID caseId, String numero) {
+    authorization.requirePermission("expedientes:caso:escribir");
+    UUID tenantId = AuthContext.require().tenantId();
+    LegalCase legalCase = resolveCase(tenantId, caseId.toString());
+    String limpio = numero == null ? "" : numero.trim();
+    if (limpio.length() > 80) {
+      throw new AuthException(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "El número de instancia es demasiado largo.");
+    }
+    legalCase.setNumeroInstancia(limpio.isEmpty() ? null : limpio);
+    return getCase(caseId);
+  }
+
+  /**
+   * Excel de las filas que la bandeja tiene filtradas en pantalla. El cliente manda los ids (los
+   * filtros de la grilla viven en el front); aquí se vuelven a acotar al tenant y al alcance de la
+   * bandeja, así que un id ajeno simplemente no sale.
+   */
+  @Transactional(readOnly = true)
+  public byte[] exportarBandeja(List<UUID> ids) {
+    authorization.requirePermission("expedientes:caso:leer");
+    UUID tenantId = AuthContext.require().tenantId();
+    List<UUID> pedidos = ids == null ? List.of() : ids.stream().filter(Objects::nonNull).distinct().toList();
+    if (pedidos.size() > MAX_EXPORTAR) {
+      throw ApiException.badRequest("El Excel admite hasta " + MAX_EXPORTAR + " expedientes; acota los filtros.");
+    }
+    List<LegalCase> rows =
+        pedidos.isEmpty() ? List.of() : legalCases.findAll(bandejaSpec(tenantId, null, null, pedidos));
+    Map<UUID, Integer> orden = new HashMap<>();
+    for (int i = 0; i < pedidos.size(); i++) {
+      orden.put(pedidos.get(i), i);
+    }
+    List<LegalCase> ordenadas =
+        rows.stream().sorted(java.util.Comparator.comparingInt(r -> orden.get(r.getId()))).toList();
+    List<BandejaExcel.Fila> filas = new ArrayList<>();
+    for (EscrituracionBandejaItem item : filasBandeja(tenantId, ordenadas)) {
+      String cliente = item.clienteOperacion() == null ? "" : item.clienteOperacion().split("·")[0].trim();
+      filas.add(
+          new BandejaExcel.Fila(
+              item.codigo(),
+              item.numeroInstancia(),
+              cliente,
+              item.producto(),
+              item.etapa(),
+              item.ultimoEstatus(),
+              item.ultimoEstatusEn()));
+    }
+    LOG.info("Export bandeja escrituracion pedidos={} filas={}", pedidos.size(), filas.size());
+    return BandejaExcel.escribir(filas);
+  }
+
   private EscrituracionBandejaItem toBandeja(
-      LegalCase legalCase, UUID tenantId, boolean tieneGatesPendientes) {
+      LegalCase legalCase, UUID tenantId, boolean tieneGatesPendientes, EstatusProceso ultimo) {
     CaseParty client =
         caseParties
             .findFirstByCaseIdAndTenantIdAndKindAndDeletedAtIsNull(
@@ -252,7 +334,23 @@ public class CaseService {
         responsible.initials(),
         legalCase.getSlaDueAt() == null ? "—" : GRID_DATE.format(legalCase.getSlaDueAt()),
         legalCase.getCreatedAt() == null ? "" : GRID_DATE.format(legalCase.getCreatedAt()),
-        tieneGatesPendientes);
+        tieneGatesPendientes,
+        legalCase.getNumeroInstancia(),
+        legalCase.getProductCode(),
+        ultimo == null ? "" : ultimo.getTexto(),
+        ultimo == null ? "" : GRID_DATE.format(ultimo.getCreatedAt()));
+  }
+
+  private Map<UUID, EstatusProceso> ultimosEstatus(UUID tenantId, List<LegalCase> rows) {
+    Map<UUID, EstatusProceso> out = new HashMap<>();
+    if (rows.isEmpty()) {
+      return out;
+    }
+    for (EstatusProceso row :
+        estatus.findRecientes(tenantId, rows.stream().map(LegalCase::getId).toList())) {
+      out.putIfAbsent(row.getCaseId(), row);
+    }
+    return out;
   }
 
   private static String atencion(LegalCase legalCase) {
@@ -368,7 +466,8 @@ public class CaseService {
         estado == null ? DatosBiessMinuta.empty() : estado.datosBiess(),
         estado != null && estado.hasDraft(),
         estado == null ? 1 : estado.etapaIndex(),
-        estado == null ? 2 : estado.wizardStep());
+        estado == null ? 2 : estado.wizardStep(),
+        legalCase.getNumeroInstancia());
   }
 
   private Responsible resolveResponsible(UUID membershipId) {

@@ -65,6 +65,7 @@ class MinutaGenerationOverridesTest {
   private final ObjectMapper mapper = new ObjectMapper();
   private final MinutaDraftRepository drafts = mock(MinutaDraftRepository.class);
   private final DatosBiessStore datosBiess = mock(DatosBiessStore.class);
+  private final PrecioFormaPagoService precioFormaPago = mock(PrecioFormaPagoService.class);
   private final List<MinutaDraft> guardados = new ArrayList<>();
   private MinutaGenerationService service;
 
@@ -121,6 +122,7 @@ class MinutaGenerationOverridesTest {
                     "canton_inmueble",
                     "monto_prestamo")));
 
+    when(precioFormaPago.capa(any(), any())).thenReturn(Map.of(PrecioFormaPago.PRECIO, "100000"));
     DocxMinutaRenderer renderer = new DocxMinutaRenderer();
     service =
         new MinutaGenerationService(
@@ -140,7 +142,8 @@ class MinutaGenerationOverridesTest {
             promocion,
             mock(MinutaDocxContenido.class),
             new ExpedienteVariablesService(actos, renderer, mapper),
-            pdf);
+            pdf,
+            precioFormaPago);
   }
 
   @AfterEach
@@ -230,5 +233,30 @@ class MinutaGenerationOverridesTest {
     assertEquals("", mapper.readTree(nuevo.getDatosExtraidos()).path("nombre_vendedor").asText());
 
     verify(datosBiess, never()).guardar(any(), any(), any());
+  }
+
+  @Test
+  void minutaCompraventaSinPrecioNoSeGenera() {
+    when(precioFormaPago.capa(any(), any())).thenReturn(Map.of());
+    ApiException ex =
+        assertThrows(
+            ApiException.class, () -> service.generar(CASO, new CrearMinutaRequest(TIPO, null)));
+    assertEquals("PRECIO_REQUERIDO", ex.getCode());
+  }
+
+  @Test
+  void previsualizarSinPrecioNoCreaBorradorPeroSigueMostrandoElExistente() {
+    PreviewMinutaRequest request = new PreviewMinutaRequest(Map.of("nombre_vendedor", VENDEDOR), null);
+    when(precioFormaPago.capa(any(), any())).thenReturn(Map.of());
+    ApiException ex =
+        assertThrows(ApiException.class, () -> service.previsualizar(CASO, TIPO, request));
+    assertEquals("PRECIO_REQUERIDO", ex.getCode());
+    assertTrue(guardados.isEmpty(), "sin precio no se crea borrador");
+
+    when(precioFormaPago.capa(any(), any())).thenReturn(Map.of(PrecioFormaPago.PRECIO, "100000"));
+    service.previsualizar(CASO, TIPO, request);
+    when(precioFormaPago.capa(any(), any())).thenReturn(Map.of());
+    service.previsualizar(CASO, TIPO, request);
+    assertEquals(1, guardados.size(), "el borrador existente se sigue previsualizando");
   }
 }

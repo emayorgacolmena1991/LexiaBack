@@ -207,4 +207,26 @@ class ExpedienteVariablesServiceTest {
     assertTrue(service.leerOverrides(null).isEmpty());
     assertTrue(service.leerOverrides("{malformado").isEmpty());
   }
+
+  @Test
+  void precioPisaLaIaYElOverrideDelNumeroSeIgnora() {
+    MinutaViviendaData llm = new MinutaViviendaData();
+    llm.setPrecioCompraventaNumero("1");
+    Map<String, String> precio =
+        Map.of(
+            PrecioFormaPago.PRECIO, "80500.00",
+            PrecioFormaPago.ENTRADA, "500.00",
+            PrecioFormaPago.SALDO, "80000.00",
+            PrecioFormaPago.DETALLE, "literal calculado");
+    Map<String, String> overrides = new LinkedHashMap<>();
+    overrides.put(PrecioFormaPago.PRECIO, "1");
+    overrides.put(PrecioFormaPago.DETALLE, "literal corregido");
+
+    MinutaViviendaData out = service.fusionar(llm, null, precio, overrides);
+
+    assertEquals("80500.00", out.getPrecioCompraventaNumero());
+    assertEquals("500.00", out.getValorEntradaNumero());
+    assertEquals("80000.00", out.getSaldoCompraventaNumero());
+    assertEquals("literal corregido", out.toTemplateMap().get("detalle_forma_pago"));
+  }
 }

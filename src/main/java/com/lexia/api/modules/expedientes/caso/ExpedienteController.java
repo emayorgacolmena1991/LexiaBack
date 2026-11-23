@@ -14,13 +14,20 @@ import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.StageAdvanceRequest
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.StageRevertRequest;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ExpedienteExtraidoDTO;
 import com.lexia.api.modules.expedientes.caso.WorkspaceDtos.WorkspaceResponse;
+import com.lexia.api.common.api.Descargas;
+import com.lexia.api.modules.expedientes.documentos.ExpedientePdfService;
 import jakarta.validation.Valid;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -45,6 +52,8 @@ public class ExpedienteController {
   private final CaseExceptionResolutionService exceptionResolutionService;
   private final BorradorPromocionService promocion;
   private final ExpedienteSeguimientoService seguimiento;
+  private final EstatusProcesoService estatusProceso;
+  private final com.lexia.api.modules.expedientes.documentos.ExpedientePdfService expedientePdf;
 
   public ExpedienteController(
       DocumentExtractorService extractorService,
@@ -61,7 +70,11 @@ public class ExpedienteController {
           CaseExceptionResolutionService exceptionResolutionService,
       BorradorPromocionService promocion,
       @org.springframework.beans.factory.annotation.Autowired(required = false)
-          ExpedienteSeguimientoService seguimiento) {
+          ExpedienteSeguimientoService seguimiento,
+      @org.springframework.beans.factory.annotation.Autowired(required = false)
+          EstatusProcesoService estatusProceso,
+      @org.springframework.beans.factory.annotation.Autowired(required = false)
+          com.lexia.api.modules.expedientes.documentos.ExpedientePdfService expedientePdf) {
     this.extractorService = extractorService;
     this.caseService = caseService;
     this.workspaceService = workspaceService;
@@ -71,6 +84,8 @@ public class ExpedienteController {
     this.exceptionResolutionService = exceptionResolutionService;
     this.promocion = promocion;
     this.seguimiento = seguimiento;
+    this.estatusProceso = estatusProceso;
+    this.expedientePdf = expedientePdf;
   }
 
   @PostMapping("/{id}/exceptions/{exceptionId}/resolve")
@@ -115,6 +130,77 @@ public class ExpedienteController {
     }
     return caseService.bandeja(search, estado, page, size);
   }
+
+  /** Excel de las filas que la bandeja muestra con sus filtros (ids en el orden de la grilla). */
+  @PostMapping(
+      value = "/escrituracion/export",
+      produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+  public ResponseEntity<byte[]> exportarEscrituracion(@RequestBody ExportarBandejaBody body) {
+    if (caseService == null) {
+      return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+    }
+    byte[] archivo = caseService.exportarBandeja(body == null ? null : body.ids());
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, Descargas.adjunto("escrituracion.xlsx"))
+        .body(archivo);
+  }
+
+  @GetMapping("/estatus-etapas")
+  public List<EstatusProcesoService.Etapa> estatusEtapas() {
+    if (estatusProceso == null) {
+      return List.of();
+    }
+    return estatusProceso.etapas();
+  }
+
+  @PatchMapping("/{id}/numero-instancia")
+  public CaseDetailItem numeroInstancia(@PathVariable UUID id, @RequestBody MapNumero body) {
+    if (caseService == null) {
+      return null;
+    }
+    return caseService.actualizarNumeroInstancia(id, body == null ? null : body.numero());
+  }
+
+  @GetMapping("/{id}/estatus")
+  public List<EstatusProcesoService.Registro> estatus(@PathVariable UUID id) {
+    return estatusProceso == null ? List.of() : estatusProceso.listar(id);
+  }
+
+  @PostMapping("/{id}/estatus")
+  public EstatusProcesoService.Registro guardarEstatus(
+      @PathVariable UUID id, @RequestBody EstatusBody body) {
+    if (estatusProceso == null) {
+      return null;
+    }
+    return estatusProceso.registrar(id, body == null ? null : body.etapa(), body == null ? null : body.texto());
+  }
+
+  /** PDF unido del expediente; los nombres omitidos van en {@value #HEADER_OMITIDOS} (URL-encoded, por coma). */
+  @GetMapping(value = "/{id}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+  public ResponseEntity<byte[]> pdf(@PathVariable UUID id) {
+    if (expedientePdf == null) {
+      return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+    }
+    ExpedientePdfService.PdfExpediente pdf = expedientePdf.unir(id);
+    String omitidos =
+        pdf.omitidos().stream()
+            .map(nombre -> URLEncoder.encode(nombre, StandardCharsets.UTF_8))
+            .collect(Collectors.joining(","));
+    return ResponseEntity.ok()
+        .contentType(MediaType.APPLICATION_PDF)
+        .header(HttpHeaders.CONTENT_DISPOSITION, Descargas.adjunto("expediente-" + pdf.codigo() + ".pdf"))
+        .header("X-Content-Type-Options", "nosniff")
+        .header(HEADER_OMITIDOS, omitidos)
+        .body(pdf.pdf());
+  }
+
+  public static final String HEADER_OMITIDOS = "X-Pdf-Omitidos";
+
+  public record ExportarBandejaBody(List<UUID> ids) {}
+
+  public record MapNumero(String numero) {}
+
+  public record EstatusBody(String etapa, String texto) {}
 
   @GetMapping("/{id}/validaciones")
   public List<ValidacionItem> validaciones(@PathVariable UUID id) {

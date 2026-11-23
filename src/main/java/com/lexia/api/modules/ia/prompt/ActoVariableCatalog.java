@@ -145,6 +145,7 @@ public class ActoVariableCatalog {
           "cuota_inicial_num",
           "saldo_credito_letras",
           "saldo_credito_num",
+          "detalle_entrada",
           "nombre_afiliados_jubilados",
           "descripcion_inmueble_hipotecado",
           "parroquia_hipoteca",
@@ -256,6 +257,7 @@ public class ActoVariableCatalog {
           "valor_entrada_letras",
           "saldo_compraventa_numero",
           "saldo_compraventa_letras",
+          "detalle_entrada",
           "apoderado_biess",
           "cedula_apoderado_biess");
 
@@ -306,6 +308,7 @@ public class ActoVariableCatalog {
           "repertorio_antecedente",
           "saldo_compraventa_letras",
           "saldo_compraventa_numero",
+          "detalle_entrada",
           "superficie_m2",
           "telefono_deudor",
           "telefono_vendedor",

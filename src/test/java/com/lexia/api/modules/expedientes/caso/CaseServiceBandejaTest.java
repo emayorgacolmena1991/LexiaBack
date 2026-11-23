@@ -1,11 +1,13 @@
 package com.lexia.api.modules.expedientes.caso;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.api.ApiException;
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthPrincipal;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.EscrituracionBandejaPage;
@@ -26,6 +28,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
@@ -100,7 +103,8 @@ class CaseServiceBandejaTest {
             stageDefs,
             bootstrap,
             expedienteEstado,
-            caseGates);
+            caseGates,
+            org.mockito.Mockito.mock(EstatusProcesoRepository.class));
 
     EscrituracionBandejaPage page = service.bandeja("ana", "En trámite", 0, 20);
 
@@ -115,6 +119,62 @@ class CaseServiceBandejaTest {
     assertTrue(page.content().get(0).tieneGatesPendientes());
     assertTrue(page.content().stream().noneMatch(row -> row.clienteOperacion().contains("Demo")));
     verify(authorization).requirePermission("expedientes:caso:leer");
+  }
+
+  private CaseService servicio() {
+    return new CaseService(
+        legalCases,
+        authorization,
+        tenantParameters,
+        slaCalendar,
+        memberships,
+        users,
+        caseParties,
+        caseStages,
+        stageDefs,
+        bootstrap,
+        expedienteEstado,
+        caseGates,
+        org.mockito.Mockito.mock(EstatusProcesoRepository.class));
+  }
+
+  @Test
+  void bandejaNoPasaDelTopeDeFilas() {
+    AuthContext.set(new AuthPrincipal(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()));
+    when(legalCases.findAll(any(Specification.class), any(Pageable.class)))
+        .thenReturn(new PageImpl<>(List.of()));
+
+    servicio().bandeja(null, null, 0, 2000);
+
+    ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+    verify(legalCases).findAll(any(Specification.class), pageable.capture());
+    assertEquals(CaseService.MAX_BANDEJA, pageable.getValue().getPageSize());
+  }
+
+  @Test
+  void exportarRespetaElOrdenDeLaGrillaYElTope() throws Exception {
+    UUID tenant = UUID.randomUUID();
+    UUID membershipId = UUID.randomUUID();
+    AuthContext.set(new AuthPrincipal(UUID.randomUUID(), UUID.randomUUID(), tenant, membershipId));
+    LegalCase a =
+        LegalCase.create(tenant, "LEX-A", "EJD", "Escrituración", "A", "ALTA", membershipId, null, null);
+    LegalCase b =
+        LegalCase.create(tenant, "LEX-B", "EJD", "Escrituración", "B", "ALTA", membershipId, null, null);
+    // El repositorio devuelve en otro orden; el Excel sigue el de la grilla.
+    when(legalCases.findAll(any(Specification.class))).thenReturn(List.of(a, b));
+    when(caseGates.findCaseIdsWithPendingGates(any(UUID.class), any())).thenReturn(List.of());
+
+    byte[] xlsx = servicio().exportarBandeja(List.of(b.getId(), a.getId()));
+
+    try (var book = new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(xlsx))) {
+      var sheet = book.getSheetAt(0);
+      assertEquals("LEX-B", sheet.getRow(1).getCell(0).getStringCellValue());
+      assertEquals("LEX-A", sheet.getRow(2).getCell(0).getStringCellValue());
+    }
+    verify(authorization).requirePermission("expedientes:caso:leer");
+    List<UUID> demasiados =
+        java.util.stream.Stream.generate(UUID::randomUUID).limit(CaseService.MAX_EXPORTAR + 1).toList();
+    assertThrows(ApiException.class, () -> servicio().exportarBandeja(demasiados));
   }
 
   @Test

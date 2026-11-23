@@ -325,6 +325,10 @@ public class MinutaViviendaData {
   @JsonProperty("detalle_forma_pago")
   private String detalleFormaPago = "";
 
+  /** Anticipos a media frase, después de la entrada (Individual/Solidaria, Preferencial, Terreno). */
+  @JsonProperty("detalle_entrada")
+  private String detalleEntrada = "";
+
   @JsonProperty("art_y_deudor_2")
   private String artYDeudor2 = "";
 
@@ -1077,6 +1081,7 @@ public class MinutaViviendaData {
         "detalles_linderos_especificos_completos",
         blankToNodata(detallesLinderosEspecificosCompletos));
     map.put("detalle_forma_pago", blankToNodata(detalleFormaPago));
+    map.put("detalle_entrada", blankToNodata(detalleEntrada));
     map.put("art_y_deudor_2", blankToNodata(artYDeudor2));
     map.put("calidad_afiliado", blankToNodata(calidadAfiliado));
     return map;
