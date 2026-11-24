@@ -16,7 +16,9 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteService.NuevoExpediente;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.ActaTableParser.FilaActa;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaColumnas;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaDetalle;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.RemapeoRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaItemDto;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaItemRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaRequest;
@@ -60,6 +62,8 @@ public class ActaImportService {
   private final AzureDocumentIntelligenceClient azure;
   private final AuthorizationService authorization;
   private final AppUserRepository users;
+  private final ActaIaExtractor actaIa;
+  private final CoactivaActaFormatoRepository formatos;
 
   public ActaImportService(
       CoactivaActaRepository actas,
@@ -69,7 +73,11 @@ public class ActaImportService {
       CoactivaDelegadoService delegados,
       AzureDocumentIntelligenceClient azure,
       AuthorizationService authorization,
-      AppUserRepository users) {
+      AppUserRepository users,
+      ActaIaExtractor actaIa,
+      CoactivaActaFormatoRepository formatos) {
+    this.actaIa = actaIa;
+    this.formatos = formatos;
     this.actas = actas;
     this.items = items;
     this.expedientes = expedientes;
@@ -137,7 +145,18 @@ public class ActaImportService {
       throw new ApiException(HttpStatus.BAD_GATEWAY, "COA_OCR_ERROR", "El OCR del acta falló: " + ex.getMessage());
     }
 
-    ActaTableParser.Resultado resultado = ActaTableParser.interpretar(tablas);
+    // Orden: formato guardado del tenant → palabras clave → IA (solo si lo anterior no alcanza).
+    Map<String, CoactivaActaFormato> formatosTenant = formatosPorFirma(tenantId);
+    List<String> firmasAplicadas = new ArrayList<>();
+    ActaTableParser.Resultado leido =
+        ActaTableParser.interpretar(
+            tablas, ActaFormatos.conGuardados(guardados(formatosTenant), firmasAplicadas::add));
+    ActaTableParser.Resultado resultado = actaIa.mejorar(leido, tablas, textoDocumento);
+    List<String> advertencias = new ArrayList<>(resultado.advertencias());
+    firmasAplicadas.stream().distinct().map(formatosTenant::get).filter(Objects::nonNull).forEach(f -> {
+      f.registrarUso();
+      advertencias.add(0, "Se aplicó el formato guardado «" + f.getNombre() + "».");
+    });
     LocalDate detectada = ActaTableParser.fechaEnDocumento(textoDocumento, tablas);
     LocalDate fecha = detectada != null ? detectada : (fechaActa != null ? fechaActa : LocalDate.now());
     CoactivaActa acta = CoactivaActa.create(tenantId, normalizarTipo(tipo), fuente, principal.userId());
@@ -152,21 +171,149 @@ public class ActaImportService {
         nombreUsuario(principal),
         null);
     acta.setUecNombre(CoactivaTexto.truncate(CoactivaTexto.nombrePropio(uecTexto), 120));
+    acta.setTablasJson(ActaFormatos.serializar(tablas));
     actas.save(acta);
 
     CoactivaArchivo archivo = expedienteService.guardarArchivo(principal, file, CoactivaArchivo.ACTA);
     archivo.vincularActa(acta.getId());
     acta.setArchivoId(archivo.getId());
 
-    for (FilaActa fila : resultado.filas()) {
-      CoactivaActaItem item = CoactivaActaItem.create(tenantId, acta.getId(), fila.fila());
-      aplicarDatos(tenantId, item, fila.oficina(), fila.operacion(), fila.juicio(), fila.deudor(),
-          fila.cedula(), fila.etapa(), fila.fojas());
-      items.save(item);
+    crearItems(tenantId, acta, resultado.filas());
+    items.flush();
+    revalidar(tenantId, acta);
+    return detalle(tenantId, acta, advertencias);
+  }
+
+  /** Columnas del acta para revisarlas o reasignarlas a mano. */
+  @Transactional(readOnly = true)
+  public ActaColumnas columnas(UUID id, Integer tabla, Integer fila) {
+    authorization.requirePermission(CoactivaPermisos.LEER);
+    UUID tenantId = AuthContext.require().tenantId();
+    CoactivaActa acta = require(tenantId, id);
+    List<List<List<String>>> tablas = tablasGuardadas(acta);
+    try {
+      return ActaFormatos.columnas(
+          tablas, tabla, fila, guardados(formatosPorFirma(tenantId)), remapeable(tenantId, acta));
+    } catch (IllegalArgumentException ex) {
+      throw ApiException.badRequest(ex.getMessage());
+    }
+  }
+
+  /**
+   * Rehace las filas del acta con el mapeo elegido por el usuario y, si lo pide, lo recuerda para
+   * las próximas actas con la misma cabecera. Solo en borrador y sin expedientes generados.
+   */
+  @Transactional
+  public ActaDetalle remapear(UUID id, RemapeoRequest request) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenantId = principal.tenantId();
+    CoactivaActa acta = requireBorrador(tenantId, id);
+    if (!remapeable(tenantId, acta)) {
+      throw new ApiException(
+          HttpStatus.CONFLICT,
+          "COA_ACTA_CON_EXPEDIENTES",
+          "El acta ya tiene expedientes generados; no se pueden reasignar las columnas.");
+    }
+    List<List<List<String>>> tablas = tablasGuardadas(acta);
+    if (request.tabla() < 0 || request.tabla() >= tablas.size()) {
+      throw ApiException.badRequest("La tabla indicada no existe en el acta.");
+    }
+    List<List<String>> grid = tablas.get(request.tabla());
+    if (request.filaCabecera() < 0 || request.filaCabecera() >= grid.size()) {
+      throw ApiException.badRequest("La fila de cabecera indicada no existe.");
+    }
+    List<String> cabecera = grid.get(request.filaCabecera());
+    String firma = ActaTableParser.firma(cabecera);
+    if (firma == null) {
+      throw ApiException.badRequest("La fila elegida como cabecera está vacía.");
+    }
+    Map<ActaTableParser.Campo, Integer> mapeo;
+    try {
+      mapeo = ActaFormatos.validarMapeo(request.mapeo(), ActaFormatos.columnas(grid));
+    } catch (IllegalArgumentException ex) {
+      throw ApiException.badRequest(ex.getMessage());
+    }
+    ActaTableParser.Resultado resultado = ActaTableParser.interpretar(tablas, ActaFormatos.exacto(firma, mapeo));
+    if (resultado.filas().isEmpty()) {
+      throw new ApiException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "COA_ACTA_MAPEO_SIN_FILAS",
+          "Con esas columnas no salió ninguna fila. Revisa la cabecera y el mapeo.");
+    }
+
+    items.deleteAll(items.findByTenantIdAndActaIdOrderByFilaAsc(tenantId, id));
+    items.flush();
+    crearItems(tenantId, acta, resultado.filas());
+    if (resultado.uec() != null && acta.getUecNombre() == null) {
+      acta.setUecNombre(CoactivaTexto.truncate(CoactivaTexto.nombrePropio(resultado.uec()), 120));
     }
     items.flush();
     revalidar(tenantId, acta);
-    return detalle(tenantId, acta, resultado.advertencias());
+
+    List<String> advertencias = new ArrayList<>();
+    advertencias.add("Columnas reasignadas a mano: " + resultado.filas().size() + " fila(s).");
+    if (Boolean.TRUE.equals(request.guardarFormato())) {
+      CoactivaActaFormato formato =
+          formatos
+              .findByTenantIdAndFirma(tenantId, firma)
+              .orElseGet(() -> CoactivaActaFormato.create(tenantId, firma, principal.userId()));
+      String nombre =
+          CoactivaTexto.blankToNull(request.nombreFormato()) != null
+              ? CoactivaTexto.truncate(request.nombreFormato().trim(), 160)
+              : ActaFormatos.nombrePorDefecto(cabecera);
+      formato.definir(nombre, ActaFormatos.celdasAJson(cabecera), ActaFormatos.mapeoAJson(mapeo));
+      formatos.save(formato);
+      advertencias.add("Formato «" + nombre + "» guardado: se aplicará solo a las próximas actas con esta cabecera.");
+    }
+    return detalle(tenantId, acta, advertencias);
+  }
+
+  private void crearItems(UUID tenantId, CoactivaActa acta, List<FilaActa> filas) {
+    for (FilaActa fila : filas) {
+      CoactivaActaItem item = CoactivaActaItem.create(tenantId, acta.getId(), fila.fila());
+      aplicarDatos(tenantId, item, fila.oficina(), fila.operacion(), fila.juicio(), fila.deudor(),
+          fila.cedula(), fila.etapa(), fila.fojas());
+      if (acta.getDelegadoId() != null) {
+        item.setDelegadoId(acta.getDelegadoId());
+      }
+      items.save(item);
+    }
+  }
+
+  private List<List<List<String>>> tablasGuardadas(CoactivaActa acta) {
+    List<List<List<String>>> tablas = ActaFormatos.deserializar(acta.getTablasJson());
+    if (tablas.isEmpty()) {
+      throw new ApiException(
+          HttpStatus.CONFLICT,
+          "COA_ACTA_SIN_TABLAS",
+          "Esta acta no guarda las tablas originales (es manual o se importó antes de esta versión). "
+              + "Vuelve a importarla para revisar las columnas.");
+    }
+    return tablas;
+  }
+
+  /** Borrador y ninguna fila ya convertida en expediente. */
+  private boolean remapeable(UUID tenantId, CoactivaActa acta) {
+    return acta.isBorrador()
+        && items.findByTenantIdAndActaIdOrderByFilaAsc(tenantId, acta.getId()).stream()
+            .noneMatch(i -> CoactivaActaItem.VINCULADO.equals(i.getEstadoMatch()));
+  }
+
+  private Map<String, CoactivaActaFormato> formatosPorFirma(UUID tenantId) {
+    Map<String, CoactivaActaFormato> porFirma = new LinkedHashMap<>();
+    for (CoactivaActaFormato f : formatos.findByTenantIdOrderByUpdatedAtDesc(tenantId)) {
+      porFirma.putIfAbsent(f.getFirma(), f);
+    }
+    return porFirma;
+  }
+
+  private static Map<String, ActaFormatos.Guardado> guardados(Map<String, CoactivaActaFormato> porFirma) {
+    Map<String, ActaFormatos.Guardado> guardados = new HashMap<>();
+    porFirma.forEach(
+        (firma, f) ->
+            guardados.put(firma, new ActaFormatos.Guardado(f.getNombre(), ActaFormatos.mapeoDesdeJson(f.getMapeo()))));
+    return guardados;
   }
 
   @Transactional

@@ -279,6 +279,17 @@ public class GeminiAnalysisService implements AnalisisDocumentoService {
         "diagnóstico coactivo");
   }
 
+  @Override
+  public ValidacionDocumentoJson extraerActaCoactiva(String systemPrompt, String textoActa) {
+    return completarJson(
+        systemPrompt,
+        textoActa,
+        120_000,
+        16_384,
+        "Sin texto para extraer las filas del acta.",
+        "extracción de acta coactiva");
+  }
+
   private ValidacionDocumentoJson completarJson(
       String systemPrompt,
       String textoDocumento,

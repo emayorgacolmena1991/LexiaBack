@@ -94,4 +94,29 @@ public final class CoactivaIngestaDtos {
   public record CargaMasivaResponse(int total, int vinculados, int sinAsignar, List<ArchivoItem> archivos) {}
 
   public record VincularRequest(@NotNull UUID expedienteId) {}
+
+  /** Una columna del acta tal como vino, con ejemplos y el campo asignado (o null = ignorar). */
+  public record ColumnaActa(int indice, String titulo, List<String> ejemplos, String campo) {}
+
+  /**
+   * Vista para revisar el mapeo de columnas. {@code filas}: primeras filas de la tabla para elegir
+   * cuál es la cabecera. {@code editable}: borrador sin expedientes generados.
+   */
+  public record ActaColumnas(
+      int tabla,
+      int totalTablas,
+      int filaCabecera,
+      List<List<String>> filas,
+      List<ColumnaActa> columnas,
+      List<String> campos,
+      String formatoNombre,
+      boolean editable) {}
+
+  /** {@code mapeo}: índice de columna → campo (JUICIO, DEUDOR, …); las que no estén se ignoran. */
+  public record RemapeoRequest(
+      @NotNull Integer tabla,
+      @NotNull Integer filaCabecera,
+      @NotNull Map<Integer, String> mapeo,
+      Boolean guardarFormato,
+      @Size(max = 160) String nombreFormato) {}
 }

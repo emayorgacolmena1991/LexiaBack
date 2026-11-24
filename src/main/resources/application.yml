@@ -83,6 +83,10 @@ lexia:
       # Bloques de 80.000 caracteres que un mismo expediente manda a la vez al LLM (1-8).
       # 1 = secuencial, como antes. Total de llamadas en vuelo ≈ worker.hilos × este valor.
       bloques-paralelo: ${LEXIA_COACTIVAS_LLM_BLOQUES_PARALELO:3}
+    acta:
+      # Si la cabecera del acta no se reconoce (o salen pocas filas completas), se pide al LLM que
+      # extraiga las filas. Solo se usa si mejora la lectura por palabras clave.
+      ia-respaldo: ${LEXIA_COACTIVAS_ACTA_IA_RESPALDO:true}
     # Datos institucionales de las actuaciones .docx. Vacío → se toman del expediente analizado
     # o la generación informa la variable como faltante.
     plantillas:
