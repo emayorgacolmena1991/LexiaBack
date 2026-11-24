@@ -42,8 +42,8 @@ class ActoVariableCatalogTest {
 
     assertEquals(21, catalog.resolve("VIV_TERMINADA_PREF", "CONTRATO_MUTUO").campos().size());
     assertEquals(21, catalog.resolve("TERRENO_Y_VIVIENDA", "CONTRATO_MUTUO").campos().size());
-    assertEquals(49, catalog.resolve("TERRENO_Y_VIVIENDA", "MINUTA_COMPRAVENTA").campos().size());
-    assertEquals(44, catalog.resolve("VIV_TERMINADA_PREF", "MINUTA_COMPRAVENTA").campos().size());
+    assertEquals(55, catalog.resolve("TERRENO_Y_VIVIENDA", "MINUTA_COMPRAVENTA").campos().size());
+    assertEquals(50, catalog.resolve("VIV_TERMINADA_PREF", "MINUTA_COMPRAVENTA").campos().size());
     assertEquals(19, catalog.resolve("VIV_TERMINADA_IND", "CONTRATO_MUTUO").campos().size());
     assertEquals(17, catalog.resolve("SUSTITUCION_HIPOTECA", "CONTRATO_MUTUO").campos().size());
 

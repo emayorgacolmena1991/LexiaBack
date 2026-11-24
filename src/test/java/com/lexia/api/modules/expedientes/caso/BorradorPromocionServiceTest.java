@@ -63,7 +63,7 @@ class BorradorPromocionServiceTest {
     when(caseService.getCase(OFFICIAL)).thenReturn(detail(OFFICIAL));
 
     CaseDetailItem created =
-        service.promover(new PromoverBorradorRequest(DRAFT, "Casa", "Ana", null, null, null, null, null));
+        service.promover(new PromoverBorradorRequest(DRAFT, "Casa", "Ana", null, null, null, null, null, null));
 
     assertEquals(OFFICIAL, created.id());
     verify(borradores).marcarPromovido(DRAFT, TENANT, OFFICIAL);
@@ -85,6 +85,20 @@ class BorradorPromocionServiceTest {
     when(borradores.find(DRAFT, TENANT)).thenReturn(Optional.of(row));
 
     assertEquals(OFFICIAL, service.asegurarExpediente(DRAFT));
+    verify(caseService, never()).createCase(any());
+  }
+
+  @Test
+  void promoverExpedienteYaOficialAplicaElNumeroDeInstancia() {
+    when(legalCases.findByIdAndTenantIdAndDeletedAtIsNull(OFFICIAL, TENANT))
+        .thenReturn(Optional.of(org.mockito.Mockito.mock(LegalCase.class)));
+    when(caseServices.getIfAvailable()).thenReturn(caseService);
+    when(caseService.getCase(OFFICIAL)).thenReturn(detail(OFFICIAL));
+
+    service.promover(
+        new PromoverBorradorRequest(OFFICIAL, "Casa", "Ana", null, null, null, null, null, " INS-7 "));
+
+    verify(caseService).actualizarNumeroInstancia(OFFICIAL, "INS-7");
     verify(caseService, never()).createCase(any());
   }
 
@@ -111,6 +125,7 @@ class BorradorPromocionServiceTest {
         DatosBiessMinuta.empty(),
         false,
         1,
-        4);
+        4,
+        null);
   }
 }

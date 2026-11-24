@@ -27,6 +27,9 @@ import com.lexia.api.modules.expedientes.escrituracion.core.ProcesarExpedienteCo
 import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
+import com.lexia.api.modules.expedientes.minutas.PrecioFormaPagoService;
+import com.lexia.api.modules.expedientes.minutas.PrecioFormaPagoService.PrecioEntrada;
+import com.lexia.api.modules.expedientes.minutas.PrecioFormaPagoService.PrecioVista;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -56,6 +59,7 @@ public class EscrituracionAbogadoController {
   private final IaAnalysisService iaAnalysis;
   private final MinutaGenerationService minutaGeneration;
   private final CapturaBiessService capturaBiess;
+  private final PrecioFormaPagoService precioFormaPago;
   private final ExpedienteEstadoService estado;
   private final RegularizacionEscrituracionService regularizacion;
 
@@ -66,6 +70,7 @@ public class EscrituracionAbogadoController {
       IaAnalysisService iaAnalysis,
       MinutaGenerationService minutaGeneration,
       CapturaBiessService capturaBiess,
+      PrecioFormaPagoService precioFormaPago,
       ExpedienteEstadoService estado,
       RegularizacionEscrituracionService regularizacion) {
     this.productos = productos;
@@ -73,6 +78,7 @@ public class EscrituracionAbogadoController {
     this.iaAnalysis = iaAnalysis;
     this.minutaGeneration = minutaGeneration;
     this.capturaBiess = capturaBiess;
+    this.precioFormaPago = precioFormaPago;
     this.estado = estado;
     this.regularizacion = regularizacion;
   }
@@ -289,6 +295,16 @@ public class EscrituracionAbogadoController {
   public DatosBiessMinuta extraerCapturaBiess(
       @PathVariable UUID id, @RequestParam("file") MultipartFile file) {
     return capturaBiess.extraer(id, file);
+  }
+
+  @GetMapping("/expedientes/{id}/escrituracion/precio-forma-pago")
+  public PrecioVista obtenerPrecioFormaPago(@PathVariable UUID id) {
+    return precioFormaPago.obtener(id);
+  }
+
+  @PutMapping("/expedientes/{id}/escrituracion/precio-forma-pago")
+  public PrecioVista guardarPrecioFormaPago(@PathVariable UUID id, @RequestBody PrecioEntrada body) {
+    return precioFormaPago.guardar(id, body);
   }
 
   @GetMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/datos-biess")

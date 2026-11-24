@@ -84,6 +84,7 @@ public class MinutaGenerationService {
   private final MinutaDocxContenido contenido;
   private final ExpedienteVariablesService variablesService;
   private final DocxPdfConverter pdf;
+  private final PrecioFormaPagoService precioFormaPago;
 
   private static final String MIME_DOCX =
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -115,7 +116,8 @@ public class MinutaGenerationService {
       BorradorPromocionService promocion,
       MinutaDocxContenido contenido,
       ExpedienteVariablesService variablesService,
-      DocxPdfConverter pdf) {
+      DocxPdfConverter pdf,
+      PrecioFormaPagoService precioFormaPago) {
     this.authorization = authorization;
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
@@ -133,6 +135,7 @@ public class MinutaGenerationService {
     this.contenido = contenido;
     this.variablesService = variablesService;
     this.pdf = pdf;
+    this.precioFormaPago = precioFormaPago;
   }
 
   // --- TICKET-INT-102: flujo data-driven (variables JSON → poi-tl → PDF de previsualización) ---
@@ -161,12 +164,13 @@ public class MinutaGenerationService {
       completarDesdeConsolidado(tenantId, caseId, base);
     }
     DatosBiessMinuta biess = datosBiess.cargar(caseId, tenantId);
-    MinutaViviendaData data = variablesService.fusionar(base, biess, overrides);
+    Map<String, String> precio = precioFormaPago.capa(tenantId, caseId);
+    MinutaViviendaData data = variablesService.fusionar(base, biess, precio, overrides);
     return respuestaVariables(
         draft,
         descriptor,
         variablesService.consolidar(descriptor, data),
-        variablesService.origenes(descriptor, base, biess, overrides),
+        variablesService.origenes(descriptor, base, biess, precio, overrides),
         biess);
   }
 
@@ -194,6 +198,8 @@ public class MinutaGenerationService {
     MinutaViviendaData renderizado = draft == null ? null : loadData(draft);
     MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, renderizado);
     if (draft == null) {
+      // Sin borrador, la vista previa lo crea: es generar. Un borrador existente se sigue viendo.
+      exigirPrecioCompraventa(tenantId, caseId, kind);
       base = datosBase(tenantId, caseId, legalCase, null, product, kind);
       draft = minutaDrafts.save(MinutaDraft.create(tenantId, file.getId(), product, kind));
     } else if (base == null) {
@@ -207,7 +213,8 @@ public class MinutaGenerationService {
         variablesService.normalizarOverrides(descriptor, request == null ? null : request.variables()));
     // La tienda BIESS solo guarda la captura: los cambios manuales viven en los overrides.
     DatosBiessMinuta biessGuardado = datosBiess.cargar(caseId, tenantId);
-    MinutaViviendaData data = variablesService.fusionar(base, biessGuardado, overrides);
+    Map<String, String> precio = precioFormaPago.capa(tenantId, caseId);
+    MinutaViviendaData data = variablesService.fusionar(base, biessGuardado, precio, overrides);
 
     byte[] docx =
         renderizarDataDriven(draft, descriptor, renderizado == null ? base : renderizado, data);
@@ -230,7 +237,7 @@ public class MinutaGenerationService {
             draft,
             descriptor,
             consolidadas,
-            variablesService.origenes(descriptor, base, biessGuardado, overrides),
+            variablesService.origenes(descriptor, base, biessGuardado, precio, overrides),
             biessGuardado));
   }
 
@@ -444,6 +451,7 @@ public class MinutaGenerationService {
           "Plantilla no disponible para este producto (o la suministra la compañía): " + kind);
     }
 
+    exigirPrecioCompraventa(tenantId, caseId, kind);
     MinutaTemplateDescriptor descriptor = catalog.require(product, kind);
     MinutaViviendaData base =
         datosBase(
@@ -457,8 +465,9 @@ public class MinutaGenerationService {
     MinutaDraft anterior = ultimoDraft(file, tenantId, kind);
     Map<String, String> overrides =
         variablesService.leerOverrides(anterior == null ? null : anterior.getOverrides());
+    Map<String, String> precio = precioFormaPago.capa(tenantId, caseId);
     MinutaViviendaData data =
-        variablesService.fusionar(base, datosBiess.cargar(caseId, tenantId), overrides);
+        variablesService.fusionar(base, datosBiess.cargar(caseId, tenantId), precio, overrides);
     validarCriticos(descriptor, data, caseId);
 
     byte[] docx = renderer.renderVivienda(descriptor, data);
@@ -787,6 +796,19 @@ public class MinutaGenerationService {
     return renderer.camposPendientes(descriptor, data).stream()
         .map(MinutaViviendaData::etiqueta)
         .toList();
+  }
+
+  private void exigirPrecioCompraventa(UUID tenantId, UUID caseId, String kind) {
+    if (!"MINUTA_COMPRAVENTA".equals(kind)) {
+      return;
+    }
+    if (PrecioFormaPago.tienePrecio(precioFormaPago.capa(tenantId, caseId))) {
+      return;
+    }
+    throw new ApiException(
+        HttpStatus.BAD_REQUEST,
+        "PRECIO_REQUERIDO",
+        "Registra el precio de venta en el apartado Precio y forma de pago del expediente antes de generar la minuta de compraventa.");
   }
 
   /**
