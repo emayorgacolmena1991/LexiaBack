@@ -58,8 +58,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 /**
- * PDF Ãºnico del juicio: Azure OCR del archivo completo, prompt de {@code coactiva_prompt_catalog}
- * segÃºn la etapa, diagnÃ³stico JSON en {@code coactiva_analisis}.
+ * PDF único del juicio: Azure OCR del archivo completo, prompt de {@code coactiva_prompt_catalog}
+ * según la etapa, diagnóstico JSON en {@code coactiva_analisis}.
  */
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -67,27 +67,27 @@ public class CoactivaExpedienteAnalisisWorker {
 
   private static final Logger LOG = LoggerFactory.getLogger(CoactivaExpedienteAnalisisWorker.class);
   private static final ObjectMapper JSON = new ObjectMapper();
-  /** ponytail: foja mÃ¡s larga que esto se parte en el Ãºltimo salto de lÃ­nea. Subir si una foja no cabe. */
+  /** ponytail: foja más larga que esto se parte en el último salto de línea. Subir si una foja no cabe. */
   private static final int CHUNK_CHARS = 80_000;
   private static final int MAX_HISTORIAL = 12_000;
   private static final int MAX_ALERTAS = 40;
-  /** ponytail: tope de ventanas; si un juicio nombra mÃ¡s depositarios, subir MAX_FRAGMENTOS. */
+  /** ponytail: tope de ventanas; si un juicio nombra más depositarios, subir MAX_FRAGMENTOS. */
   private static final int MAX_FRAGMENTOS = 12;
-  /** ponytail: 800 centrados en el hit. Subir VENTANA si la cÃ©dula queda a mÃ¡s de 400 caracteres. */
+  /** ponytail: 800 centrados en el hit. Subir VENTANA si la cédula queda a más de 400 caracteres. */
   private static final int VENTANA = 800;
   private static final Pattern DEPOSITARIO =
       Pattern.compile("depositario", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
   private static final String ENCABEZADO_FRAGMENTOS =
       "\n\n--- DATOS DEL DEPOSITARIO ENCONTRADOS EN EL TEXTO ---\n";
   private static final String PROMPT_DEPOSITARIO =
-      "Eres un extractor de datos. Del siguiente texto, extrae el nombre completo, cÃ©dula y fecha de designaciÃ³n del Depositario Judicial. Devuelve SOLO un JSON con las claves nombre_depositario, cedula_depositario y fecha_auto_designacion.";
+      "Eres un extractor de datos. Del siguiente texto, extrae el nombre completo, cédula y fecha de designación del Depositario Judicial. Devuelve SOLO un JSON con las claves nombre_depositario, cedula_depositario y fecha_auto_designacion.";
   private static final String HISTORIAL =
       """
-      === HISTORIAL DE DIAGNÃ“STICO PREVIO ===
+      === HISTORIAL DE DIAGNÓSTICO PREVIO ===
       %s
       === NUEVA PIEZA PROCESAL ===
 
-      INSTRUCCIÃ“N: La pieza nueva puede cambiar la etapa, cerrar observaciones ya resueltas o agregar tareas. Actualiza etapa_sugerida, resuelve observaciones que el documento cierre y suma acciones nuevas. No elimines hitos confirmados salvo revocatoria explÃ­cita.
+      INSTRUCCIÓN: La pieza nueva puede cambiar la etapa, cerrar observaciones ya resueltas o agregar tareas. Actualiza etapa_sugerida, resuelve observaciones que el documento cierre y suma acciones nuevas. No elimines hitos confirmados salvo revocatoria explícita.
       """;
   private static final String TIPO_PROMPT = "EXPEDIENTE_UNIFICADO";
   private static final String PROMPT_FALLBACK =
@@ -217,8 +217,8 @@ public class CoactivaExpedienteAnalisisWorker {
   }
 
   /**
-   * Las respuestas invÃ¡lidas de la IA se guardan como error. Una excepciÃ³n (OCR Azure, disco, BD)
-   * sale al worker de {@code app.jobs} para reintento; {@link #abandonar} cierra el anÃ¡lisis al
+   * Las respuestas inválidas de la IA se guardan como error. Una excepción (OCR Azure, disco, BD)
+   * sale al worker de {@code app.jobs} para reintento; {@link #abandonar} cierra el análisis al
    * agotar los intentos.
    */
   public void ejecutar(UUID tenantId, UUID archivoId) {
@@ -234,7 +234,7 @@ public class CoactivaExpedienteAnalisisWorker {
       return;
     }
     if (archivo == null || !archivo.analizando() || archivo.getExpedienteId() == null) {
-      LOG.warn("DiagnÃ³stico sin archivo en anÃ¡lisis archivo={} tenant={}", archivoId, tenantId);
+      LOG.warn("Diagnóstico sin archivo en análisis archivo={} tenant={}", archivoId, tenantId);
       return;
     }
     UUID expedienteId = archivo.getExpedienteId();
@@ -248,19 +248,19 @@ public class CoactivaExpedienteAnalisisWorker {
       avisar(expedienteId, "ANALYSIS_COMPLETED");
     }
     LOG.info(
-        "DiagnÃ³stico expediente={} archivo={} porcentaje={}",
+        "Diagnóstico expediente={} archivo={} porcentaje={}",
         expedienteId,
         archivoId,
         resultado.diagnostico() == null ? null : resultado.diagnostico().porcentajeCompletitud());
   }
 
   /**
-   * El job agotÃ³ sus reintentos en {@code app.jobs}: sin esto el archivo y el expediente quedan en
+   * El job agotó sus reintentos en {@code app.jobs}: sin esto el archivo y el expediente quedan en
    * ANALIZANDO para siempre y {@code reanalizar} responde 409.
    */
   public void abandonar(UUID tenantId, UUID archivoId, String error) {
     RlsConnectionProvider.setTenantId(tenantId);
-    String msg = truncate(error == null ? "El anÃ¡lisis no terminÃ³." : error, 600);
+    String msg = truncate(error == null ? "El análisis no terminó." : error, 600);
     UUID expedienteId =
         tx.execute(
             status -> {
@@ -311,14 +311,14 @@ public class CoactivaExpedienteAnalisisWorker {
             + variablesDeEtapa(ctx.etapa());
     Long promptId = prompt == null ? null : prompt.getId();
     if (dummy) {
-      LOG.info("DiagnÃ³stico dummy archivo={}", archivo.getId());
+      LOG.info("Diagnóstico dummy archivo={}", archivo.getId());
       Parse parsed = parser.parse(DUMMY_JSON);
       return parsed.ok()
           ? Resultado.ok(ctx.etapa(), promptId, parsed.diagnostico())
           : Resultado.error(ctx.etapa(), promptId, parsed.error());
     }
     if (!analisis.isConfigured()) {
-      LOG.warn("DiagnÃ³stico sin proveedor IA archivo={}", archivo.getId());
+      LOG.warn("Diagnóstico sin proveedor IA archivo={}", archivo.getId());
       return Resultado.error(ctx.etapa(), promptId, "No hay un proveedor de IA configurado para diagnosticar.");
     }
     LOG.info("Paso 1 OCR Azure expediente archivo={}", archivo.getId());
@@ -337,11 +337,11 @@ public class CoactivaExpedienteAnalisisWorker {
         extraido.caracteres(),
         ms(inicioOcr));
     if (CoactivaPdfTexto.calidadInsuficiente(extraido)) {
-      LOG.warn("DiagnÃ³stico OCR calidad insuficiente archivo={}", archivo.getId());
+      LOG.warn("Diagnóstico OCR calidad insuficiente archivo={}", archivo.getId());
       return Resultado.calidad(ctx.etapa(), promptId, CoactivaPdfTexto.mensajeCalidad(extraido.paginas()));
     }
     if (!StringUtils.hasText(extraido.texto())) {
-      LOG.warn("DiagnÃ³stico OCR sin texto archivo={}", archivo.getId());
+      LOG.warn("Diagnóstico OCR sin texto archivo={}", archivo.getId());
       return Resultado.error(ctx.etapa(), promptId, "El PDF no contiene texto legible.");
     }
     List<String> bloques = partirOcr(extraido.texto());
@@ -358,19 +358,19 @@ public class CoactivaExpedienteAnalisisWorker {
     }
     ObjectNode unido = paso2.unido();
     if (unido == null) {
-      return Resultado.error(ctx.etapa(), promptId, "La IA devolviÃ³ una respuesta vacÃ­a.");
+      return Resultado.error(ctx.etapa(), promptId, "La IA devolvió una respuesta vacía.");
     }
     unido = segundaPasadaDepositario(archivo.getId(), unido, extraido.texto());
     String jsonUnido;
     try {
       jsonUnido = JSON.writeValueAsString(unido);
     } catch (Exception e) {
-      return Resultado.error(ctx.etapa(), promptId, "No se pudo unir el diagnÃ³stico por bloques.");
+      return Resultado.error(ctx.etapa(), promptId, "No se pudo unir el diagnóstico por bloques.");
     }
     Parse parsed = parser.parse(jsonUnido);
     if (!parsed.ok()) {
       LOG.warn(
-          "DiagnÃ³stico JSON unificado invÃ¡lido archivo={}: {}",
+          "Diagnóstico JSON unificado inválido archivo={}: {}",
           archivo.getId(),
           truncate(parsed.error(), 300));
       return Resultado.error(ctx.etapa(), promptId, parsed.error());
@@ -500,7 +500,7 @@ public class CoactivaExpedienteAnalisisWorker {
     Parse parsed = parser.parse(raw.json());
     if (!parsed.ok()) {
       LOG.warn(
-          "DiagnÃ³stico JSON invÃ¡lido archivo={} bloque={}/{}: {}",
+          "Diagnóstico JSON inválido archivo={} bloque={}/{}: {}",
           archivoId,
           i + 1,
           bloques.size(),
@@ -548,8 +548,8 @@ public class CoactivaExpedienteAnalisisWorker {
             return;
           }
           CoactivaDiagnostico diag = resultado.diagnostico();
-          // Un PDF reemplazado mientras corrÃ­a solo suma sus piezas: la etapa sugerida, la
-          // justificaciÃ³n y la evidencia siguen siendo las del PDF vigente.
+          // Un PDF reemplazado mientras corría solo suma sus piezas: la etapa sugerida, la
+          // justificación y la evidencia siguen siendo las del PDF vigente.
           CoactivaDiagnosticoMerge.Fusion fusion =
               vigente
                   ? CoactivaDiagnosticoMerge.fusionar(
@@ -594,7 +594,7 @@ public class CoactivaExpedienteAnalisisWorker {
                     tenantId,
                     expediente.getId(),
                     "EXPEDIENTE_ANALIZADO",
-                    "DiagnÃ³stico del expediente",
+                    "Diagnóstico del expediente",
                     diag.siguienteAccion(),
                     null,
                     archivoId));
@@ -828,7 +828,7 @@ public class CoactivaExpedienteAnalisisWorker {
     return partes.isEmpty() ? List.of(ocr) : partes;
   }
 
-  /** Ãšltima foja ({@code --- FOJA n ---}) o salto de pÃ¡gina que cabe; si no hay, el Ãºltimo salto de lÃ­nea. */
+  /** Última foja ({@code --- FOJA n ---}) o salto de página que cabe; si no hay, el último salto de línea. */
   private static int ultimoCorte(String ocr, int desde, int hasta) {
     int foja = ocr.lastIndexOf("\n--- FOJA ", hasta);
     if (foja <= desde) {
@@ -846,8 +846,8 @@ public class CoactivaExpedienteAnalisisWorker {
   }
 
   /**
-   * Primer valor Ãºtil gana. Un null o un hueco del bloque siguiente no pisa lo ya hallado;
-   * una clave que solo aparece despuÃ©s se agrega.
+   * Primer valor útil gana. Un null o un hueco del bloque siguiente no pisa lo ya hallado;
+   * una clave que solo aparece después se agrega.
    */
   static ObjectNode unirDiagnostico(ObjectNode base, String json) {
     JsonNode nodo;
@@ -1064,7 +1064,7 @@ public class CoactivaExpedienteAnalisisWorker {
     return detectada.isEmpty() ? null : detectada;
   }
 
-  /** Gana el hito mÃ¡s avanzado. INDETERMINADA no pisa una etapa ya hallada. */
+  /** Gana el hito más avanzado. INDETERMINADA no pisa una etapa ya hallada. */
   private static boolean etapaMasAvanzada(String nueva, String actual) {
     return ordenEtapa(nueva) > ordenEtapa(actual);
   }
@@ -1082,7 +1082,7 @@ public class CoactivaExpedienteAnalisisWorker {
     }
     if (n.isTextual()) {
       String s = n.asText().trim();
-      return s.isEmpty() || "[DATO EN TEXTO NO EXTRAÃDO POR IA]".equals(s);
+      return s.isEmpty() || "[DATO EN TEXTO NO EXTRAÍDO POR IA]".equals(s);
     }
     if (n.isArray() || n.isObject()) {
       return n.isEmpty();
@@ -1135,9 +1135,9 @@ public class CoactivaExpedienteAnalisisWorker {
       {"porcentaje_completitud": 0,
        "etapa_procesal_detectada": "INDETERMINADA",
        "etapa_sugerida": {"codigo": "INDETERMINADA", "nombre": null,
-         "justificacion_juridica": "DiagnÃ³stico de prueba: no se leyÃ³ el OCR.", "evidencia": null, "evidencias": []},
+         "justificacion_juridica": "Diagnóstico de prueba: no se leyó el OCR.", "evidencia": null, "evidencias": []},
        "documentos_identificados": [],
-       "alertas_inconsistencias": ["DiagnÃ³stico de prueba: LLM desactivado."],
+       "alertas_inconsistencias": ["Diagnóstico de prueba: LLM desactivado."],
        "datos_extraidos": {},
        "siguiente_accion_sugerida": null}
       """;
