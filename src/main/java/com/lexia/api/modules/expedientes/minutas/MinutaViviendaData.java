@@ -968,6 +968,32 @@ public class MinutaViviendaData {
     this.notariaAntecedente = nullToEmpty(notariaAntecedente);
   }
 
+  /** Sección poi-tl {@code {{?tiene_comprador_2}}…{{/tiene_comprador_2}}}: redacción con dos compradores. */
+  public static final String SECCION_TIENE_COMPRADOR_2 = "tiene_comprador_2";
+  /** Sección para la redacción en singular (no hay sección inversa en poi-tl). */
+  public static final String SECCION_UN_SOLO_COMPRADOR = "un_solo_comprador";
+  /**
+   * Dos compradores casados o en unión de hecho entre sí. Hoy las plantillas usan la redacción de
+   * cónyuges para cualquier par de compradores; la de no casados la redacta la abogada (fase 7).
+   */
+  public static final String SECCION_COMPRADORES_CASADOS = "compradores_casados_entre_si";
+
+  private static final java.util.regex.Pattern CASADOS =
+      java.util.regex.Pattern.compile("(?iu)casad|uni[oó]n\\s+de\\s+hecho");
+
+  /**
+   * Datos derivados para secciones condicionales de la plantilla. No se persisten ni van al panel de
+   * variables: se calculan del segundo comprador y del estado civil cada vez que se renderiza.
+   */
+  public Map<String, Boolean> secciones() {
+    boolean dos = !isMissing(nombreConyuge2);
+    Map<String, Boolean> out = new LinkedHashMap<>();
+    out.put(SECCION_TIENE_COMPRADOR_2, dos);
+    out.put(SECCION_UN_SOLO_COMPRADOR, !dos);
+    out.put(SECCION_COMPRADORES_CASADOS, dos && CASADOS.matcher(nullToEmpty(estadoCivil)).find());
+    return out;
+  }
+
   /** {@code true} si el valor está vacío o es el marcador de dato ausente. */
   public static boolean isMissing(Object value) {
     return value == null || NODATA.equals(blankToNodata(value.toString()));

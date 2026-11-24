@@ -32,9 +32,9 @@ class PrecioFormaPagoTest {
     assertEquals(new BigDecimal("500.00"), out.entrada());
     assertEquals(new BigDecimal("80000.00"), out.saldo());
     assertEquals(
-        "a) USD 500,00 (QUINIENTOS CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA),"
+        "a) USD 500,00 (QUINIENTOS CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)"
             + " mediante transferencia bancaria realizada el 12/10/2026;"
-            + " y, b) USD 80.000,00 (OCHENTA MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA),"
+            + " y, b) USD 80.000,00 (OCHENTA MIL CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)"
             + " que corresponde al saldo del precio, con el préstamo hipotecario que el Banco del"
             + " Instituto Ecuatoriano de Seguridad Social, BIESS, otorga a LA PARTE COMPRADORA.",
         out.detalle());
@@ -84,8 +84,8 @@ class PrecioFormaPagoTest {
     assertTrue(d.contains("mediante cheque entregado el 03/01/2026 (Banco X); y, c) USD 700,00 ("), d);
     assertEquals(
         "pagados de la siguiente manera: a) USD 100,00 (CIEN CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS"
-            + " DE AMÉRICA), en dinero en efectivo entregado el 02/01/2026; y, b) USD 200,00 (DOSCIENTOS"
-            + " CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA), mediante cheque entregado el"
+            + " DE AMÉRICA) en dinero en efectivo entregado el 02/01/2026; y, b) USD 200,00 (DOSCIENTOS"
+            + " CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA) mediante cheque entregado el"
             + " 03/01/2026 (Banco X)",
         out.detalleEntrada());
     assertEquals(out.detalleEntrada(), out.capa().get(PrecioFormaPago.DETALLE_ENTRADA));
@@ -112,7 +112,7 @@ class PrecioFormaPagoTest {
             List.of(new Pago(Forma.OTRO, new BigDecimal("100"), LocalDate.of(2026, 1, 2), "depósito")),
             null);
     assertEquals(
-        "USD 100,00 (CIEN CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA), mediante depósito,"
+        "USD 100,00 (CIEN CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA) mediante depósito,"
             + " con fecha 02/01/2026.",
         out.detalle());
     assertFalse(out.detalle().contains("BIESS"));

@@ -73,7 +73,10 @@ public final class ExpedienteDtos {
       String numeroInstancia,
       String producto,
       String ultimoEstatus,
-      String ultimoEstatusEn) {}
+      String ultimoEstatusEn,
+      String ultimoEstatusEtapaCodigo,
+      String ultimoEstatusEtapa,
+      java.time.Instant ultimoEstatusFecha) {}
 
   public record EscrituracionBandejaPage(
       List<EscrituracionBandejaItem> content,

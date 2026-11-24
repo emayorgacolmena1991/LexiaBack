@@ -134,6 +134,11 @@ class DocxMinutaRendererTest {
     for (MinutaTemplateDescriptor descriptor : catalog.all()) {
       assertFalse(
           renderer.tags(descriptor).isEmpty(), "Sin tags: " + descriptor.classpathResource());
+      // La escritura notarial usa sus propias variables (*_completo, notaría): las arma
+      // NotaryEscrituraService, no MinutaViviendaData.
+      if (descriptor.classpathResource().startsWith("templates/notaria/")) {
+        continue;
+      }
       assertEquals(
           List.of(), renderer.tagsSinResolver(descriptor), descriptor.classpathResource());
     }

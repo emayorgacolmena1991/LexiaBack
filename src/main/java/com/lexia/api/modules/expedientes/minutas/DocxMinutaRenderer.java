@@ -1,6 +1,7 @@
 package com.lexia.api.modules.expedientes.minutas;
 
 import com.deepoove.poi.XWPFTemplate;
+import com.deepoove.poi.template.BlockTemplate;
 import com.deepoove.poi.template.ElementTemplate;
 import com.deepoove.poi.template.MetaTemplate;
 import com.lexia.api.common.api.ApiException;
@@ -40,7 +41,24 @@ public class DocxMinutaRenderer {
   private static final Pattern HIPERVINCULO =
       Pattern.compile("<w:hyperlink\\b[^>]*>(.*?)</w:hyperlink>", Pattern.DOTALL);
 
-  private final Map<String, List<String>> tagsPorPlantilla = new ConcurrentHashMap<>();
+  private final Map<String, Estructura> estructuras = new ConcurrentHashMap<>();
+
+  /**
+   * Tags de dato, secciones y, por tag, las cadenas de secciones que lo envuelven (vacía = siempre
+   * visible). Un tag puede aparecer dentro y fuera de secciones.
+   */
+  private record Estructura(
+      List<String> tags, List<String> secciones, Map<String, List<List<String>>> contextos) {
+
+    boolean visible(String tag, Map<String, Boolean> flags) {
+      for (List<String> cadena : contextos.getOrDefault(tag, List.of())) {
+        if (cadena.stream().allMatch(sec -> Boolean.TRUE.equals(flags.get(sec)))) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
 
   public byte[] render(MinutaTemplateDescriptor descriptor, Map<String, Object> data) {
     if (descriptor == null) {
@@ -71,10 +89,13 @@ public class DocxMinutaRenderer {
         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
       XWPFTemplate template = XWPFTemplate.compile(in);
       List<String> tags = tagNames(template);
-      List<String> sinDato =
+      List<String> secciones = seccionNames(template);
+      List<String> sinDato = new ArrayList<>(
           aliases
               ? MinutaTagAliases.sinResolver(tags, safe.keySet())
-              : tags.stream().filter(t -> !clavePresente(safe, t)).toList();
+              : tags.stream().filter(t -> !clavePresente(safe, t)).toList());
+      // Una sección sin dato se ocultaría en silencio: se trata como placeholder sin dato.
+      secciones.stream().filter(sec -> !(safe.get(sec) instanceof Boolean)).forEach(sinDato::add);
       if (!sinDato.isEmpty()) {
         template.close();
         throw ApiException.badRequest(
@@ -84,7 +105,11 @@ public class DocxMinutaRenderer {
                 + String.join(", ", sinDato.stream().map(t -> "{{" + t + "}}").toList()));
       }
       Map<String, Object> renderData = aliases ? MinutaTagAliases.valoresPorTag(tags, safe) : safe;
-      template.render(mapaPoi(tags, renderData));
+      Map<String, Object> poi = mapaPoi(tags, renderData);
+      for (String seccion : secciones) {
+        poi.put(seccion, safe.get(seccion));
+      }
+      template.render(poi);
       template.write(out);
       template.close();
       byte[] bytes = out.toByteArray();
@@ -101,7 +126,9 @@ public class DocxMinutaRenderer {
 
   public byte[] renderVivienda(MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
     MinutaViviendaData safe = data == null ? new MinutaViviendaData() : data;
-    return render(descriptor, safe.toTemplateMap());
+    Map<String, Object> map = new LinkedHashMap<>(safe.toTemplateMap());
+    map.putAll(safe.secciones());
+    return render(descriptor, map);
   }
 
   /** Bytes de la plantilla sin renderizar (con sus tags {@code {{...}}}). */
@@ -114,18 +141,37 @@ public class DocxMinutaRenderer {
     }
   }
 
-  /** Tags {@code {{...}}} presentes en la plantilla (cuerpo, encabezados y pies). */
+  /**
+   * Tags {@code {{...}}} presentes en la plantilla (cuerpo, encabezados y pies), incluidos los que
+   * están dentro de una sección. No incluye los nombres de sección ({@link #secciones}).
+   */
   public List<String> tags(MinutaTemplateDescriptor descriptor) {
     return tags(descriptor.classpathResource());
   }
 
+  /** Secciones condicionales {@code {{?nombre}}…{{/nombre}}} de la plantilla (datos booleanos). */
+  public List<String> secciones(MinutaTemplateDescriptor descriptor) {
+    return estructura(descriptor.classpathResource()).secciones();
+  }
+
   public List<String> tags(String classpathResource) {
-    return tagsPorPlantilla.computeIfAbsent(
+    return estructura(classpathResource).tags();
+  }
+
+  /** Tags que se verán con estas secciones: los que no están dentro de una sección oculta. */
+  public List<String> tagsVisibles(MinutaTemplateDescriptor descriptor, Map<String, Boolean> flags) {
+    Estructura e = estructura(descriptor.classpathResource());
+    Map<String, Boolean> safe = flags == null ? Map.of() : flags;
+    return e.tags().stream().filter(tag -> e.visible(tag, safe)).toList();
+  }
+
+  private Estructura estructura(String classpathResource) {
+    return estructuras.computeIfAbsent(
         classpathResource,
         key -> {
           try (InputStream in = abrir(key);
               XWPFTemplate template = XWPFTemplate.compile(in)) {
-            return List.copyOf(tagNames(template));
+            return estructura(template);
           } catch (ApiException e) {
             throw e;
           } catch (Exception e) {
@@ -141,9 +187,10 @@ public class DocxMinutaRenderer {
    */
   public List<String> camposPendientes(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
-    Map<String, Object> map = (data == null ? new MinutaViviendaData() : data).toTemplateMap();
+    MinutaViviendaData safe = data == null ? new MinutaViviendaData() : data;
+    Map<String, Object> map = safe.toTemplateMap();
     Set<String> pendientes = new LinkedHashSet<>();
-    for (String tag : tags(descriptor)) {
+    for (String tag : tagsVisibles(descriptor, safe.secciones())) {
       String campo = MinutaTagAliases.canonico(tag);
       if (MinutaViviendaData.isMissing(map.get(campo))) {
         pendientes.add(campo);
@@ -305,14 +352,41 @@ public class DocxMinutaRenderer {
     return s.isEmpty() ? null : s;
   }
 
+  /** Tags de dato, también los anidados en secciones (poi-tl solo devuelve el primer nivel). */
   private static List<String> tagNames(XWPFTemplate template) {
-    Set<String> names = new LinkedHashSet<>();
-    for (MetaTemplate meta : template.getElementTemplates()) {
-      if (meta instanceof ElementTemplate element) {
-        names.add(element.getTagName());
+    return estructura(template).tags();
+  }
+
+  private static List<String> seccionNames(XWPFTemplate template) {
+    return estructura(template).secciones();
+  }
+
+  private static Estructura estructura(XWPFTemplate template) {
+    Map<String, List<List<String>>> contextos = new LinkedHashMap<>();
+    Set<String> secciones = new LinkedHashSet<>();
+    recorrer(template.getElementTemplates(), List.of(), contextos, secciones);
+    Map<String, List<List<String>>> inmutable = new LinkedHashMap<>();
+    contextos.forEach((tag, cadenas) -> inmutable.put(tag, List.copyOf(cadenas)));
+    return new Estructura(
+        List.copyOf(contextos.keySet()), List.copyOf(secciones), java.util.Collections.unmodifiableMap(inmutable));
+  }
+
+  private static void recorrer(
+      List<MetaTemplate> metas,
+      List<String> cadena,
+      Map<String, List<List<String>>> contextos,
+      Set<String> secciones) {
+    for (MetaTemplate meta : metas) {
+      if (meta instanceof BlockTemplate block) {
+        String seccion = block.getStartMark().getTagName();
+        secciones.add(seccion);
+        List<String> dentro = new ArrayList<>(cadena);
+        dentro.add(seccion);
+        recorrer(block.getTemplates(), List.copyOf(dentro), contextos, secciones);
+      } else if (meta instanceof ElementTemplate element) {
+        contextos.computeIfAbsent(element.getTagName(), k -> new ArrayList<>()).add(cadena);
       }
     }
-    return new ArrayList<>(names);
   }
 
   private static void verificarSinPlaceholders(String classpathResource, byte[] bytes)
