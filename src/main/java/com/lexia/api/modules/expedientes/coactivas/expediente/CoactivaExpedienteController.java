@@ -61,16 +61,34 @@ public class CoactivaExpedienteController {
   private final CoactivaBandejaService bandeja;
   private final CoactivaDelegadoService delegados;
   private final BatchEventPublisherService sse;
+  private final CoactivaExpedienteCompletoService completo;
 
   public CoactivaExpedienteController(
       CoactivaExpedienteService service,
       CoactivaBandejaService bandeja,
       CoactivaDelegadoService delegados,
-      BatchEventPublisherService sse) {
+      BatchEventPublisherService sse,
+      CoactivaExpedienteCompletoService completo) {
     this.service = service;
     this.bandeja = bandeja;
     this.delegados = delegados;
     this.sse = sse;
+    this.completo = completo;
+  }
+
+  /** Escaneo + todo lo agregado después (actuaciones, providencias…) en un solo PDF con marcadores. */
+  @GetMapping("/expedientes/{id}/expediente-completo")
+  public ResponseEntity<byte[]> expedienteCompleto(@PathVariable UUID id) {
+    CoactivaExpedienteCompletoService.ExpedienteCompleto resultado = completo.generar(id);
+    return ResponseEntity.ok()
+        .contentType(MediaType.APPLICATION_PDF)
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION,
+            ContentDisposition.attachment().filename(resultado.nombreArchivo(), StandardCharsets.UTF_8).build().toString())
+        .header("X-Piezas-Incluidas", String.valueOf(resultado.incluidos()))
+        .header("X-Piezas-Omitidas", String.valueOf(resultado.omitidos().size()))
+        .header("X-Content-Type-Options", "nosniff")
+        .body(resultado.pdf());
   }
 
   @GetMapping("/catalogos")
