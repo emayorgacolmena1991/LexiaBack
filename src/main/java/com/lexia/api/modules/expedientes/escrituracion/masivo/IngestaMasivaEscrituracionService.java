@@ -795,7 +795,7 @@ public class IngestaMasivaEscrituracionService {
       CaseDetailItem caso =
           promocion.promover(
               new PromoverBorradorRequest(
-                  borradorId, codigo, codigo, null, null, null, null, null));
+                  borradorId, codigo, codigo, null, null, null, null, null, null));
       fila.expedienteId = caso.id();
       fila.codigo = StringUtils.hasText(caso.code()) ? caso.code() : codigo;
       fila.ocrEstado = "PENDIENTE";

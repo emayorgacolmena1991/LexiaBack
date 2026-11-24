@@ -48,6 +48,10 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
   private static final String VALIDACION_TOOL_NAME = "validar_documento_coactivo";
   private static final String DIAGNOSTICO_TOOL_NAME = "diagnosticar_expediente_coactivo";
   private static final String CLASIFICACION_TOOL_NAME = "clasificar_documento";
+  private static final String ACTA_TOOL_NAME = "registrar_filas_acta_coactiva";
+  private static final int MAX_CHARS_ACTA = 120_000;
+  /** Un acta trae decenas de filas; cada una ronda 60-100 tokens de salida. */
+  private static final int MAX_TOKENS_ACTA = 16_000;
   /** Mismo valor que ClasificacionDocumentoService.OTRO. */
   private static final String TIPO_OTRO = "OTRO";
   private static final int MAX_CHARS_VALIDACION = 80_000;
@@ -372,6 +376,101 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     }
     return ValidacionDocumentoJson.error(
         "No se pudo validar el documento con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  @Override
+  public ValidacionDocumentoJson extraerActaCoactiva(String systemPrompt, String textoActa) {
+    String texto = textoActa == null ? "" : textoActa;
+    if (!StringUtils.hasText(texto.trim())) {
+      return ValidacionDocumentoJson.error("Sin texto para extraer las filas del acta.");
+    }
+    if (!isConfigured()) {
+      return ValidacionDocumentoJson.error("ANTHROPIC_API_KEY no configurada.");
+    }
+    String prompt =
+        StringUtils.hasText(systemPrompt)
+            ? systemPrompt
+            : "Extrae las filas del acta invocando " + ACTA_TOOL_NAME + ".";
+    String ultimoDiagnostico = "sin respuesta";
+    for (String modelo : modelos) {
+      for (int intento = 1; intento <= MAX_INTENTOS_POR_MODELO; intento++) {
+        try {
+          HttpResponse<String> res = enviar(construirBodyActa(modelo, prompt, texto));
+          int status = res.statusCode();
+          if (status == 200) {
+            JsonNode root = objectMapper.readTree(res.body());
+            if ("max_tokens".equals(root.path("stop_reason").asText())) {
+              return ValidacionDocumentoJson.error("Respuesta truncada (max_tokens) al leer el acta.");
+            }
+            JsonNode input = leerToolInput(root);
+            if (input != null && input.isObject()) {
+              LOG.info("Claude extracción de acta coactiva OK modelo={}", modelo);
+              return ValidacionDocumentoJson.ok(objectMapper.writeValueAsString(input));
+            }
+            ultimoDiagnostico = "modelo=" + modelo + " sin tool_use " + ACTA_TOOL_NAME;
+          } else if (status == 429 || status == 529 || status >= 500) {
+            ultimoDiagnostico = "modelo=" + modelo + " HTTP " + status;
+            dormir(esperaReintento(res, intento));
+            continue;
+          } else {
+            return ValidacionDocumentoJson.error(
+                "modelo=" + modelo + " HTTP " + status + " " + truncate(res.body(), 180));
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return ValidacionDocumentoJson.error("Extracción de acta interrumpida.");
+        } catch (LlmTimeoutException timeout) {
+          throw timeout;
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          ultimoDiagnostico = "modelo=" + modelo + " " + truncate(msg, 180);
+          LOG.warn("Fallo Claude extracción de acta: {}", ultimoDiagnostico);
+          dormir(BACKOFF_BASE_MS * intento);
+        }
+      }
+    }
+    return ValidacionDocumentoJson.error(
+        "No se pudo leer el acta con Claude. Último: " + ultimoDiagnostico);
+  }
+
+  private String construirBodyActa(String modelo, String systemPrompt, String texto)
+      throws IOException {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+    props
+        .putObject("uec")
+        .put("type", "string")
+        .put("description", "Unidad ejecutora / UEC de la cabecera del acta; vacío si no aparece.");
+    ObjectNode filas = props.putObject("filas");
+    filas.put("type", "array");
+    ObjectNode fila = filas.putObject("items");
+    fila.put("type", "object");
+    ObjectNode campos = fila.putObject("properties");
+    for (String campo : List.of("oficina", "operacion", "juicio", "deudor", "cedula", "etapa")) {
+      campos.putObject(campo).put("type", "string");
+    }
+    campos.putObject("fojas").put("type", "integer");
+    fila.putArray("required").add("juicio").add("deudor");
+    schema.putArray("required").add("filas");
+
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", modelo);
+    body.put("max_tokens", MAX_TOKENS_ACTA);
+    body.put("system", systemPrompt);
+    ObjectNode tool = body.putArray("tools").addObject();
+    tool.put("name", ACTA_TOOL_NAME);
+    tool.put("description", "Registra las filas de expedientes del acta de entrega coactiva.");
+    tool.set("input_schema", schema);
+    body.putObject("tool_choice").put("type", "tool").put("name", ACTA_TOOL_NAME);
+    ObjectNode msg = body.putArray("messages").addObject();
+    msg.put("role", "user");
+    msg.put(
+        "content",
+        "Extrae las filas de este acta. No inventes datos.\n\n<acta>\n"
+            + truncate(texto, MAX_CHARS_ACTA)
+            + "\n</acta>");
+    return objectMapper.writeValueAsString(body);
   }
 
   @Override

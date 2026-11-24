@@ -89,6 +89,7 @@ public class CoactivaCaseSync {
             null,
             null,
             null,
+            null,
             null);
     bootstrap.bootstrap(legalCase, request, tenantId, userId);
     return legalCase;

@@ -26,7 +26,7 @@ class CoactivaDiagnosticoNoApilaJobsTest {
     CoactivaExpedienteAnalisisWorker worker =
         new CoactivaExpedienteAnalisisWorker(
             null, null, null, null, null, null, null, null, null, null, null,
-            cola, mock(BatchEventPublisherService.class), null, null, false);
+            cola, mock(BatchEventPublisherService.class), null, null, false, 1);
     UUID expediente = UUID.randomUUID();
     UUID pdf1 = UUID.randomUUID();
     UUID pdf2 = UUID.randomUUID();

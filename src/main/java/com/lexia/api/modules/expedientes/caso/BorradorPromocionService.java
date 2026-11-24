@@ -55,6 +55,7 @@ public class BorradorPromocionService {
   private UUID asegurarExpediente(UUID id, PromoverBorradorRequest extra) {
     UUID tenantId = AuthContext.require().tenantId();
     if (legalCases.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId).isPresent()) {
+      aplicarNumeroInstancia(id, extra);
       return id;
     }
     ExpedienteBorrador draft =
@@ -65,12 +66,24 @@ public class BorradorPromocionService {
         && legalCases
             .findByIdAndTenantIdAndDeletedAtIsNull(draft.getPromotedCaseId(), tenantId)
             .isPresent()) {
+      aplicarNumeroInstancia(draft.getPromotedCaseId(), extra);
       return draft.getPromotedCaseId();
     }
     CaseDetailItem created = requireCases().createCase(toCreateRequest(draft, extra));
     borradores.marcarPromovido(draft.getId(), tenantId, created.id());
     seguimiento.ifAvailable(service -> service.vincularBorrador(draft.getId().toString(), created.id()));
     return created.id();
+  }
+
+  /**
+   * El wizard manda el número de instancia al promover (paso 4 → 5). Si el expediente ya existía
+   * (reintento, recarga) el número se aplica igual; sin número en la petición no se toca.
+   */
+  private void aplicarNumeroInstancia(UUID caseId, PromoverBorradorRequest extra) {
+    String numero = extra == null ? null : blankToNull(extra.numeroInstancia());
+    if (numero != null) {
+      requireCases().actualizarNumeroInstancia(caseId, numero);
+    }
   }
 
   private CaseService requireCases() {
@@ -102,7 +115,8 @@ public class BorradorPromocionService {
         operation,
         product,
         draft.getIngestionMode(),
-        text(draft.getCanton()));
+        text(draft.getCanton()),
+        extra == null ? null : blankToNull(extra.numeroInstancia()));
   }
 
   private static String first(String... values) {

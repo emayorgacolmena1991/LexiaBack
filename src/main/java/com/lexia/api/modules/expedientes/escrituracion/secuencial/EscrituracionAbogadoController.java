@@ -24,9 +24,14 @@ import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.Wr
 import com.lexia.api.modules.expedientes.escrituracion.core.IaAnalysisDtos.AnalysisRequestDTO;
 import com.lexia.api.modules.expedientes.escrituracion.core.IaAnalysisService;
 import com.lexia.api.modules.expedientes.escrituracion.core.ProcesarExpedienteCompletoResult;
+import com.lexia.api.modules.expedientes.caso.EstatusProcesoService;
+import com.lexia.api.modules.expedientes.escrituracion.matriz.MatrizEntidadService;
 import com.lexia.api.modules.expedientes.minutas.CapturaBiessService;
 import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
+import com.lexia.api.modules.expedientes.minutas.PrecioFormaPagoService;
+import com.lexia.api.modules.expedientes.minutas.PrecioFormaPagoService.PrecioEntrada;
+import com.lexia.api.modules.expedientes.minutas.PrecioFormaPagoService.PrecioVista;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -56,6 +61,9 @@ public class EscrituracionAbogadoController {
   private final IaAnalysisService iaAnalysis;
   private final MinutaGenerationService minutaGeneration;
   private final CapturaBiessService capturaBiess;
+  private final PrecioFormaPagoService precioFormaPago;
+  private final EstatusProcesoService estatusProceso;
+  private final MatrizEntidadService matrizEntidad;
   private final ExpedienteEstadoService estado;
   private final RegularizacionEscrituracionService regularizacion;
 
@@ -66,15 +74,58 @@ public class EscrituracionAbogadoController {
       IaAnalysisService iaAnalysis,
       MinutaGenerationService minutaGeneration,
       CapturaBiessService capturaBiess,
+      PrecioFormaPagoService precioFormaPago,
       ExpedienteEstadoService estado,
-      RegularizacionEscrituracionService regularizacion) {
+      RegularizacionEscrituracionService regularizacion,
+      EstatusProcesoService estatusProceso,
+      MatrizEntidadService matrizEntidad) {
     this.productos = productos;
     this.escritura = escritura;
     this.iaAnalysis = iaAnalysis;
     this.minutaGeneration = minutaGeneration;
     this.capturaBiess = capturaBiess;
+    this.precioFormaPago = precioFormaPago;
+    this.estatusProceso = estatusProceso;
+    this.matrizEntidad = matrizEntidad;
     this.estado = estado;
     this.regularizacion = regularizacion;
+  }
+
+  /**
+   * Catálogo activo de etapas del estatus del proceso. Con {@code expedienteId}, el texto sugerido
+   * trae los marcadores resueltos ({fecha}, {notaria}, {numero_instancia}).
+   */
+  @GetMapping("/escrituracion/etapas")
+  public List<EstatusProcesoService.Etapa> etapasEstatus(
+      @RequestParam(required = false) UUID expedienteId) {
+    return estatusProceso.etapas(expedienteId);
+  }
+
+  /**
+   * Matriz de la entidad: qué se escribiría en cada fila (por número de instancia), sin devolver
+   * datos personales del archivo. El archivo no se guarda.
+   */
+  @PostMapping(value = "/escrituracion/matriz/previsualizar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public MatrizEntidadService.Resumen previsualizarMatriz(
+      @RequestParam("file") MultipartFile file,
+      @RequestParam(defaultValue = "false") boolean sobrescribir) {
+    return matrizEntidad.previsualizar(file, sobrescribir);
+  }
+
+  /** La misma matriz con ETAPA y OBSERVACION llenas; totales por clasificación en X-Matriz-Totales. */
+  @PostMapping(
+      value = "/escrituracion/matriz/llenar",
+      consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+      produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+  public ResponseEntity<byte[]> llenarMatriz(
+      @RequestParam("file") MultipartFile file,
+      @RequestParam(defaultValue = "false") boolean sobrescribir) {
+    MatrizEntidadService.Llenado llenado = matrizEntidad.llenar(file, sobrescribir);
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, adjunto(llenado.nombre()))
+        .header("X-Content-Type-Options", "nosniff")
+        .header("X-Matriz-Totales", MatrizEntidadService.cabeceraTotales(llenado.totales()))
+        .body(llenado.archivo());
   }
 
   @GetMapping("/productos-biess")
@@ -289,6 +340,16 @@ public class EscrituracionAbogadoController {
   public DatosBiessMinuta extraerCapturaBiess(
       @PathVariable UUID id, @RequestParam("file") MultipartFile file) {
     return capturaBiess.extraer(id, file);
+  }
+
+  @GetMapping("/expedientes/{id}/escrituracion/precio-forma-pago")
+  public PrecioVista obtenerPrecioFormaPago(@PathVariable UUID id) {
+    return precioFormaPago.obtener(id);
+  }
+
+  @PutMapping("/expedientes/{id}/escrituracion/precio-forma-pago")
+  public PrecioVista guardarPrecioFormaPago(@PathVariable UUID id, @RequestBody PrecioEntrada body) {
+    return precioFormaPago.guardar(id, body);
   }
 
   @GetMapping("/expedientes/{id}/escrituracion/minuta-borrador/{minutaId}/datos-biess")

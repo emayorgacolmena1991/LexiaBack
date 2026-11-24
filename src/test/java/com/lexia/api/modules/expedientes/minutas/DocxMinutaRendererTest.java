@@ -97,6 +97,28 @@ class DocxMinutaRendererTest {
   }
 
   @Test
+  void minutasDeCadaProductoReemplazanPrecioYNoDejanVariables() throws Exception {
+    for (String product :
+        List.of(
+            MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS,
+            MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_IND,
+            MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_SOLID,
+            MinutaTemplateCatalog.PRODUCT_VIV_TERMINADA_PREF,
+            MinutaTemplateCatalog.PRODUCT_TERRENO_Y_VIVIENDA)) {
+      MinutaTemplateDescriptor descriptor = catalog.require(product, "MINUTA_COMPRAVENTA");
+      String text = renderYLeer(descriptor, datosCompletos(), product + "_minuta.docx");
+      assertFalse(text.contains("{{"), product);
+      assertFalse(text.contains("}}"), product);
+      assertFalse(text.matches("(?s).*[Xx]{4,}.*"), product);
+      // Hipotecada redacta anticipos + saldo; las demás ya escriben el saldo y solo llevan anticipos.
+      boolean hipotecada = MinutaTemplateCatalog.PRODUCT_VIV_HIPOTECADA_BIESS.equals(product);
+      assertTrue(text.contains(hipotecada ? "V_detalle_forma_pago" : "V_detalle_entrada"), product);
+      assertFalse(text.contains(hipotecada ? "V_detalle_entrada" : "V_detalle_forma_pago"), product);
+    }
+    assertFalse(catalog.supports("VIV_TERMINADA_COMPANIA", "MINUTA_COMPRAVENTA"));
+  }
+
+  @Test
   void viviendaHipotecadaRenderizaAmbasPlantillasSinPlaceholders() throws Exception {
     for (String kind : List.of("MINUTA_COMPRAVENTA", "CONTRATO_MUTUO")) {
       MinutaTemplateDescriptor descriptor =
@@ -112,6 +134,11 @@ class DocxMinutaRendererTest {
     for (MinutaTemplateDescriptor descriptor : catalog.all()) {
       assertFalse(
           renderer.tags(descriptor).isEmpty(), "Sin tags: " + descriptor.classpathResource());
+      // La escritura notarial usa sus propias variables (*_completo, notaría): las arma
+      // NotaryEscrituraService, no MinutaViviendaData.
+      if (descriptor.classpathResource().startsWith("templates/notaria/")) {
+        continue;
+      }
       assertEquals(
           List.of(), renderer.tagsSinResolver(descriptor), descriptor.classpathResource());
     }
@@ -208,6 +235,8 @@ class DocxMinutaRendererTest {
     assertTrue(text.contains("V_nombre_vendedor"));
     assertTrue(text.contains("V_clave_catastral"));
     assertTrue(text.contains("USD V_precio_compraventa_numero"));
+    assertTrue(text.contains("(USD V_valor_entrada_numero), V_detalle_entrada, y el valor restante"));
+    assertFalse(text.contains("V_detalle_forma_pago"));
     assertTrue(text.contains("V_saldo_compraventa_letras DÓLARES"));
     assertTrue(text.contains("V_apoderado_biess"));
   }
@@ -265,6 +294,9 @@ class DocxMinutaRendererTest {
       assertFalse(text.contains("nodata"), kind + ": quedaron datos sin resolver");
       assertFalse(text.matches("(?s).*[Xx]{4,}.*"), kind + ": quedaron marcadores XXXX");
       assertTrue(text.contains("V_apoderado_biess"), kind);
+      if ("MINUTA_COMPRAVENTA".equals(kind)) {
+        assertTrue(text.contains("V_detalle_entrada"), kind);
+      }
       assertTrue(text.contains("V_nombre_conyuge_2"), kind);
     }
   }

@@ -26,7 +26,7 @@ import org.springframework.util.StringUtils;
 /**
  * Consolidación data-driven de las variables de una minuta (TICKET-INT-102 [A]).
  *
- * <p>{@code JSON_Final = JSON_LLM + JSON_BIESS + Overrides_Manuales_UI}: cada capa solo pisa a la
+ * <p>{@code JSON_Final = JSON_LLM + JSON_BIESS + JSON_PRECIO + Overrides_Manuales_UI}: cada capa solo pisa a la
  * anterior cuando trae valor (los overrides sí pueden vaciar un campo a propósito). El resultado se
  * valida contra el catálogo del acto ({@link ActoVariableCatalog}) más los tags reales de la
  * plantilla, y se listan como pendientes los tags vacíos o {@code nodata}.
@@ -43,6 +43,15 @@ public class ExpedienteVariablesService {
   public static final String ORIGEN_AUTO = "AUTO";
 
   static final String MONTO_LETRAS = "monto_prestamo_letras";
+
+  public static final String ORIGEN_PRECIO = "PRECIO";
+
+  private static final Set<String> LETRAS_DERIVADAS =
+      Set.of(
+          MONTO_LETRAS,
+          "precio_compraventa_letras",
+          "valor_entrada_letras",
+          "saldo_compraventa_letras");
 
   private static final Locale ES = Locale.forLanguageTag("es");
 
@@ -80,22 +89,38 @@ public class ExpedienteVariablesService {
   }
 
   /**
-   * Fusión con precedencia LLM &lt; BIESS &lt; overrides. Devuelve una copia; no muta {@code llm}.
-   * {@code monto_prestamo_letras} es derivado: siempre se calcula desde la cifra final y no admite
-   * valor del LLM ni override manual.
+   * Fusión con precedencia LLM &lt; BIESS &lt; precio y forma de pago &lt; overrides. Devuelve una
+   * copia; no muta {@code llm}. Las letras del monto y del precio se calculan desde la cifra y no
+   * admiten override.
    */
   public MinutaViviendaData fusionar(
       MinutaViviendaData llm, DatosBiessMinuta biess, Map<String, String> overrides) {
+    return fusionar(llm, biess, Map.of(), overrides);
+  }
+
+  public MinutaViviendaData fusionar(
+      MinutaViviendaData llm,
+      DatosBiessMinuta biess,
+      Map<String, String> precio,
+      Map<String, String> overrides) {
     ObjectNode json = mapper.valueToTree(llm == null ? new MinutaViviendaData() : llm);
     if (biess != null) {
       for (CampoPlantilla campo : CampoPlantilla.values()) {
         pisarSiHayValor(json, campo.tag(), campo.valor(biess));
       }
     }
+    if (precio != null) {
+      for (Map.Entry<String, String> e : precio.entrySet()) {
+        String campo = MinutaTagAliases.canonico(e.getKey());
+        if (PrecioFormaPago.CAPA.contains(campo)) {
+          pisarSiHayValor(json, campo, e.getValue());
+        }
+      }
+    }
     if (overrides != null) {
       for (Map.Entry<String, String> e : overrides.entrySet()) {
         String campo = MinutaTagAliases.canonico(e.getKey());
-        if (!MONTO_LETRAS.equals(campo)) {
+        if (!LETRAS_DERIVADAS.contains(campo) && !PrecioFormaPago.SOLO_LECTURA.contains(campo)) {
           json.set(campo, TextNode.valueOf(e.getValue() == null ? "" : e.getValue().trim()));
         }
       }
@@ -112,12 +137,14 @@ public class ExpedienteVariablesService {
   /** Estado del JSON final frente al acto: valores (vacío si falta) y lista de pendientes. */
   public VariablesConsolidadas consolidar(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
-    Map<String, Object> map = (data == null ? new MinutaViviendaData() : data).toTemplateMap();
+    MinutaViviendaData safe = data == null ? new MinutaViviendaData() : data;
+    Map<String, Object> map = safe.toTemplateMap();
     Map<String, String> variables = new LinkedHashMap<>();
     Map<String, String> etiquetas = new LinkedHashMap<>();
     List<String> pendientes = new ArrayList<>();
+    // Solo lo que se verá: con un comprador, los datos del segundo no quedan pendientes.
     Set<String> enPlantilla = new LinkedHashSet<>();
-    for (String tag : renderer.tags(descriptor)) {
+    for (String tag : renderer.tagsVisibles(descriptor, safe.secciones())) {
       enPlantilla.add(MinutaTagAliases.canonico(tag));
     }
     for (String campo : camposDelActo(descriptor)) {
@@ -143,15 +170,25 @@ public class ExpedienteVariablesService {
       MinutaViviendaData extraidos,
       DatosBiessMinuta biess,
       Map<String, String> overrides) {
-    Map<String, Object> sinOverrides = fusionar(extraidos, biess, Map.of()).toTemplateMap();
+    return origenes(descriptor, extraidos, biess, Map.of(), overrides);
+  }
+
+  public Origenes origenes(
+      MinutaTemplateDescriptor descriptor,
+      MinutaViviendaData extraidos,
+      DatosBiessMinuta biess,
+      Map<String, String> precio,
+      Map<String, String> overrides) {
+    Map<String, String> capa = precio == null ? Map.of() : precio;
+    Map<String, Object> sinOverrides = fusionar(extraidos, biess, capa, Map.of()).toTemplateMap();
     Map<String, String> origenes = new LinkedHashMap<>();
     Map<String, ValorExtraido> valores = new LinkedHashMap<>();
     Map<String, Object> finales =
         overrides == null || overrides.isEmpty()
             ? sinOverrides
-            : fusionar(extraidos, biess, overrides).toTemplateMap();
+            : fusionar(extraidos, biess, capa, overrides).toTemplateMap();
     for (String campo : camposDelActo(descriptor)) {
-      if (MONTO_LETRAS.equals(campo)) {
+      if (LETRAS_DERIVADAS.contains(campo)) {
         if (!MinutaViviendaData.isMissing(finales.get(campo))) {
           origenes.put(campo, ORIGEN_AUTO);
         }
@@ -161,8 +198,12 @@ public class ExpedienteVariablesService {
       String origen =
           MinutaViviendaData.isMissing(valor)
               ? null
-              : StringUtils.hasText(valorBiess(biess, campo)) ? ORIGEN_BIESS : ORIGEN_IA;
-      if (overrides != null && overrides.containsKey(campo)) {
+              : StringUtils.hasText(valorBiess(biess, campo))
+                  ? ORIGEN_BIESS
+                  : StringUtils.hasText(capa.get(campo)) ? ORIGEN_PRECIO : ORIGEN_IA;
+      if (overrides != null
+          && overrides.containsKey(campo)
+          && !PrecioFormaPago.SOLO_LECTURA.contains(campo)) {
         origenes.put(campo, ORIGEN_MANUAL);
         valores.put(campo, new ValorExtraido(origen == null ? "" : valor.toString(), origen));
       } else if (origen != null) {
@@ -195,7 +236,8 @@ public class ExpedienteVariablesService {
       return out;
     }
     Set<String> permitidos = new LinkedHashSet<>(camposDelActo(descriptor));
-    permitidos.remove(MONTO_LETRAS);
+    permitidos.removeAll(LETRAS_DERIVADAS);
+    permitidos.removeAll(PrecioFormaPago.SOLO_LECTURA);
     List<String> descartados = new ArrayList<>();
     for (Map.Entry<String, Object> e : entrada.entrySet()) {
       String campo = MinutaTagAliases.canonico(e.getKey() == null ? "" : e.getKey().trim());

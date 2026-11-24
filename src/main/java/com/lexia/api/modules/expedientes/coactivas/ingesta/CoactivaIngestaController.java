@@ -2,7 +2,9 @@ package com.lexia.api.modules.expedientes.coactivas.ingesta;
 
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ExpedienteDetalle;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaColumnas;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaDetalle;
+import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.RemapeoRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaHeaderRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaRequest;
 import com.lexia.api.modules.expedientes.coactivas.ingesta.CoactivaIngestaDtos.ActaResumen;
@@ -89,6 +91,19 @@ public class CoactivaIngestaController {
   @PostMapping("/actas/{id}/confirmar")
   public ConfirmacionResponse confirmarActa(@PathVariable UUID id) {
     return actas.confirmar(id);
+  }
+
+  @GetMapping("/actas/{id}/columnas")
+  public ActaColumnas columnasActa(
+      @PathVariable UUID id,
+      @RequestParam(required = false) Integer tabla,
+      @RequestParam(required = false) Integer fila) {
+    return actas.columnas(id, tabla, fila);
+  }
+
+  @PostMapping("/actas/{id}/remapear")
+  public ActaDetalle remapearActa(@PathVariable UUID id, @Valid @RequestBody RemapeoRequest request) {
+    return actas.remapear(id, request);
   }
 
   @PostMapping(value = "/carga-masiva", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

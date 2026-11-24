@@ -24,6 +24,7 @@ import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -44,16 +45,12 @@ public class CoactivaJobWorker {
   private final ObjectProvider<CoactivaValidacionIaWorker> anexos;
   private final BatchEventPublisherService sse;
   private final ObjectMapper json;
-  public static final int HILOS = 4;
+  public static final int HILOS_MAX = 16;
+  private final int hilos;
 
   /** Se reclama solo con hilo libre: un job esperando en la cola local retiene su lease sin avanzar. */
-  private final Semaphore capacidad = new Semaphore(HILOS);
-  private final ExecutorService anexoPool =
-      Executors.newFixedThreadPool(HILOS, r -> {
-        Thread hilo = new Thread(r, "coactiva-anexo");
-        hilo.setDaemon(true);
-        return hilo;
-      });
+  private final Semaphore capacidad;
+  private final ExecutorService anexoPool;
   private final ScheduledExecutorService latido =
       Executors.newSingleThreadScheduledExecutor(r -> {
         Thread hilo = new Thread(r, "jobs-latido-coactiva");
@@ -66,12 +63,32 @@ public class CoactivaJobWorker {
       ObjectProvider<CoactivaExpedienteAnalisisWorker> coactivas,
       ObjectProvider<CoactivaValidacionIaWorker> anexos,
       BatchEventPublisherService sse,
-      ObjectMapper json) {
+      ObjectMapper json,
+      @Value("${lexia.coactivas.worker.hilos:4}") int hilos,
+      @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolMax) {
     this.cola = cola;
     this.coactivas = coactivas;
     this.anexos = anexos;
     this.sse = sse;
     this.json = json;
+    this.hilos = Math.max(1, Math.min(HILOS_MAX, hilos));
+    if (this.hilos != hilos) {
+      LOG.warn("lexia.coactivas.worker.hilos={} fuera de rango 1-{}; se usa {}", hilos, HILOS_MAX, this.hilos);
+    }
+    // Cada job tiene a lo sumo una conexión a la vez; la otra mitad del pool queda para HTTP, ingesta y schedulers.
+    if (this.hilos * 2 > poolMax) {
+      LOG.warn(
+          "lexia.coactivas.worker.hilos={} con hikari.maximum-pool-size={}: riesgo de esperar conexión",
+          this.hilos,
+          poolMax);
+    }
+    this.capacidad = new Semaphore(this.hilos);
+    this.anexoPool =
+        Executors.newFixedThreadPool(this.hilos, r -> {
+          Thread hilo = new Thread(r, "coactiva-anexo");
+          hilo.setDaemon(true);
+          return hilo;
+        });
     latido.scheduleAtFixedRate(this::renovar, 30, 30, TimeUnit.SECONDS);
     new ExecutorServiceMetrics(anexoPool, "coactiva-anexo", Tags.empty()).bindTo(Metrics.globalRegistry);
   }
@@ -85,7 +102,7 @@ public class CoactivaJobWorker {
   /** Reclama mientras haya hilos libres y cola. */
   @Scheduled(fixedDelay = 1000)
   public void tick() {
-    for (int i = 0; i < HILOS; i++) {
+    for (int i = 0; i < hilos; i++) {
       if (!capacidad.tryAcquire()) {
         return;
       }
@@ -142,7 +159,7 @@ public class CoactivaJobWorker {
 
   /** Hilos ocupados ahora (métrica lexia.worker.hilos.ocupados). */
   public int hilosOcupados() {
-    return HILOS - capacidad.availablePermits();
+    return hilos - capacidad.availablePermits();
   }
 
   private boolean correrDiagnostico(CoactivaJobQueue.Job job) {

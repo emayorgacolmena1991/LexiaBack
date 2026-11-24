@@ -25,7 +25,7 @@ public class WebConfig implements WebMvcConfigurer {
   }
 
   private static final List<String> EXPOSED =
-      List.of("X-Archivo-Faltante", "X-Archivo-Id-Real", "Content-Disposition");
+      List.of("X-Archivo-Faltante", "X-Archivo-Id-Real", "Content-Disposition", "X-Pdf-Omitidos", "X-Matriz-Totales");
 
   @Override
   public void addCorsMappings(CorsRegistry registry) {

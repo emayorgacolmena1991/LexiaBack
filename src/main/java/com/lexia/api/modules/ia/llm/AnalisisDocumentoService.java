@@ -82,6 +82,17 @@ public interface AnalisisDocumentoService {
         "Diagnóstico de expediente coactivo no disponible para este proveedor LLM.");
   }
 
+  /**
+   * Respaldo de lectura de actas de entrega coactivas cuando la cabecera no se reconoce por
+   * palabras clave. Entrada: tablas del OCR/Excel serializadas + texto. Salida: JSON crudo
+   * {@code {"uec": "...", "filas": [{"oficina","operacion","juicio","deudor","cedula","etapa","fojas"}]}};
+   * el parseo y la validación los hace el llamador.
+   */
+  default ValidacionDocumentoJson extraerActaCoactiva(String systemPrompt, String textoActa) {
+    return ValidacionDocumentoJson.error(
+        "Extracción de actas coactivas no disponible para este proveedor LLM.");
+  }
+
   /** JSON crudo del LLM o error de transporte/configuración. */
   record ValidacionDocumentoJson(String json, String error) {
 

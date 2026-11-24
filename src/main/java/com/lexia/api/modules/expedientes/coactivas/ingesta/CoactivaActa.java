@@ -11,6 +11,8 @@ import jakarta.persistence.Version;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 @Entity
@@ -68,6 +70,11 @@ public class CoactivaActa implements Persistable<UUID> {
 
   @Column(columnDefinition = "text")
   private String observaciones;
+
+  /** Tablas leídas del archivo, para volver a mapear columnas sin repetir el OCR. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "tablas_json", columnDefinition = "jsonb")
+  private String tablasJson;
 
   @Column(name = "confirmada_at")
   private Instant confirmadaAt;
@@ -146,6 +153,14 @@ public class CoactivaActa implements Persistable<UUID> {
   public void setUecNombre(String uecNombre) {
     this.uecNombre = uecNombre;
     this.updatedAt = Instant.now();
+  }
+
+  public String getTablasJson() {
+    return tablasJson;
+  }
+
+  public void setTablasJson(String tablasJson) {
+    this.tablasJson = tablasJson;
   }
 
   public void setDelegadoId(UUID delegadoId) {

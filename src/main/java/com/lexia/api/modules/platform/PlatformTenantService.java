@@ -28,6 +28,7 @@ import com.lexia.api.modules.identity.UserInvitationRepository;
 import com.lexia.api.modules.notary.NotaryTenantProfile;
 import com.lexia.api.modules.notary.NotaryTenantProfileRepository;
 import com.lexia.api.modules.notifications.EmailNotificationService;
+import com.lexia.api.modules.expedientes.coactivas.actuacion.CoactivaPlantillaCatalogSeeder;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantBinder;
 import com.lexia.api.modules.tenancy.TenantModule;
@@ -88,6 +89,7 @@ public class PlatformTenantService {
   private final BrevoProperties brevoProperties;
   private final SessionInvalidationService sessionInvalidation;
   private final JdbcTemplate jdbc;
+  private final CoactivaPlantillaCatalogSeeder coactivaPlantillaSeeder;
   private final TransactionTemplate provisionFullTx;
 
   public PlatformTenantService(
@@ -111,6 +113,7 @@ public class PlatformTenantService {
       BrevoProperties brevoProperties,
       SessionInvalidationService sessionInvalidation,
       JdbcTemplate jdbc,
+      CoactivaPlantillaCatalogSeeder coactivaPlantillaSeeder,
       PlatformTransactionManager transactionManager) {
     this.tenants = tenants;
     this.tenantModules = tenantModules;
@@ -132,6 +135,7 @@ public class PlatformTenantService {
     this.brevoProperties = brevoProperties;
     this.sessionInvalidation = sessionInvalidation;
     this.jdbc = jdbc;
+    this.coactivaPlantillaSeeder = coactivaPlantillaSeeder;
     this.provisionFullTx = new TransactionTemplate(transactionManager);
     this.provisionFullTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
@@ -373,6 +377,9 @@ public class PlatformTenantService {
           ProvisionResult result = completeProvisionAppLayer(savedTenant, request, kind, timezone);
           tenants.flush();
           jdbc.queryForObject("SELECT app.seed_tenant_masters(?)", Integer.class, savedTenant.getId());
+          coactivaPlantillaSeeder.sembrar(savedTenant.getId());
+          // Etapas del estatus del proceso (V117); la función ignora lo que no es bufete.
+          jdbc.queryForObject("SELECT app.seed_estatus_etapas(?)", Integer.class, savedTenant.getId());
           return result;
         });
   }

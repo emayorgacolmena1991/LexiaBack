@@ -78,7 +78,8 @@ class CoactivaAnalisisReemplazoTest {
             sse,
             validacion,
             tx(),
-            true);
+            true,
+            1);
     expediente = CoactivaExpediente.create(TENANT, UUID.randomUUID(), "025-2024-00026", USER);
     when(archivos.findByIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
         .thenAnswer(

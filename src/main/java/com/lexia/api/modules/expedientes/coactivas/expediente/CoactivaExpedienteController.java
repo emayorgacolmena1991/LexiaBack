@@ -273,7 +273,7 @@ public class CoactivaExpedienteController {
     } catch (org.springframework.http.InvalidMediaTypeException ignored) {
       // MIME declarado por el cliente al subir: si es ilegible se descarga como binario.
     }
-    // El MIME lo declara quien sube: HTML o SVG inline ejecutarÃ­an script en el origen de Lexia.
+    // El MIME lo declara quien sube: HTML o SVG inline ejecutarían script en el origen de Lexia.
     boolean inline =
         MediaType.APPLICATION_PDF.equalsTypeAndSubtype(mediaType)
             || ("image".equals(mediaType.getType())

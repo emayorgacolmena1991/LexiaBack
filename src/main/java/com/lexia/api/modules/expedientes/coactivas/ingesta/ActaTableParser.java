@@ -31,9 +31,9 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
  */
 public final class ActaTableParser {
 
-  private static final int HEADER_SCAN_ROWS = 10;
+  static final int HEADER_SCAN_ROWS = 10;
 
-  enum Campo {
+  public enum Campo {
     ZONAL,
     UEC,
     OFICINA,
@@ -213,7 +213,62 @@ public final class ActaTableParser {
   // Interpretación
   // ---------------------------------------------------------------------------
 
+  /** Decide si una fila es cabecera y, si lo es, qué columna es cada campo. */
+  @FunctionalInterface
+  public interface DetectorCabecera {
+    Optional<Map<Campo, Integer>> detectar(List<String> row);
+  }
+
+  /** Cabecera por palabras clave: al menos dos campos y uno de ellos juicio o deudor. */
+  public static final DetectorCabecera POR_PALABRAS =
+      row -> {
+        Map<Campo, Integer> candidata = detectarCabecera(row);
+        return candidata.size() >= 2
+                && (candidata.containsKey(Campo.JUICIO) || candidata.containsKey(Campo.DEUDOR))
+            ? Optional.of(candidata)
+            : Optional.empty();
+      };
+
+  /** Fila de cabecera por palabras clave en las primeras filas, o -1. */
+  public static int filaCabecera(List<List<String>> grid) {
+    for (int r = 0; r < Math.min(HEADER_SCAN_ROWS, grid.size()); r++) {
+      if (POR_PALABRAS.detectar(grid.get(r)).isPresent()) {
+        return r;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Huella de una fila de cabecera: celdas normalizadas (mayúsculas, sin tildes) con su posición.
+   * Dos actas del mismo formato dan la misma firma aunque cambie el contenido de las filas.
+   */
+  public static String firma(List<String> row) {
+    List<String> celdas = new ArrayList<>();
+    for (String cell : row) {
+      celdas.add(CoactivaTexto.claveNombre(cell));
+    }
+    while (!celdas.isEmpty() && celdas.get(celdas.size() - 1).isEmpty()) {
+      celdas.remove(celdas.size() - 1);
+    }
+    if (celdas.stream().allMatch(String::isEmpty)) {
+      return null;
+    }
+    try {
+      byte[] hash =
+          java.security.MessageDigest.getInstance("SHA-256")
+              .digest(String.join("|", celdas).getBytes(StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(hash);
+    } catch (java.security.NoSuchAlgorithmException ex) {
+      throw new IllegalStateException(ex);
+    }
+  }
+
   public static Resultado interpretar(List<List<List<String>>> tablas) {
+    return interpretar(tablas, POR_PALABRAS);
+  }
+
+  public static Resultado interpretar(List<List<List<String>>> tablas, DetectorCabecera detector) {
     List<FilaActa> filas = new ArrayList<>();
     List<String> advertencias = new ArrayList<>();
     Map<Campo, Integer> ultimaCabecera = null;
@@ -228,11 +283,10 @@ public final class ActaTableParser {
       int headerRow = -1;
       Map<Campo, Integer> cabecera = null;
       for (int r = 0; r < Math.min(HEADER_SCAN_ROWS, grid.size()); r++) {
-        Map<Campo, Integer> candidata = detectarCabecera(grid.get(r));
-        if (candidata.size() >= 2
-            && (candidata.containsKey(Campo.JUICIO) || candidata.containsKey(Campo.DEUDOR))) {
+        Optional<Map<Campo, Integer>> candidata = detector.detectar(grid.get(r));
+        if (candidata.isPresent() && !candidata.get().isEmpty()) {
           headerRow = r;
-          cabecera = candidata;
+          cabecera = candidata.get();
           break;
         }
       }
@@ -314,6 +368,10 @@ public final class ActaTableParser {
     if (h.contains("ETAPA") || h.contains("ESTADO")) {
       return Optional.of(Campo.ETAPA);
     }
+    // «Nombre Coactivado» es el deudor: va antes que JUICIO, que también reconoce «COACTIV».
+    if (h.contains("COACTIVAD")) {
+      return Optional.of(Campo.DEUDOR);
+    }
     if (h.contains("JUICIO") || h.contains("PROCESO") || h.contains("CAUSA") || h.contains("COACTIV")) {
       return Optional.of(Campo.JUICIO);
     }
@@ -327,7 +385,7 @@ public final class ActaTableParser {
     if (h.contains("ZONAL") || h.equals("ZONA")) {
       return Optional.of(Campo.ZONAL);
     }
-    if (compacto.equals("UEC") || h.contains("UNIDAD EJECUTORA")) {
+    if (compacto.equals("UEC") || h.contains("UNIDAD EJECUTORA") || h.matches(".*UNIDAD (DE )?EJECUCION.*")) {
       return Optional.of(Campo.UEC);
     }
     if (!h.contains("ZONAL")
