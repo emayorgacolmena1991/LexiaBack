@@ -13,6 +13,7 @@ import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
 import com.lexia.api.modules.identity.Membership;
 import com.lexia.api.modules.identity.MembershipRepository;
+import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.tenancy.TenantParameterService;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
@@ -54,6 +55,8 @@ import com.lexia.api.modules.expedientes.minutas.DatosBiessMinuta;
 public class CaseService {
 
   private static final Logger LOG = LoggerFactory.getLogger(CaseService.class);
+  /** Fechas del bufete (Excel, nombre del archivo). */
+  public static final java.time.ZoneId ZONA_BUFETE = java.time.ZoneId.of("America/Guayaquil");
 
   private static final DateTimeFormatter GRID_DATE =
       DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.forLanguageTag("es-CO"))
@@ -72,6 +75,8 @@ public class CaseService {
   private final ExpedienteEstadoService expedienteEstado;
   private final CaseGateRepository caseGates;
   private final EstatusProcesoRepository estatus;
+  private final EstatusEtapaRepository etapasEstatus;
+  private final ProductoBiessService productos;
 
   public CaseService(
       LegalCaseRepository legalCases,
@@ -86,7 +91,9 @@ public class CaseService {
       CaseBootstrapService bootstrap,
       ExpedienteEstadoService expedienteEstado,
       CaseGateRepository caseGates,
-      EstatusProcesoRepository estatus) {
+      EstatusProcesoRepository estatus,
+      EstatusEtapaRepository etapasEstatus,
+      ProductoBiessService productos) {
     this.legalCases = legalCases;
     this.authorization = authorization;
     this.tenantParameters = tenantParameters;
@@ -100,6 +107,8 @@ public class CaseService {
     this.expedienteEstado = expedienteEstado;
     this.caseGates = caseGates;
     this.estatus = estatus;
+    this.etapasEstatus = etapasEstatus;
+    this.productos = productos;
   }
 
   @Transactional(readOnly = true)
@@ -174,8 +183,19 @@ public class CaseService {
                 caseGates.findCaseIdsWithPendingGates(
                     tenantId, rows.stream().map(LegalCase::getId).toList()));
     Map<UUID, EstatusProceso> ultimos = ultimosEstatus(tenantId, rows);
+    Map<String, String> nombresEtapa = new HashMap<>();
+    if (!ultimos.isEmpty()) {
+      etapasEstatus.findByTenantId(tenantId).forEach(e -> nombresEtapa.put(e.getCodigo(), e.getNombre()));
+    }
     return rows.stream()
-        .map(row -> toBandeja(row, tenantId, pendingGates.contains(row.getId()), ultimos.get(row.getId())))
+        .map(
+            row ->
+                toBandeja(
+                    row,
+                    tenantId,
+                    pendingGates.contains(row.getId()),
+                    ultimos.get(row.getId()),
+                    nombresEtapa))
         .toList();
   }
 
@@ -259,6 +279,34 @@ public class CaseService {
     }
   }
 
+  /**
+   * @param total expedientes activos del tenant con ese número (sin el excluido).
+   * @param codigos los que el usuario puede ver; el resto solo cuenta.
+   */
+  public record NumeroRepetido(int total, List<String> codigos) {}
+
+  /** Aviso, no bloqueo: dos expedientes con el mismo número de instancia no se cruzan en la matriz. */
+  @Transactional(readOnly = true)
+  public NumeroRepetido numeroInstanciaRepetido(String numero, UUID excluir) {
+    authorization.requirePermission("expedientes:caso:leer");
+    AuthPrincipal principal = AuthContext.require();
+    String limpio = numero == null ? "" : numero.trim();
+    if (limpio.isEmpty()) {
+      return new NumeroRepetido(0, List.of());
+    }
+    List<LegalCase> otros =
+        legalCases.findByTenantIdAndNumeroInstanciaAndDeletedAtIsNull(principal.tenantId(), limpio).stream()
+            .filter(c -> !c.getId().equals(excluir))
+            .toList();
+    boolean todos = CaseReadScope.canReadAll(authorization);
+    List<String> visibles =
+        otros.stream()
+            .filter(c -> todos || Objects.equals(c.getResponsibleMembershipId(), principal.membershipId()))
+            .map(LegalCase::getCode)
+            .toList();
+    return new NumeroRepetido(otros.size(), visibles);
+  }
+
   @Transactional
   public CaseDetailItem actualizarNumeroInstancia(UUID caseId, String numero) {
     authorization.requirePermission("expedientes:caso:escribir");
@@ -293,25 +341,35 @@ public class CaseService {
     }
     List<LegalCase> ordenadas =
         rows.stream().sorted(java.util.Comparator.comparingInt(r -> orden.get(r.getId()))).toList();
+    Map<String, String> nombresProducto = ordenadas.isEmpty() ? Map.of() : productos.etiquetas(tenantId);
     List<BandejaExcel.Fila> filas = new ArrayList<>();
     for (EscrituracionBandejaItem item : filasBandeja(tenantId, ordenadas)) {
       String cliente = item.clienteOperacion() == null ? "" : item.clienteOperacion().split("·")[0].trim();
+      String producto = item.producto() == null ? "" : nombresProducto.getOrDefault(item.producto(), item.producto());
       filas.add(
           new BandejaExcel.Fila(
               item.codigo(),
               item.numeroInstancia(),
               cliente,
-              item.producto(),
+              producto,
               item.etapa(),
+              item.ultimoEstatusEtapa(),
               item.ultimoEstatus(),
-              item.ultimoEstatusEn()));
+              item.ultimoEstatusFecha() == null
+                  ? null
+                  : java.time.LocalDateTime.ofInstant(item.ultimoEstatusFecha(), ZONA_BUFETE),
+              item.responsable()));
     }
     LOG.info("Export bandeja escrituracion pedidos={} filas={}", pedidos.size(), filas.size());
     return BandejaExcel.escribir(filas);
   }
 
   private EscrituracionBandejaItem toBandeja(
-      LegalCase legalCase, UUID tenantId, boolean tieneGatesPendientes, EstatusProceso ultimo) {
+      LegalCase legalCase,
+      UUID tenantId,
+      boolean tieneGatesPendientes,
+      EstatusProceso ultimo,
+      Map<String, String> nombresEtapa) {
     CaseParty client =
         caseParties
             .findFirstByCaseIdAndTenantIdAndKindAndDeletedAtIsNull(
@@ -338,7 +396,10 @@ public class CaseService {
         legalCase.getNumeroInstancia(),
         legalCase.getProductCode(),
         ultimo == null ? "" : ultimo.getTexto(),
-        ultimo == null ? "" : GRID_DATE.format(ultimo.getCreatedAt()));
+        ultimo == null ? "" : GRID_DATE.format(ultimo.getCreatedAt()),
+        ultimo == null ? "" : ultimo.getEtapa(),
+        ultimo == null ? "" : nombresEtapa.getOrDefault(ultimo.getEtapa(), ultimo.getEtapa()),
+        ultimo == null ? null : ultimo.getCreatedAt());
   }
 
   private Map<UUID, EstatusProceso> ultimosEstatus(UUID tenantId, List<LegalCase> rows) {

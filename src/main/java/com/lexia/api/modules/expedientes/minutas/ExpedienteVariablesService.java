@@ -137,12 +137,14 @@ public class ExpedienteVariablesService {
   /** Estado del JSON final frente al acto: valores (vacío si falta) y lista de pendientes. */
   public VariablesConsolidadas consolidar(
       MinutaTemplateDescriptor descriptor, MinutaViviendaData data) {
-    Map<String, Object> map = (data == null ? new MinutaViviendaData() : data).toTemplateMap();
+    MinutaViviendaData safe = data == null ? new MinutaViviendaData() : data;
+    Map<String, Object> map = safe.toTemplateMap();
     Map<String, String> variables = new LinkedHashMap<>();
     Map<String, String> etiquetas = new LinkedHashMap<>();
     List<String> pendientes = new ArrayList<>();
+    // Solo lo que se verá: con un comprador, los datos del segundo no quedan pendientes.
     Set<String> enPlantilla = new LinkedHashSet<>();
-    for (String tag : renderer.tags(descriptor)) {
+    for (String tag : renderer.tagsVisibles(descriptor, safe.secciones())) {
       enPlantilla.add(MinutaTagAliases.canonico(tag));
     }
     for (String campo : camposDelActo(descriptor)) {

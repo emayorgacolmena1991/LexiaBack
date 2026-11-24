@@ -373,6 +373,8 @@ public class PlatformTenantService {
           ProvisionResult result = completeProvisionAppLayer(savedTenant, request, kind, timezone);
           tenants.flush();
           jdbc.queryForObject("SELECT app.seed_tenant_masters(?)", Integer.class, savedTenant.getId());
+          // Etapas del estatus del proceso (V117); la función ignora lo que no es bufete.
+          jdbc.queryForObject("SELECT app.seed_estatus_etapas(?)", Integer.class, savedTenant.getId());
           return result;
         });
   }

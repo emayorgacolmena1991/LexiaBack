@@ -123,6 +123,23 @@ public class ProductoBiessService {
         .toList();
   }
 
+  /**
+   * Código → nombre visible de los productos del tenant (dos consultas). Sin catálogo, vacío: quien
+   * lo usa muestra el código.
+   */
+  @Transactional(readOnly = true)
+  public java.util.Map<String, String> etiquetas(UUID tenantId) {
+    java.util.Map<String, String> out = new java.util.HashMap<>();
+    catalogs
+        .findByTenantIdAndCodeAndDeletedAtIsNull(tenantId, CATALOG_PRODUCTO)
+        .ifPresent(
+            c ->
+                items
+                    .findByCatalogIdAndTenantIdOrderBySortOrderAscLabelAsc(c.getId(), tenantId)
+                    .forEach(p -> out.put(p.getCode(), p.getLabel())));
+    return out;
+  }
+
   public CatalogItem requireProducto(UUID tenantId, String productCode) {
     if (productCode == null || productCode.isBlank()) {
       throw ApiException.notFound("Producto BIESS no indicado.");

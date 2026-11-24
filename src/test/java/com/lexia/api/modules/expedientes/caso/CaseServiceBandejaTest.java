@@ -50,6 +50,9 @@ class CaseServiceBandejaTest {
   @Mock private CaseBootstrapService bootstrap;
   @Mock private ExpedienteEstadoService expedienteEstado;
   @Mock private CaseGateRepository caseGates;
+  @Mock private EstatusProcesoRepository estatusRepo;
+  @Mock private EstatusEtapaRepository etapasRepo;
+  @Mock private com.lexia.api.modules.expedientes.reglas.ProductoBiessService productos;
 
   @AfterEach
   void clearAuth() {
@@ -104,7 +107,9 @@ class CaseServiceBandejaTest {
             bootstrap,
             expedienteEstado,
             caseGates,
-            org.mockito.Mockito.mock(EstatusProcesoRepository.class));
+            estatusRepo,
+            etapasRepo,
+            productos);
 
     EscrituracionBandejaPage page = service.bandeja("ana", "En trámite", 0, 20);
 
@@ -135,7 +140,9 @@ class CaseServiceBandejaTest {
         bootstrap,
         expedienteEstado,
         caseGates,
-        org.mockito.Mockito.mock(EstatusProcesoRepository.class));
+        estatusRepo,
+        etapasRepo,
+        productos);
   }
 
   @Test
@@ -152,7 +159,7 @@ class CaseServiceBandejaTest {
   }
 
   @Test
-  void exportarRespetaElOrdenDeLaGrillaYElTope() throws Exception {
+  void exportarRespetaElOrdenDeLaGrilla() throws Exception {
     UUID tenant = UUID.randomUUID();
     UUID membershipId = UUID.randomUUID();
     AuthContext.set(new AuthPrincipal(UUID.randomUUID(), UUID.randomUUID(), tenant, membershipId));
@@ -171,10 +178,72 @@ class CaseServiceBandejaTest {
       assertEquals("LEX-B", sheet.getRow(1).getCell(0).getStringCellValue());
       assertEquals("LEX-A", sheet.getRow(2).getCell(0).getStringCellValue());
     }
+  }
+
+  @Test
+  void exportarLlenaProductoUltimoEstatusFechaYResponsable() throws Exception {
+    UUID tenant = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    UUID membershipId = UUID.randomUUID();
+    AuthContext.set(new AuthPrincipal(userId, UUID.randomUUID(), tenant, membershipId));
+    LegalCase a =
+        LegalCase.create(tenant, "LEX-A", "EJD", "Escrituración", "A", "ALTA", membershipId, userId, null);
+    a.setProductCode("VIV_TERMINADA_IND");
+    a.setNumeroInstancia("INS-1");
+    when(legalCases.findAll(any(Specification.class))).thenReturn(List.of(a));
+    when(caseGates.findCaseIdsWithPendingGates(any(UUID.class), any())).thenReturn(List.of());
+    when(productos.etiquetas(tenant)).thenReturn(java.util.Map.of("VIV_TERMINADA_IND", "Vivienda terminada individual"));
+    EstatusProceso ultimo = EstatusProceso.crear(tenant, a.getId(), userId, "ENTREGA_NOTARIA", "Enviado.");
+    when(estatusRepo.findRecientes(any(UUID.class), any())).thenReturn(List.of(ultimo));
+    when(etapasRepo.findByTenantId(tenant))
+        .thenReturn(List.of(EstatusEtapa.of(tenant, "ENTREGA_NOTARIA", "Entrega a notaría", null, 5, "")));
+    when(memberships.findById(membershipId)).thenReturn(Optional.of(Membership.invited(userId, tenant)));
+    when(users.findById(userId)).thenReturn(Optional.of(AppUser.create("persona@lexia.test", "Persona Sintética")));
+
+    byte[] xlsx = servicio().exportarBandeja(List.of(a.getId()));
+
+    try (var book = new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(xlsx))) {
+      var row = book.getSheetAt(0).getRow(1);
+      assertEquals("INS-1", row.getCell(1).getStringCellValue());
+      assertEquals("Vivienda terminada individual", row.getCell(3).getStringCellValue());
+      assertEquals("Entrega a notaría", row.getCell(5).getStringCellValue());
+      assertEquals("Enviado.", row.getCell(6).getStringCellValue());
+      var fecha = row.getCell(BandejaExcel.COL_FECHA);
+      assertTrue(org.apache.poi.ss.usermodel.DateUtil.isCellDateFormatted(fecha));
+      assertEquals(
+          java.time.LocalDate.ofInstant(ultimo.getCreatedAt(), CaseService.ZONA_BUFETE),
+          fecha.getLocalDateTimeCellValue().toLocalDate());
+      assertEquals("Persona Sintética", row.getCell(8).getStringCellValue());
+    }
+  }
+
+  @Test
+  void exportarPidePermisoDeLecturaYTieneTope() {
+    AuthContext.set(new AuthPrincipal(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()));
+    servicio().exportarBandeja(List.of());
     verify(authorization).requirePermission("expedientes:caso:leer");
     List<UUID> demasiados =
         java.util.stream.Stream.generate(UUID::randomUUID).limit(CaseService.MAX_EXPORTAR + 1).toList();
     assertThrows(ApiException.class, () -> servicio().exportarBandeja(demasiados));
+  }
+
+  @Test
+  void numeroDeInstanciaRepetidoAvisaYSoloMuestraLosCodigosVisibles() {
+    UUID tenant = UUID.randomUUID();
+    UUID mia = UUID.randomUUID();
+    AuthContext.set(new AuthPrincipal(UUID.randomUUID(), UUID.randomUUID(), tenant, mia));
+    LegalCase propio = LegalCase.create(tenant, "LEX-1", "EJD", "Escrituración", "A", "ALTA", mia, null, null);
+    LegalCase ajeno =
+        LegalCase.create(tenant, "LEX-2", "EJD", "Escrituración", "B", "ALTA", UUID.randomUUID(), null, null);
+    LegalCase actual = LegalCase.create(tenant, "LEX-3", "EJD", "Escrituración", "C", "ALTA", mia, null, null);
+    when(legalCases.findByTenantIdAndNumeroInstanciaAndDeletedAtIsNull(tenant, "INS-9"))
+        .thenReturn(List.of(propio, ajeno, actual));
+
+    CaseService.NumeroRepetido r = servicio().numeroInstanciaRepetido(" INS-9 ", actual.getId());
+
+    assertEquals(2, r.total());
+    assertEquals(List.of("LEX-1"), r.codigos());
+    assertEquals(0, servicio().numeroInstanciaRepetido("  ", null).total());
   }
 
   @Test

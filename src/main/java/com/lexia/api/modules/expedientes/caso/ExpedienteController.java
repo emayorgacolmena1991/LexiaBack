@@ -141,16 +141,20 @@ public class ExpedienteController {
     }
     byte[] archivo = caseService.exportarBandeja(body == null ? null : body.ids());
     return ResponseEntity.ok()
-        .header(HttpHeaders.CONTENT_DISPOSITION, Descargas.adjunto("escrituracion.xlsx"))
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION,
+            Descargas.adjunto(BandejaExcel.nombreArchivo(java.time.LocalDate.now(CaseService.ZONA_BUFETE))))
         .body(archivo);
   }
 
-  @GetMapping("/estatus-etapas")
-  public List<EstatusProcesoService.Etapa> estatusEtapas() {
-    if (estatusProceso == null) {
-      return List.of();
+  /** Expedientes activos del tenant con ese número (para avisar antes o después de guardarlo). */
+  @GetMapping("/numero-instancia/repetidos")
+  public CaseService.NumeroRepetido numeroRepetido(
+      @RequestParam String numero, @RequestParam(required = false) UUID excluir) {
+    if (caseService == null) {
+      return new CaseService.NumeroRepetido(0, List.of());
     }
-    return estatusProceso.etapas();
+    return caseService.numeroInstanciaRepetido(numero, excluir);
   }
 
   @PatchMapping("/{id}/numero-instancia")
@@ -172,7 +176,8 @@ public class ExpedienteController {
     if (estatusProceso == null) {
       return null;
     }
-    return estatusProceso.registrar(id, body == null ? null : body.etapa(), body == null ? null : body.texto());
+    return estatusProceso.registrar(
+        id, body == null ? null : body.etapaCodigo(), body == null ? null : body.texto());
   }
 
   /** PDF unido del expediente; los nombres omitidos van en {@value #HEADER_OMITIDOS} (URL-encoded, por coma). */
@@ -200,7 +205,7 @@ public class ExpedienteController {
 
   public record MapNumero(String numero) {}
 
-  public record EstatusBody(String etapa, String texto) {}
+  public record EstatusBody(String etapaCodigo, String texto) {}
 
   @GetMapping("/{id}/validaciones")
   public List<ValidacionItem> validaciones(@PathVariable UUID id) {

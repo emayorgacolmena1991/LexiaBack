@@ -15,6 +15,15 @@ import java.util.Map;
 /**
  * Precio de venta y anticipos del expediente. Entrada, saldo y el literal de forma de pago se
  * calculan aquí; no se capturan a mano.
+ *
+ * <p>Una fuente, dos textos: el dato canónico es la lista de anticipos del expediente. De ella salen
+ * {@link #DETALLE} (anticipos + saldo BIESS, para cláusulas que solo dicen «que serán cancelados de la
+ * siguiente manera:», como Hipotecada) y {@link #DETALLE_ENTRADA} (solo anticipos, a media frase, para
+ * cláusulas que ya redactan entrada y saldo: Individual/Solidaria, Preferencial y Terreno). No son
+ * alias: con un solo texto, una de las dos redacciones repetiría el saldo o lo perdería.
+ *
+ * <p>Formato del bufete: «USD 500,00 (QUINIENTOS CON 00/100 DÓLARES DE LOS ESTADOS UNIDOS DE AMÉRICA)
+ * mediante transferencia bancaria realizada el 12/10/2026», sin coma entre el monto y el medio.
  */
 public final class PrecioFormaPago {
 
@@ -108,7 +117,7 @@ public final class PrecioFormaPago {
       entrada = entrada.add(valor);
       String medio = medio(pago.forma, pago.fecha, descripcion);
       medios.add(medio);
-      lineas.add(montoLiteral(valor) + ", " + medio);
+      lineas.add(montoLiteral(valor) + " " + medio);
     }
     String detalleEntrada =
         switch (lineas.size()) {
@@ -180,7 +189,7 @@ public final class PrecioFormaPago {
 
   private static String lineaSaldo(BigDecimal saldo) {
     return montoLiteral(saldo)
-        + ", que corresponde al saldo del precio, con el préstamo hipotecario que el Banco del"
+        + " que corresponde al saldo del precio, con el préstamo hipotecario que el Banco del"
         + " Instituto Ecuatoriano de Seguridad Social, BIESS, otorga a LA PARTE COMPRADORA";
   }
 
