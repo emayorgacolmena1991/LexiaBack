@@ -21,10 +21,13 @@ import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnostico.Docume
 import com.lexia.api.modules.expedientes.coactivas.ia.CoactivaDiagnosticoParser.Parse;
 import com.lexia.api.modules.expedientes.coactivas.jobs.BatchEventPublisherService;
 import com.lexia.api.modules.expedientes.coactivas.jobs.CoactivaJobQueue;
+import com.lexia.api.modules.expedientes.coactivas.jobs.CoactivaJobWorker;
 import com.lexia.api.modules.ia.gemini.GeminiJsonSanitizer;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService;
 import com.lexia.api.modules.ia.llm.AnalisisDocumentoService.ValidacionDocumentoJson;
 import com.lexia.api.modules.tenancy.RlsConnectionProvider;
+import com.lexia.api.modules.tenancy.TenantContext;
+import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -33,6 +36,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -98,6 +109,10 @@ public class CoactivaExpedienteAnalisisWorker {
   private final CoactivaValidacionIaWorker validacion;
   private final boolean dummy;
   private final TransactionTemplate tx;
+  private static final int BLOQUES_PARALELO_MAX = 8;
+  private final int bloquesParalelo;
+  /** Propio: no compite con los hilos de la cola ni con el ForkJoinPool común. */
+  private final ExecutorService llmPool;
 
   public CoactivaExpedienteAnalisisWorker(
       CoactivaArchivoRepository archivos,
@@ -115,7 +130,32 @@ public class CoactivaExpedienteAnalisisWorker {
       BatchEventPublisherService sse,
       CoactivaValidacionIaWorker validacion,
       PlatformTransactionManager txManager,
-      @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy) {
+      @Value("${lexia.coactivas.ia.dummy:false}") boolean dummy,
+      @Value("${lexia.coactivas.llm.bloques-paralelo:3}") int bloquesParalelo) {
+    this.bloquesParalelo = Math.max(1, Math.min(BLOQUES_PARALELO_MAX, bloquesParalelo));
+    if (this.bloquesParalelo != bloquesParalelo) {
+      LOG.warn(
+          "lexia.coactivas.llm.bloques-paralelo={} fuera de rango 1-{}; se usa {}",
+          bloquesParalelo,
+          BLOQUES_PARALELO_MAX,
+          this.bloquesParalelo);
+    }
+    // Tope = jobs simultáneos máximos × bloques por job; los hilos ociosos mueren a los 60 s.
+    int tope = CoactivaJobWorker.HILOS_MAX * this.bloquesParalelo;
+    ThreadPoolExecutor pool =
+        new ThreadPoolExecutor(
+            tope,
+            tope,
+            60,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(),
+            r -> {
+              Thread hilo = new Thread(r, "coactiva-llm-bloque");
+              hilo.setDaemon(true);
+              return hilo;
+            });
+    pool.allowCoreThreadTimeOut(true);
+    this.llmPool = pool;
     this.archivos = archivos;
     this.storage = storage;
     this.expedientes = expedientes;
@@ -132,6 +172,11 @@ public class CoactivaExpedienteAnalisisWorker {
     this.validacion = validacion;
     this.dummy = dummy;
     this.tx = new TransactionTemplate(txManager);
+  }
+
+  @PreDestroy
+  void cerrar() {
+    llmPool.shutdownNow();
   }
 
   /**
@@ -277,6 +322,7 @@ public class CoactivaExpedienteAnalisisWorker {
       return Resultado.error(ctx.etapa(), promptId, "No hay un proveedor de IA configurado para diagnosticar.");
     }
     LOG.info("Paso 1 OCR Azure expediente archivo={}", archivo.getId());
+    long inicioOcr = System.nanoTime();
     CoactivaPdfTexto.TextoOcr extraido =
         pdfTexto.extraer(
             archivo.getTenantId(),
@@ -284,6 +330,12 @@ public class CoactivaExpedienteAnalisisWorker {
             () -> storage.read(archivo),
             archivo.getMimeType(),
             archivo.getNombreOriginal());
+    LOG.info(
+        "Paso 1 OCR Azure fin archivo={} paginas={} chars={} ms={}",
+        archivo.getId(),
+        extraido.paginas(),
+        extraido.caracteres(),
+        ms(inicioOcr));
     if (CoactivaPdfTexto.calidadInsuficiente(extraido)) {
       LOG.warn("DiagnÃ³stico OCR calidad insuficiente archivo={}", archivo.getId());
       return Resultado.calidad(ctx.etapa(), promptId, CoactivaPdfTexto.mensajeCalidad(extraido.paginas()));
@@ -300,43 +352,11 @@ public class CoactivaExpedienteAnalisisWorker {
         archivo.getId(),
         extraido.caracteres(),
         bloques.size());
-    ObjectNode unido = null;
-    for (int i = 0; i < bloques.size(); i++) {
-      String texto = i == 0 ? textoConHistorial(bloques.get(i), previo) : bloques.get(i);
-      LOG.info(
-          "Paso 2 LLM bloque={}/{} archivo={} chars={}",
-          i + 1,
-          bloques.size(),
-          archivo.getId(),
-          texto.length());
-      ValidacionDocumentoJson raw = analisis.diagnosticarCoactiva(reglas, texto);
-      if (raw.esError()) {
-        LOG.warn(
-            "Paso 2 LLM error archivo={} bloque={}/{}: {}",
-            archivo.getId(),
-            i + 1,
-            bloques.size(),
-            truncate(raw.error(), 300));
-        return Resultado.error(ctx.etapa(), promptId, raw.error());
-      }
-      LOG.info(
-          "Claude raw archivo={} bloque={}/{} json={}",
-          archivo.getId(),
-          i + 1,
-          bloques.size(),
-          raw.json());
-      Parse parsed = parser.parse(raw.json());
-      if (!parsed.ok()) {
-        LOG.warn(
-            "DiagnÃ³stico JSON invÃ¡lido archivo={} bloque={}/{}: {}",
-            archivo.getId(),
-            i + 1,
-            bloques.size(),
-            truncate(parsed.error(), 300));
-        return Resultado.error(ctx.etapa(), promptId, parsed.error());
-      }
-      unido = unirDiagnostico(unido, parsed.diagnostico().json());
+    Paso2 paso2 = llm(archivo.getId(), reglas, bloques, previo);
+    if (paso2.error() != null) {
+      return Resultado.error(ctx.etapa(), promptId, paso2.error());
     }
+    ObjectNode unido = paso2.unido();
     if (unido == null) {
       return Resultado.error(ctx.etapa(), promptId, "La IA devolviÃ³ una respuesta vacÃ­a.");
     }
@@ -356,6 +376,143 @@ public class CoactivaExpedienteAnalisisWorker {
       return Resultado.error(ctx.etapa(), promptId, parsed.error());
     }
     return Resultado.ok(ctx.etapa(), promptId, parsed.diagnostico());
+  }
+
+  record Paso2(ObjectNode unido, String error) {}
+
+  private record Bloque(String json, String error) {}
+
+  /**
+   * Hasta {@code bloquesParalelo} bloques en vuelo. La unión va en orden 0..n-1 al final y el
+   * error que gana es el del bloque de menor índice, igual que en secuencial: no cambia el resultado.
+   */
+  Paso2 llm(UUID archivoId, String reglas, List<String> bloques, Previo previo) {
+    long inicio = System.nanoTime();
+    Paso2 paso2 =
+        bloquesParalelo <= 1 || bloques.size() <= 1
+            ? llmSecuencial(archivoId, reglas, bloques, previo)
+            : llmParalelo(archivoId, reglas, bloques, previo);
+    LOG.info(
+        "Paso 2 LLM fin archivo={} bloques={} paralelo={} error={} ms={}",
+        archivoId,
+        bloques.size(),
+        bloquesParalelo,
+        paso2.error() != null,
+        ms(inicio));
+    return paso2;
+  }
+
+  private Paso2 llmSecuencial(UUID archivoId, String reglas, List<String> bloques, Previo previo) {
+    ObjectNode unido = null;
+    for (int i = 0; i < bloques.size(); i++) {
+      Bloque b = bloque(archivoId, reglas, bloques, i, previo);
+      if (b.error() != null) {
+        return new Paso2(null, b.error());
+      }
+      unido = unirDiagnostico(unido, b.json());
+    }
+    return new Paso2(unido, null);
+  }
+
+  private Paso2 llmParalelo(UUID archivoId, String reglas, List<String> bloques, Previo previo) {
+    UUID tenantId = TenantContext.getTenantId();
+    Semaphore cupo = new Semaphore(bloquesParalelo);
+    AtomicInteger primerFallo = new AtomicInteger(Integer.MAX_VALUE);
+    List<Future<Bloque>> futuros = new ArrayList<>();
+    try {
+      for (int i = 0; i < bloques.size(); i++) {
+        cupo.acquire();
+        if (i > primerFallo.get()) {
+          cupo.release();
+          break;
+        }
+        int n = i;
+        futuros.add(
+            llmPool.submit(
+                () -> {
+                  TenantContext.setTenantId(tenantId);
+                  try {
+                    if (n > primerFallo.get()) {
+                      return new Bloque(null, "omitido");
+                    }
+                    Bloque b = bloque(archivoId, reglas, bloques, n, previo);
+                    if (b.error() != null) {
+                      primerFallo.accumulateAndGet(n, Math::min);
+                    }
+                    return b;
+                  } catch (RuntimeException ex) {
+                    primerFallo.accumulateAndGet(n, Math::min);
+                    throw ex;
+                  } finally {
+                    TenantContext.clear();
+                    cupo.release();
+                  }
+                }));
+      }
+      ObjectNode unido = null;
+      for (Future<Bloque> futuro : futuros) {
+        Bloque b = futuro.get();
+        if (b.error() != null) {
+          return new Paso2(null, b.error());
+        }
+        unido = unirDiagnostico(unido, b.json());
+      }
+      return new Paso2(unido, null);
+    } catch (InterruptedException ex) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Paso 2 LLM interrumpido", ex);
+    } catch (ExecutionException ex) {
+      if (ex.getCause() instanceof RuntimeException rt) {
+        throw rt;
+      }
+      throw new IllegalStateException(ex.getCause());
+    } finally {
+      futuros.forEach(f -> f.cancel(true));
+    }
+  }
+
+  private Bloque bloque(UUID archivoId, String reglas, List<String> bloques, int i, Previo previo) {
+    long inicio = System.nanoTime();
+    String texto = i == 0 ? textoConHistorial(bloques.get(i), previo) : bloques.get(i);
+    LOG.info(
+        "Paso 2 LLM bloque={}/{} archivo={} chars={}",
+        i + 1,
+        bloques.size(),
+        archivoId,
+        texto.length());
+    ValidacionDocumentoJson raw = analisis.diagnosticarCoactiva(reglas, texto);
+    if (raw.esError()) {
+      LOG.warn(
+          "Paso 2 LLM error archivo={} bloque={}/{} ms={}: {}",
+          archivoId,
+          i + 1,
+          bloques.size(),
+          ms(inicio),
+          truncate(raw.error(), 300));
+      return new Bloque(null, raw.error());
+    }
+    LOG.info(
+        "Claude raw archivo={} bloque={}/{} json={}",
+        archivoId,
+        i + 1,
+        bloques.size(),
+        raw.json());
+    Parse parsed = parser.parse(raw.json());
+    if (!parsed.ok()) {
+      LOG.warn(
+          "DiagnÃ³stico JSON invÃ¡lido archivo={} bloque={}/{}: {}",
+          archivoId,
+          i + 1,
+          bloques.size(),
+          truncate(parsed.error(), 300));
+      return new Bloque(null, parsed.error());
+    }
+    LOG.info("Paso 2 LLM bloque={}/{} archivo={} ms={}", i + 1, bloques.size(), archivoId, ms(inicio));
+    return new Bloque(parsed.diagnostico().json(), null);
+  }
+
+  private static long ms(long inicioNanos) {
+    return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - inicioNanos);
   }
 
   private void guardar(UUID tenantId, UUID archivoId, Resultado resultado) {
@@ -998,7 +1155,7 @@ public class CoactivaExpedienteAnalisisWorker {
 
   private record Contexto(String etapa, String juicio, String operacion, String deudor) {}
 
-  private record Previo(UUID id, UUID archivoId, String json, Instant fecha) {}
+  record Previo(UUID id, UUID archivoId, String json, Instant fecha) {}
 
   private record Resultado(
       String etapa, Long promptId, CoactivaDiagnostico diagnostico, String error, boolean calidad) {

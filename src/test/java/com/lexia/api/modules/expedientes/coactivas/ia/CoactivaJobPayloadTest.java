@@ -31,13 +31,17 @@ class CoactivaJobPayloadTest {
   private final CoactivaExpedienteAnalisisWorker diagnostico = mock(CoactivaExpedienteAnalisisWorker.class);
   private final CoactivaValidacionIaWorker anexo = mock(CoactivaValidacionIaWorker.class);
 
-  @SuppressWarnings("unchecked")
   private CoactivaJobWorker worker() {
+    return worker(4);
+  }
+
+  @SuppressWarnings("unchecked")
+  private CoactivaJobWorker worker(int hilos) {
     ObjectProvider<CoactivaExpedienteAnalisisWorker> d = mock(ObjectProvider.class);
     ObjectProvider<CoactivaValidacionIaWorker> a = mock(ObjectProvider.class);
     when(d.getIfAvailable()).thenReturn(diagnostico);
     when(a.getIfAvailable()).thenReturn(anexo);
-    return new CoactivaJobWorker(cola, d, a, sse, new ObjectMapper());
+    return new CoactivaJobWorker(cola, d, a, sse, new ObjectMapper(), hilos, 20);
   }
 
   private String comoJsonb(String payload) {
@@ -58,7 +62,7 @@ class CoactivaJobPayloadTest {
   void elPayloadDelProductorLlegaAlWorkerTrasPasarPorJsonb() {
     CoactivaJobQueue productor = mock(CoactivaJobQueue.class);
     new CoactivaExpedienteAnalisisWorker(
-            null, null, null, null, null, null, null, null, null, null, null, productor, sse, null, null, false)
+            null, null, null, null, null, null, null, null, null, null, null, productor, sse, null, null, false, 1)
         .encolar(tenant, expediente, archivo);
     ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
     verify(productor)
@@ -99,6 +103,15 @@ class CoactivaJobPayloadTest {
 
   @Test
   void tickNoReclamaMasQueLosHilosLibres() throws InterruptedException {
+    reclamaComoMaximo(4);
+  }
+
+  @Test
+  void respetaLexiaCoactivasWorkerHilos() throws InterruptedException {
+    reclamaComoMaximo(2);
+  }
+
+  private void reclamaComoMaximo(int hilos) throws InterruptedException {
     java.util.concurrent.CountDownLatch liberar = new java.util.concurrent.CountDownLatch(1);
     org.mockito.Mockito.doAnswer(
             inv -> {
@@ -111,12 +124,13 @@ class CoactivaJobPayloadTest {
         "COACTIVA_DIAGNOSTICO",
         "{\"archivoId\": \"" + archivo + "\", \"expedienteId\": \"" + expediente + "\"}",
         1);
-    CoactivaJobWorker w = worker();
+    CoactivaJobWorker w = worker(hilos);
 
     w.tick();
     w.tick();
 
-    verify(cola, org.mockito.Mockito.times(CoactivaJobWorker.HILOS)).reclamar(anyString(), any());
+    verify(cola, org.mockito.Mockito.times(hilos)).reclamar(anyString(), any());
+    org.junit.jupiter.api.Assertions.assertEquals(hilos, w.hilosOcupados());
     liberar.countDown();
   }
 }

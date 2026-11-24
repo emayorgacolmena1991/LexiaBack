@@ -28,7 +28,7 @@ class CoactivaReemplazoDocumentoIntegrationTest {
     CoactivaExpedienteAnalisisWorker worker =
         new CoactivaExpedienteAnalisisWorker(
             null, null, null, null, null, null, null, null, null, null, null,
-            jobs, sse, null, null, false);
+            jobs, sse, null, null, false, 1);
     UUID tenant = UUID.randomUUID();
     UUID expediente = UUID.randomUUID();
     UUID archivo = UUID.randomUUID();
