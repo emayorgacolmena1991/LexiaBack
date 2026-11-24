@@ -2,7 +2,10 @@ package com.lexia.api.modules.expedientes.coactivas.actuacion;
 
 import com.lexia.api.modules.expedientes.coactivas.CoactivaTexto;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegado;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoOficina;
+import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoOficinaRepository;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaDelegadoRepository;
+import com.lexia.api.modules.expedientes.coactivas.delegados.DelegadoFirmante;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficina;
 import com.lexia.api.modules.expedientes.coactivas.delegados.CoactivaOficinaRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente;
@@ -80,6 +83,7 @@ public class CoactivaPlantillaDataMapper {
   private final CoactivaDiagnosticoParser parser;
   private final CoactivaOficinaRepository oficinas;
   private final CoactivaDelegadoRepository delegados;
+  private final CoactivaDelegadoOficinaRepository asignaciones;
   private final CoactivaActaRepository actas;
   private final AppUserRepository usuarios;
   private final Config config;
@@ -91,6 +95,7 @@ public class CoactivaPlantillaDataMapper {
       CoactivaDiagnosticoParser parser,
       CoactivaOficinaRepository oficinas,
       CoactivaDelegadoRepository delegados,
+      CoactivaDelegadoOficinaRepository asignaciones,
       CoactivaActaRepository actas,
       AppUserRepository usuarios,
       @Value("${lexia.coactivas.plantillas.gerente-general:}") String gerenteGeneral,
@@ -103,6 +108,7 @@ public class CoactivaPlantillaDataMapper {
     this.parser = parser;
     this.oficinas = oficinas;
     this.delegados = delegados;
+    this.asignaciones = asignaciones;
     this.actas = actas;
     this.usuarios = usuarios;
     this.config =
@@ -122,10 +128,18 @@ public class CoactivaPlantillaDataMapper {
         expediente.getOficinaCodigo() == null
             ? null
             : oficinas.findByTenantIdAndCodigo(tenantId, expediente.getOficinaCodigo()).orElse(null);
-    CoactivaDelegado delegado =
+    CoactivaDelegado delegadoExpediente =
         expediente.getDelegadoId() == null
             ? null
             : delegados.findByIdAndTenantIdAndDeletedAtIsNull(expediente.getDelegadoId(), tenantId).orElse(null);
+    // Firma el delegado vigente hoy (vacaciones, rotación de oficinas), no necesariamente el guardado.
+    DelegadoFirmante.Eleccion firmante =
+        DelegadoFirmante.elegir(
+            delegadoExpediente, delegadosDeOficina(tenantId, expediente.getOficinaCodigo()), LocalDate.now(zona));
+    if (firmante.motivo() != null) {
+      LOG.info("Plantilla coactiva expediente={}: {}", expedienteId, firmante.motivo());
+    }
+    CoactivaDelegado delegado = firmante.delegado();
     String secretario =
         expediente.getSaeUserId() == null
             ? null
@@ -148,6 +162,17 @@ public class CoactivaPlantillaDataMapper {
           datos.discrepancias());
     }
     return datos;
+  }
+
+  private List<CoactivaDelegado> delegadosDeOficina(UUID tenantId, String oficinaCodigo) {
+    if (oficinaCodigo == null) {
+      return List.of();
+    }
+    List<UUID> ids =
+        asignaciones.findByOficina(tenantId, oficinaCodigo).stream()
+            .map(CoactivaDelegadoOficina::getDelegadoId)
+            .toList();
+    return ids.isEmpty() ? List.of() : delegados.findByTenantIdAndIdIn(tenantId, ids);
   }
 
   /** Fecha del acta de entrega vinculada. Sin acta o sin fecha, null: no se inventa. */
