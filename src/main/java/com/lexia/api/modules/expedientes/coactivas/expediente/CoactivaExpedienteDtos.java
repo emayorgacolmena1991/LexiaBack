@@ -133,7 +133,8 @@ public final class CoactivaExpedienteDtos {
       Instant iaAnalizadoAt,
       UUID overridePor,
       Instant overrideAt,
-      String overrideMotivo) {}
+      String overrideMotivo,
+      Instant incorporadoAt) {}
 
   public record OverrideIaRequest(@Size(max = 600) String motivo) {}
 

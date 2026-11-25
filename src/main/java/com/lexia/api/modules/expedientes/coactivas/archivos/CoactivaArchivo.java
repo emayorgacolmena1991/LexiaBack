@@ -105,6 +105,12 @@ public class CoactivaArchivo implements Persistable<UUID> {
   @Column(name = "override_motivo", length = 600)
   private String overrideMotivo;
 
+  @Column(name = "incorporado_at")
+  private Instant incorporadoAt;
+
+  @Column(name = "incorporado_por")
+  private UUID incorporadoPor;
+
   public static CoactivaArchivo create(
       UUID id,
       UUID tenantId,
@@ -166,6 +172,19 @@ public class CoactivaArchivo implements Persistable<UUID> {
 
   public void softDelete() {
     this.deletedAt = Instant.now();
+  }
+
+  /** Agrega la actuación al expediente completo. Idempotente: conserva la primera fecha. */
+  public void incorporar(UUID usuarioId) {
+    if (this.incorporadoAt != null) {
+      return;
+    }
+    this.incorporadoAt = Instant.now();
+    this.incorporadoPor = usuarioId;
+  }
+
+  public boolean incorporado() {
+    return incorporadoAt != null;
   }
 
   // --- Validación IA ---------------------------------------------------------
@@ -302,5 +321,9 @@ public class CoactivaArchivo implements Persistable<UUID> {
 
   public String getOverrideMotivo() {
     return overrideMotivo;
+  }
+
+  public Instant getIncorporadoAt() {
+    return incorporadoAt;
   }
 }

@@ -1099,6 +1099,36 @@ public class CoactivaExpedienteService {
   }
 
   /**
+   * Agrega una actuación generada al expediente completo ("Ver Expediente"). Idempotente: si ya
+   * estaba agregada, no registra otro evento.
+   */
+  @Transactional
+  public ArchivoItem incorporarActuacion(UUID expedienteId, UUID archivoId) {
+    authorization.requirePermission(CoactivaPermisos.ESCRIBIR);
+    AuthPrincipal principal = AuthContext.require();
+    require(principal.tenantId(), expedienteId);
+    CoactivaArchivo archivo = requireArchivo(principal.tenantId(), archivoId);
+    if (!expedienteId.equals(archivo.getExpedienteId())) {
+      throw ApiException.notFound("Archivo no encontrado.");
+    }
+    if (!"ACTUACION".equals(archivo.getTipo())) {
+      throw ApiException.badRequest("Solo se pueden agregar al expediente actuaciones generadas.");
+    }
+    if (!archivo.incorporado()) {
+      archivo.incorporar(principal.userId());
+      registrarEvento(
+          principal.tenantId(),
+          expedienteId,
+          "ACTUACION_INCORPORADA",
+          "Actuación agregada al expediente",
+          archivo.getNombreOriginal(),
+          principal.userId(),
+          archivo.getId());
+    }
+    return toItem(archivo);
+  }
+
+  /**
    * Marca {@code ANALIZANDO} e inserta el job en la misma transacción. No analiza actas ni PDFs de
    * actuación generados por el sistema.
    */
@@ -1394,7 +1424,8 @@ public class CoactivaExpedienteService {
         a.getIaAnalizadoAt(),
         a.getOverridePor(),
         a.getOverrideAt(),
-        a.getOverrideMotivo());
+        a.getOverrideMotivo(),
+        a.getIncorporadoAt());
   }
 
   private static DelegadoItem toDelegadoItem(CoactivaDelegado d) {

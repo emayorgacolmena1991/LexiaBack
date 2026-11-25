@@ -28,13 +28,46 @@ class CoactivaExpedienteCompletoServiceTest {
     CoactivaArchivo escaneoViejo = archivo(CoactivaArchivo.EXPEDIENTE_ESCANEADO, "viejo.pdf", 0);
     CoactivaArchivo unificado = archivo(CoactivaArchivo.EXPEDIENTE_UNIFICADO, "juicio.pdf", 1);
     CoactivaArchivo providencia = archivo("PROVIDENCIA", "providencia.pdf", 5);
-    CoactivaArchivo actuacion = archivo("ACTUACION", "ratificacion.docx", 3);
+    CoactivaArchivo actuacion = incorporada(archivo("ACTUACION", "ratificacion.docx", 3), 3);
     CoactivaArchivo acta = archivo(CoactivaArchivo.ACTA, "acta.pdf", 2);
 
     List<CoactivaArchivo> orden =
         CoactivaExpedienteCompletoService.ordenar(List.of(providencia, acta, actuacion, unificado, escaneoViejo));
 
     assertThat(orden).containsExactly(unificado, actuacion, providencia);
+  }
+
+  @Test
+  void actuacionNoAgregadaQuedaFuera() {
+    CoactivaArchivo unificado = archivo(CoactivaArchivo.EXPEDIENTE_UNIFICADO, "juicio.pdf", 0);
+    CoactivaArchivo pendiente = archivo("ACTUACION", "avoco.pdf", 1);
+    CoactivaArchivo escrito = archivo("ESCRITO", "escrito.pdf", 2);
+
+    assertThat(CoactivaExpedienteCompletoService.ordenar(List.of(unificado, pendiente, escrito)))
+        .containsExactly(unificado, escrito);
+  }
+
+  @Test
+  void actuacionesVanEnElOrdenEnQueSeAgregaron() {
+    CoactivaArchivo unificado = archivo(CoactivaArchivo.EXPEDIENTE_UNIFICADO, "juicio.pdf", 0);
+    CoactivaArchivo primera = incorporada(archivo("ACTUACION", "avoco.pdf", 1), 6);
+    CoactivaArchivo segunda = incorporada(archivo("ACTUACION", "embargo.pdf", 2), 4);
+    CoactivaArchivo providencia = archivo("PROVIDENCIA", "providencia.pdf", 5);
+
+    assertThat(CoactivaExpedienteCompletoService.ordenar(List.of(primera, segunda, providencia, unificado)))
+        .containsExactly(unificado, segunda, providencia, primera);
+  }
+
+  @Test
+  void incorporarDosVecesConservaLaPrimeraFecha() {
+    CoactivaArchivo actuacion = archivo("ACTUACION", "avoco.pdf", 0);
+    actuacion.incorporar(UUID.randomUUID());
+    Instant primera = actuacion.getIncorporadoAt();
+
+    actuacion.incorporar(UUID.randomUUID());
+
+    assertThat(actuacion.incorporado()).isTrue();
+    assertThat(actuacion.getIncorporadoAt()).isEqualTo(primera);
   }
 
   @Test
@@ -99,6 +132,11 @@ class CoactivaExpedienteCompletoServiceTest {
     String mime = nombre.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/pdf";
     CoactivaArchivo a = CoactivaArchivo.create(UUID.randomUUID(), TENANT, tipo, nombre, mime, 1, "sha", "ruta", null);
     ReflectionTestUtils.setField(a, "createdAt", T0.plusSeconds(86_400L * dias));
+    return a;
+  }
+
+  private static CoactivaArchivo incorporada(CoactivaArchivo a, int dias) {
+    ReflectionTestUtils.setField(a, "incorporadoAt", T0.plusSeconds(86_400L * dias));
     return a;
   }
 

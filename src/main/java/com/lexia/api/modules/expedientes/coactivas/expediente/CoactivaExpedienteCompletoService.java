@@ -10,6 +10,7 @@ import com.lexia.api.modules.expedientes.minutas.DocxPdfConverter;
 import com.lexia.api.modules.identity.AuthorizationService;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -116,7 +117,9 @@ public class CoactivaExpedienteCompletoService {
 
   /**
    * Primero el escaneo vigente del juicio (el unificado más reciente; si no hay, el escaneado más
-   * reciente); después el resto en orden de subida. Los escaneos anteriores no se repiten.
+   * reciente); después el resto en orden de subida. Los escaneos anteriores no se repiten. Las
+   * actuaciones generadas solo entran cuando se agregaron con "Agregar al expediente", y van en el
+   * orden en que se agregaron.
    */
   static List<CoactivaArchivo> ordenar(List<CoactivaArchivo> todos) {
     Comparator<CoactivaArchivo> porFecha = Comparator.comparing(CoactivaArchivo::getCreatedAt);
@@ -127,7 +130,8 @@ public class CoactivaExpedienteCompletoService {
         todos.stream()
             .filter(a -> !esEscaneo(a.getTipo()))
             .filter(a -> !CoactivaArchivo.ACTA.equals(a.getTipo()))
-            .sorted(porFecha)
+            .filter(a -> !esActuacion(a) || a.incorporado())
+            .sorted(Comparator.comparing(CoactivaExpedienteCompletoService::fechaEnExpediente))
             .toList();
     List<CoactivaArchivo> orden = new ArrayList<>();
     base.ifPresent(orden::add);
@@ -220,6 +224,15 @@ public class CoactivaExpedienteCompletoService {
 
   private static boolean esEscaneo(String tipo) {
     return CoactivaArchivo.EXPEDIENTE_UNIFICADO.equals(tipo) || CoactivaArchivo.EXPEDIENTE_ESCANEADO.equals(tipo);
+  }
+
+  private static boolean esActuacion(CoactivaArchivo archivo) {
+    return "ACTUACION".equals(archivo.getTipo());
+  }
+
+  /** Una actuación entra al expediente cuando se agrega; el resto, cuando se sube. */
+  private static Instant fechaEnExpediente(CoactivaArchivo archivo) {
+    return archivo.getIncorporadoAt() != null ? archivo.getIncorporadoAt() : archivo.getCreatedAt();
   }
 
   private static Optional<CoactivaArchivo> ultimo(

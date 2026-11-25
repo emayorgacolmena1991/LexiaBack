@@ -274,6 +274,11 @@ public class CoactivaExpedienteController {
     return service.obtenerArchivo(archivoId);
   }
 
+  @PostMapping("/expedientes/{id}/archivos/{archivoId}/incorporar")
+  public ArchivoItem incorporar(@PathVariable UUID id, @PathVariable UUID archivoId) {
+    return service.incorporarActuacion(id, archivoId);
+  }
+
   @PatchMapping("/archivos/{archivoId}/override-ia")
   public ArchivoItem overrideIa(
       @PathVariable UUID archivoId, @RequestBody(required = false) @Valid OverrideIaRequest request) {
