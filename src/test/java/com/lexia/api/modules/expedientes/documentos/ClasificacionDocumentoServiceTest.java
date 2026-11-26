@@ -67,10 +67,13 @@ class ClasificacionDocumentoServiceTest {
             mock(DocumentVersionRepository.class),
             ocrRows,
             null,
+            mock(ObjectProvider.class),
             mock(ObjectProvider.class));
     ObjectProvider<AnalisisDocumentoService> proveedor = mock(ObjectProvider.class);
+    ObjectProvider<DocumentClasificacionMemoriaService> memoria = mock(ObjectProvider.class);
     doReturn(llm).when(proveedor).getIfAvailable();
-    service = new ClasificacionDocumentoService(store, carga, proveedor, 0.8, 5000);
+    doReturn(null).when(memoria).getIfAvailable();
+    service = new ClasificacionDocumentoService(store, carga, proveedor, memoria, 0.8, 5000);
   }
 
   @AfterEach
@@ -119,6 +122,19 @@ class ClasificacionDocumentoServiceTest {
     assertNull(doc.getDocType());
     assertEquals("AVALUO", doc.getTipoSugerido());
     assertEquals(LegalDocument.ESTADO_POR_REVISAR, doc.getClasificacionEstado());
+  }
+
+  @Test
+  void heuristicaPuedeReclasificarsePorIa() {
+    LegalDocument doc = documento(null);
+    doc.asignarTipoHeuristico("CEDULA");
+    llmResponde("AVALUO", 0.95);
+
+    Resultado r = clasificar(doc, Modo.ASIGNAR);
+
+    assertEquals("AVALUO", r.tipoAsignado());
+    assertEquals("AVALUO", doc.getDocType());
+    assertEquals(LegalDocument.ORIGEN_AUTO, doc.getClasificacionOrigen());
   }
 
   @Test

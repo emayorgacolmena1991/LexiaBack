@@ -39,7 +39,9 @@ class CargaDocumentoPermisosTest {
   void setUp() {
     ObjectProvider<AuthorizationService> provider = mock(ObjectProvider.class, CALLS_REAL_METHODS);
     doReturn(authorization).when(provider).getIfAvailable();
-    controller = new CargaDocumentoController(carga, mock(ValidacionIaService.class), ocr, provider);
+    controller =
+        new CargaDocumentoController(
+            carga, mock(ValidacionIaService.class), ocr, mock(ClasificacionExpedienteService.class), provider);
     reupload = new DocumentReuploadController(ocr, provider);
     doThrow(new AuthException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Sin permiso"))
         .when(authorization)

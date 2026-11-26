@@ -111,12 +111,19 @@ lexia:
     id: ${LEXIA_WORKER_ID:${HOSTNAME:${COMPUTERNAME:local-dev-worker}}}
   ingesta:
     worker:
+      # Hilos paralelos OCR + cotejo IA (app.jobs). Subir solo si métricas de cola lo justifican.
+      hilos: ${LEXIA_INGESTA_WORKER_HILOS:5}
       # Por encima del timeout de Claude (180 s) y de una llamada Azure (120 s). El lock del job
       # vence 120 s después del timeout.
       timeout-documento-s: ${LEXIA_INGESTA_TIMEOUT_DOCUMENTO_S:300}
       timeout-ia-s: ${LEXIA_INGESTA_TIMEOUT_IA_S:360}
       max-intentos: ${LEXIA_INGESTA_MAX_INTENTOS:3}
       colgados-ms: ${LEXIA_INGESTA_COLGADOS_MS:60000}
+  jobs:
+    stuck-minutes: ${LEXIA_JOBS_STUCK_MINUTES:45}
+    stuck-check-ms: ${LEXIA_JOBS_STUCK_CHECK_MS:300000}
+  sse:
+    latido-ms: ${LEXIA_SSE_LATIDO_MS:25000}
   prompts:
     PROMPT_EXTRACCION_ACTO: |
       Eres un asistente legal experto en escrituración e hipotecas. Tu única función es
@@ -387,9 +394,11 @@ gemini:
   api:
     key: ${GEMINI_API_KEY:}
 
-# gemini (default) | claude. Rollback: LLM_PROVIDER=gemini
+# gemini | claude (primario). Con failover.enabled=true se prueba el otro si el primario falla por proveedor.
 llm:
   provider: ${LLM_PROVIDER:claude}
+  failover:
+    enabled: ${LLM_FAILOVER_ENABLED:true}
 
 anthropic:
   api:

@@ -27,6 +27,7 @@ import com.lexia.api.modules.tenancy.TenantRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -35,6 +36,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
@@ -125,8 +128,14 @@ public class UserAdminService {
                   if (roleCode != null && !roleCode.isBlank() && !roleCode.equals(item.roleCode())) {
                     return false;
                   }
-                  if (statusFilter != null && !statusFilter.isBlank() && !statusFilter.equals(item.status())) {
-                    return false;
+                  if (statusFilter != null && !statusFilter.isBlank()) {
+                    if ("PENDING".equalsIgnoreCase(statusFilter)) {
+                      if (!"PENDING".equals(item.status()) && !"EXPIRED".equals(item.status())) {
+                        return false;
+                      }
+                    } else if (!statusFilter.equals(item.status())) {
+                      return false;
+                    }
                   }
                   return true;
                 })
@@ -380,27 +389,37 @@ public class UserAdminService {
     AppUser user = resolveUser(email, displayName);
     Membership membership = resolveMembership(user.getId(), tenantId);
     replaceRoles(tenantId, membership.getId(), request.roles());
-    revokePendingInvitations(tenantId, email);
 
     Duration inviteTtl = Duration.ofHours(tenantParameters.getInviteTtlHours(tenantId));
     String rawToken = TokenHasher.randomToken();
-    UserInvitation invitation =
-        invitations.save(
-            UserInvitation.issue(
-                tenantId,
-                email,
-                displayName,
-                TokenHasher.sha256(rawToken),
-                principal.userId(),
-                membership.getId(),
-                Instant.now().plus(inviteTtl)));
+    String tokenHash = TokenHasher.sha256(rawToken);
+    Instant expiresAt = Instant.now().plus(inviteTtl);
+    UserInvitation invitation = saveOrReissueInvitation(
+        tenantId,
+        email,
+        displayName,
+        tokenHash,
+        principal.userId(),
+        membership.getId(),
+        expiresAt);
 
     Tenant tenant =
         tenants
             .findById(tenantId)
             .orElseThrow(
                 () -> new AuthException(HttpStatus.NOT_FOUND, "TENANT_NOT_FOUND", "Tenant no encontrado."));
-    emails.sendUserInvitation(tenantId, email, displayName, rawToken, tenant.getName());
+    String tenantName = tenant.getName();
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              emails.sendUserInvitation(tenantId, email, displayName, rawToken, tenantName);
+            }
+          });
+    } else {
+      emails.sendUserInvitation(tenantId, email, displayName, rawToken, tenantName);
+    }
     audit("admin.invitation.sent", "user_invitation", invitation.getId(), "OK");
     inAppNotifications.onInvitationSent(
         tenantId, principal.userId(), email, invitation.getId());
@@ -486,14 +505,38 @@ public class UserAdminService {
     return memberships.save(Membership.invited(userId, tenantId));
   }
 
-  private void revokePendingInvitations(UUID tenantId, String email) {
-    invitations
-        .findByTenantIdAndEmailIgnoreCaseAndAcceptedAtIsNullAndRevokedAtIsNull(tenantId, email)
-        .forEach(
-            pending -> {
-              pending.revoke();
-              invitations.save(pending);
-            });
+  /**
+   * Reemite la invitación abierta (pendiente o vencida) en la misma fila para no chocar con el
+   * índice {@code ux_user_invitation_pending} al insertar antes de que persista la revocación.
+   */
+  private UserInvitation saveOrReissueInvitation(
+      UUID tenantId,
+      String email,
+      String displayName,
+      String tokenHash,
+      UUID invitedBy,
+      UUID membershipId,
+      Instant expiresAt) {
+    List<UserInvitation> open =
+        new ArrayList<>(
+            invitations.findByTenantIdAndEmailIgnoreCaseAndAcceptedAtIsNullAndRevokedAtIsNull(
+                tenantId, email));
+    if (open.isEmpty()) {
+      return invitations.save(
+          UserInvitation.issue(
+              tenantId, email, displayName, tokenHash, invitedBy, membershipId, expiresAt));
+    }
+    open.sort(Comparator.comparing(UserInvitation::getCreatedAt).reversed());
+    UserInvitation target = open.get(0);
+    for (int i = 1; i < open.size(); i++) {
+      open.get(i).revoke();
+      invitations.save(open.get(i));
+    }
+    if (open.size() > 1) {
+      invitations.flush();
+    }
+    target.reissue(tokenHash, displayName, invitedBy, expiresAt);
+    return invitations.save(target);
   }
 
   private void replaceRoles(UUID tenantId, UUID membershipId, List<String> roleCodes) {

@@ -47,6 +47,16 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.JobRepository.JobsEnCola;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
+import com.lexia.api.modules.expedientes.coactivas.jobs.BatchEventPublisherService;
+import com.lexia.api.modules.ia.ProveedorIaAlertasService;
+import com.lexia.api.modules.ia.ProveedorIaErrores;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionDocumentoService.Modo;
+import com.lexia.api.modules.expedientes.documentos.ClasificacionExpedienteService;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.ReclasificacionDocumentoItem;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.ReclasificacionExpedienteResponse;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ReclasificacionLoteFila;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ReclasificacionLoteResponse;
 import com.lexia.api.modules.ia.ocr.LayoutExtractResult;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.tenancy.TenantContext;
@@ -60,18 +70,16 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -93,6 +101,8 @@ public class IngestaMasivaEscrituracionService {
   private final ExpedienteBorradorStore borradores;
   private final BorradorPromocionService promocion;
   private final OcrAzureBatchService ocr;
+  private final ClasificacionDocumentoService clasificador;
+  private final ClasificacionExpedienteService clasificacionExpediente;
   private final IaAnalysisService ia;
   private final ProductoBiessService productos;
   private final JobRepository jobs;
@@ -100,7 +110,9 @@ public class IngestaMasivaEscrituracionService {
   private final ObjectMapper objectMapper;
   private final EntityManager entityManager;
   private final TransactionTemplate tx;
-  private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> streams = new ConcurrentHashMap<>();
+  private final ProveedorIaAlertasService proveedorIaAlertas;
+  private final BatchEventPublisherService ssePublisher;
+  private final IngestaLoteNotificacionService loteNotificaciones;
 
   /** Cada job lo corre la instancia que lo encoló: los archivos están en su disco local. */
   @Value("${lexia.worker.id}")
@@ -112,18 +124,25 @@ public class IngestaMasivaEscrituracionService {
       ExpedienteBorradorStore borradores,
       BorradorPromocionService promocion,
       OcrAzureBatchService ocr,
+      ClasificacionDocumentoService clasificador,
+      ClasificacionExpedienteService clasificacionExpediente,
       IaAnalysisService ia,
       ProductoBiessService productos,
       JobRepository jobs,
       DocumentoTextoOcrRepository textoOcr,
       ObjectMapper objectMapper,
       EntityManager entityManager,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      ProveedorIaAlertasService proveedorIaAlertas,
+      BatchEventPublisherService ssePublisher,
+      IngestaLoteNotificacionService loteNotificaciones) {
     this.carga = carga;
     this.casos = casos;
     this.borradores = borradores;
     this.promocion = promocion;
     this.ocr = ocr;
+    this.clasificador = clasificador;
+    this.clasificacionExpediente = clasificacionExpediente;
     this.ia = ia;
     this.productos = productos;
     this.jobs = jobs;
@@ -131,6 +150,9 @@ public class IngestaMasivaEscrituracionService {
     this.objectMapper = objectMapper;
     this.entityManager = entityManager;
     this.tx = new TransactionTemplate(transactionManager);
+    this.proveedorIaAlertas = proveedorIaAlertas;
+    this.ssePublisher = ssePublisher;
+    this.loteNotificaciones = loteNotificaciones;
   }
 
   public String workerId() {
@@ -169,7 +191,10 @@ public class IngestaMasivaEscrituracionService {
     if (asignaciones.isEmpty() || asignaciones.size() != binarios.size()) {
       throw ApiException.badRequest("Cada archivo debe traer su asignación (clientRowId y tipo).");
     }
-    List<Fila> tocadas = new ArrayList<>();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    boolean huboCambios = false;
+    String productoLote = lote.producto;
+    String cantonLote = lote.canton;
     LOG.info("Iniciando carga de archivos. Total: {}", binarios.size());
     for (int i = 0; i < asignaciones.size(); i++) {
       AsignacionArchivo asignacion = asignaciones.get(i);
@@ -180,33 +205,46 @@ public class IngestaMasivaEscrituracionService {
             "Archivo vacío ignorado en fila {} nombre={}",
             fila.clientRowId,
             file != null ? file.getOriginalFilename() : null);
-        synchronized (fila) {
-          fila.ocrEstado = "ERROR";
-          fila.semaforo = "ROJO";
-          fila.observaciones = "Archivo corrupto o vacío. Reemplazar.";
-        }
-        if (!tocadas.contains(fila)) {
-          tocadas.add(fila);
-        }
+        huboCambios |=
+            mutarFila(
+                lote.id,
+                tenant,
+                fila.clientRowId,
+                actual -> {
+                  actual.ocrEstado = "ERROR";
+                  actual.semaforo = "ROJO";
+                  actual.observaciones = "Archivo corrupto o vacío. Reemplazar.";
+                  return true;
+                });
         continue;
       }
       try {
         exigirBorrador(fila, asignacion.borradorId());
         String sesion = exigirExpediente(fila);
-        String tipo = tipoDe(fila, asignacion.tipoDocumento());
+        String tipo = tipoDe(fila, asignacion.tipoDocumento(), file.getOriginalFilename());
         DocumentoCargadoDTO doc = carga.subir(sesion, file);
         if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
-          carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
+          carga.asignarTipoHeuristico(sesion, doc.idDocumento(), tipo);
         }
         Archivo archivo = Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo);
-        synchronized (fila) {
-          fila.archivos.add(archivo);
-          if (!"ERROR".equals(fila.ocrEstado)) {
-            fila.ocrEstado = "PENDIENTE";
-            fila.semaforo = "GRIS";
-            fila.iaEstado = "PENDIENTE";
-            fila.observaciones = null;
-          }
+        huboCambios |=
+            mutarFila(
+                lote.id,
+                tenant,
+                fila.clientRowId,
+                actual -> {
+                  actual.archivos.add(archivo);
+                  if (!"ERROR".equals(actual.ocrEstado)) {
+                    actual.ocrEstado = "PENDIENTE";
+                    actual.semaforo = "GRIS";
+                    actual.iaEstado = "PENDIENTE";
+                    actual.observaciones = null;
+                  }
+                  return true;
+                });
+        if (!StringUtils.hasText(productoLote)) {
+          productoLote = fila.productCode;
+          cantonLote = fila.canton;
         }
       } catch (Exception e) {
         String detalle =
@@ -223,34 +261,62 @@ public class IngestaMasivaEscrituracionService {
             StringUtils.hasText(asignacion.tipoDocumento())
                 ? asignacion.tipoDocumento().trim()
                 : "DOCUMENTO";
-        synchronized (fila) {
-          Archivo fallido = Archivo.nuevo("upload-error-" + UUID.randomUUID(), nombre, tipoFallo);
-          fallido.fallo(detalle);
-          fila.archivos.add(fallido);
-          fila.ocrEstado = "ERROR";
-          fila.semaforo = "ROJO";
-          fila.iaEstado = "ERROR";
-          fila.observaciones = detalle;
-        }
-      }
-      if (!tocadas.contains(fila)) {
-        tocadas.add(fila);
+        final String nombreFinal = nombre;
+        final String tipoFalloFinal = tipoFallo;
+        final String detalleFinal = detalle;
+        huboCambios |=
+            mutarFila(
+                lote.id,
+                tenant,
+                fila.clientRowId,
+                actual -> {
+                  Archivo fallido = Archivo.nuevo("upload-error-" + UUID.randomUUID(), nombreFinal, tipoFalloFinal);
+                  fallido.fallo(detalleFinal);
+                  actual.archivos.add(fallido);
+                  actual.ocrEstado = "ERROR";
+                  actual.semaforo = "ROJO";
+                  actual.iaEstado = "ERROR";
+                  actual.observaciones = detalleFinal;
+                  return true;
+                });
       }
     }
-    if (!tocadas.isEmpty()) {
+    if (huboCambios) {
+      String fase = "ARCHIVOS";
+      boolean persistirProducto =
+          !StringUtils.hasText(lote.producto) && StringUtils.hasText(productoLote);
       synchronized (lote) {
-        lote.fase = "ARCHIVOS";
-        if (!StringUtils.hasText(lote.producto)) {
-          Fila primera = tocadas.get(0);
-          lote.producto = primera.productCode;
-          lote.canton = primera.canton;
+        lote.fase = fase;
+        if (persistirProducto) {
+          lote.producto = productoLote;
+          lote.canton = cantonLote;
         }
       }
-      UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
-      for (Fila tocada : tocadas) {
-        actualizarItemEnBd(lote.id, tenant, tocada, false);
+      actualizarContadoresLote(lote.id, tenant, fase);
+      if (persistirProducto) {
+        final String producto = productoLote;
+        final String canton = cantonLote;
+        tx.executeWithoutResult(
+            status ->
+                entityManager
+                    .unwrap(Session.class)
+                    .doWork(
+                        connection -> {
+                          aplicarTenant(connection, tenant);
+                          try (PreparedStatement update =
+                              connection.prepareStatement(
+                                  """
+                                  UPDATE app.ingesta_lote SET producto = ?, canton = ?
+                                   WHERE id = ? AND tenant_id = ?
+                                  """)) {
+                            update.setString(1, producto);
+                            update.setString(2, canton);
+                            update.setObject(3, lote.id);
+                            update.setObject(4, tenant);
+                            update.executeUpdate();
+                          }
+                        }));
       }
-      actualizarContadoresLote(lote.id, tenant, lote.fase);
       emitirLoteActualizado(tenant, lote.id);
     }
     return snapshot(cargar(principal.tenantId(), batchId));
@@ -300,6 +366,77 @@ public class IngestaMasivaEscrituracionService {
     return cargar(principal.tenantId(), batchId).snapshot(encolados, 0);
   }
 
+  /**
+   * Reclasifica tipos documentales (IA + memoria del tenant) en cada expediente del lote. Sincroniza
+   * {@code archivo.tipo} en el JSON del ítem para la grilla.
+   */
+  public ReclasificacionLoteResponse reclasificarTipos(UUID batchId) {
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    int expedientes = 0;
+    int documentosProcesados = 0;
+    int documentosOmitidos = 0;
+    int validacionesActualizadas = 0;
+    List<ReclasificacionLoteFila> detalle = new ArrayList<>();
+    for (Fila fila : lote.filas) {
+      if (fila.expedienteId == null || fila.archivos.isEmpty()) {
+        continue;
+      }
+      ReclasificacionExpedienteResponse resultado =
+          clasificacionExpediente.reclasificarExpediente(fila.expedienteId.toString());
+      expedientes++;
+      documentosProcesados += resultado.procesados();
+      documentosOmitidos += resultado.omitidos();
+      if (resultado.validacionesRefrescadas()) {
+        validacionesActualizadas++;
+      }
+      detalle.add(
+          new ReclasificacionLoteFila(
+              fila.clientRowId,
+              fila.expedienteId,
+              resultado.procesados(),
+              resultado.omitidos()));
+      Map<String, String> tipos =
+          resultado.documentos().stream()
+              .filter(item -> item.motivoOmision() == null)
+              .filter(item -> StringUtils.hasText(item.tipoVigente()))
+              .collect(
+                  java.util.stream.Collectors.toMap(
+                      ReclasificacionDocumentoItem::idDocumento,
+                      ReclasificacionDocumentoItem::tipoVigente,
+                      (a, b) -> b));
+      if (!tipos.isEmpty()) {
+        mutarFila(
+            lote.id,
+            tenant,
+            fila.clientRowId,
+            actual -> {
+              for (Archivo archivo : actual.archivos) {
+                String nuevo = tipos.get(archivo.fileId);
+                if (StringUtils.hasText(nuevo)) {
+                  archivo.tipo = nuevo;
+                }
+              }
+              return true;
+            });
+      }
+    }
+    LOG.info(
+        "reclasificar-tipos batch={} expedientes={} docsProcesados={} omitidos={}",
+        batchId,
+        expedientes,
+        documentosProcesados,
+        documentosOmitidos);
+    return new ReclasificacionLoteResponse(
+        batchId,
+        expedientes,
+        documentosProcesados,
+        documentosOmitidos,
+        validacionesActualizadas,
+        detalle);
+  }
+
   public LoteStatus reintentar(UUID batchId, String clientRowId) {
     Lote lote = require(batchId);
     AuthPrincipal principal = AuthContext.require();
@@ -313,6 +450,9 @@ public class IngestaMasivaEscrituracionService {
       if (soloIa) {
         fila.iaEstado = "EN_PROCESO";
         fila.iaResumen = null;
+        if (fila.iaInicioMs == 0) {
+          fila.iaInicioMs = System.currentTimeMillis();
+        }
       } else if (fila.expedienteId == null
           || fila.archivos.stream().allMatch(IngestaMasivaEscrituracionService::esFalloSubida)) {
         throw ApiException.badRequest("La fila no tiene archivos guardados. No se llama a OCR.");
@@ -334,6 +474,8 @@ public class IngestaMasivaEscrituracionService {
         fila.observaciones = null;
         fila.inicioMs = 0;
         fila.duracionMs = 0;
+        fila.ocrDuracionMs = 0;
+        fila.iaInicioMs = 0;
       }
     }
     synchronized (lote) {
@@ -365,7 +507,7 @@ public class IngestaMasivaEscrituracionService {
       throw ApiException.badRequest("Adjunta el archivo de reemplazo.");
     }
     String sesion = exigirExpediente(fila);
-    String tipo = tipoDe(fila, tipoDocumento);
+    String tipo = tipoDe(fila, tipoDocumento, file.getOriginalFilename());
     carga.borrarOcr(sesion, "consolidado");
 
     // Misma fila / físico: sobreescribir versión. No lee el binario viejo (puede faltar en disco).
@@ -392,7 +534,7 @@ public class IngestaMasivaEscrituracionService {
     } else {
       DocumentoCargadoDTO doc = carga.subir(sesion, file);
       if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
-        carga.actualizarTipo(sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo));
+        carga.asignarTipoHeuristico(sesion, doc.idDocumento(), tipo);
       }
       docId = doc.idDocumento();
       nombre = doc.nombreOriginal();
@@ -419,6 +561,119 @@ public class IngestaMasivaEscrituracionService {
     actualizarItemEnBd(lote.id, tenant, fila, false);
     actualizarContadoresLote(lote.id, tenant, lote.fase);
     return snapshot(cargar(principal.tenantId(), batchId));
+  }
+
+  public LoteStatus eliminarArchivo(UUID batchId, String clientRowId, String fileId) {
+    if (!StringUtils.hasText(fileId)) {
+      throw ApiException.badRequest("fileId es obligatorio.");
+    }
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    Fila fila = fila(lote, clientRowId);
+    exigirGestionArchivos(fila);
+    String docId = fileId.trim();
+    Archivo existente = archivoDe(fila, docId);
+    if (existente == null) {
+      throw ApiException.notFound("Archivo no encontrado en la fila.");
+    }
+    String sesion = exigirExpediente(fila);
+    if (!esFalloSubida(existente)) {
+      carga.borrarOcr(sesion, docId);
+      carga.eliminar(sesion, docId);
+    }
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    mutarFila(
+        lote.id,
+        tenant,
+        clientRowId,
+        actual -> {
+          exigirGestionArchivos(actual);
+          if (!actual.archivos.removeIf(archivo -> docId.equals(archivo.fileId))) {
+            return false;
+          }
+          actualizarEstadoFilaTrasQuitarArchivos(actual);
+          return true;
+        });
+    synchronized (lote) {
+      lote.fase = "ARCHIVOS";
+    }
+    actualizarContadoresLote(lote.id, tenant, "ARCHIVOS");
+    emitirLoteActualizado(tenant, lote.id);
+    return snapshot(cargar(principal.tenantId(), batchId));
+  }
+
+  public LoteStatus vaciarArchivos(UUID batchId, String clientRowId) {
+    Lote lote = require(batchId);
+    AuthPrincipal principal = AuthContext.require();
+    Fila fila = fila(lote, clientRowId);
+    exigirGestionArchivos(fila);
+    String sesion = exigirExpediente(fila);
+    List<String> docIds = new ArrayList<>();
+    synchronized (fila) {
+      for (Archivo archivo : fila.archivos) {
+        if (StringUtils.hasText(archivo.fileId)) {
+          docIds.add(archivo.fileId);
+        }
+      }
+    }
+    for (String docId : docIds) {
+      Archivo archivo = archivoDe(fila, docId);
+      if (archivo == null || esFalloSubida(archivo)) {
+        continue;
+      }
+      try {
+        carga.borrarOcr(sesion, docId);
+        carga.eliminar(sesion, docId);
+      } catch (RuntimeException ex) {
+        LOG.warn("vaciar-archivos docId={} expediente={}: {}", docId, sesion, ex.getMessage());
+      }
+    }
+    carga.borrarOcr(sesion, "consolidado");
+    UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    mutarFila(
+        lote.id,
+        tenant,
+        clientRowId,
+        actual -> {
+          exigirGestionArchivos(actual);
+          actual.archivos.clear();
+          actualizarEstadoFilaTrasQuitarArchivos(actual);
+          return true;
+        });
+    synchronized (lote) {
+      lote.fase = "ARCHIVOS";
+    }
+    actualizarContadoresLote(lote.id, tenant, "ARCHIVOS");
+    emitirLoteActualizado(tenant, lote.id);
+    return snapshot(cargar(principal.tenantId(), batchId));
+  }
+
+  private static void exigirGestionArchivos(Fila fila) {
+    synchronized (fila) {
+      if ("PROCESANDO".equals(fila.ocrEstado)) {
+        throw ApiException.conflict(
+            "Hay OCR en curso en esta fila. Espere a que termine antes de quitar archivos.");
+      }
+      if ("CONSOLIDANDO".equals(fila.iaEstado) || "EN_PROCESO".equals(fila.iaEstado)) {
+        throw ApiException.conflict("Hay cotejo IA en curso en esta fila.");
+      }
+    }
+  }
+
+  private static void actualizarEstadoFilaTrasQuitarArchivos(Fila fila) {
+    fila.archivos.removeIf(IngestaMasivaEscrituracionService::esFalloSubida);
+    fila.ocrEstado = "PENDIENTE";
+    fila.semaforo = "GRIS";
+    fila.iaEstado = "PENDIENTE";
+    fila.iaResumen = null;
+    fila.observaciones = null;
+    fila.confianza = 0;
+    for (Archivo archivo : fila.archivos) {
+      archivo.semaforo = "GRIS";
+      archivo.ocrListo = false;
+      archivo.confianza = 0;
+      archivo.legible = false;
+    }
   }
 
   public LotesPageDto listarLotes(
@@ -545,6 +800,14 @@ public class IngestaMasivaEscrituracionService {
     Lote lote = require(batchId);
     AuthPrincipal principal = AuthContext.require();
     UUID tenant = lote.tenantId != null ? lote.tenantId : principal.tenantId();
+    JobsEnCola colaViva = jobs.enColaDelLote(tenant, batchId);
+    if (colaViva.iaEncolados() > 0) {
+      throw ApiException.conflict(
+          "Ya hay cotejo IA en curso o en cola para este lote. Espere a que termine.");
+    }
+    synchronized (lote) {
+      lote.fase = "IA";
+    }
     int encolados = 0;
     List<?> rows =
         entityManager
@@ -569,16 +832,19 @@ public class IngestaMasivaEscrituracionService {
       }
       fila.clientRowId = itemId;
       fila.expedienteId = expedienteId;
-      synchronized (fila) {
-        fila.iaEstado = "PENDIENTE";
+      if (!encolarProcesarIa(lote, fila, principal)) {
+        LOG.info("skip item={} motivo=jobIaYaEnCola", itemId);
+        continue;
       }
-      actualizarItemEnBd(lote.id, tenant, fila, false);
-      encolarProcesarIa(lote, fila, principal);
       LOG.info("encolar PROCESAR_IA_EXPEDIENTE item={} expediente={}", itemId, expedienteId);
       encolados++;
     }
     LOG.info("procesarIa batch={} encolados={}", batchId, encolados);
-    return cargar(principal.tenantId(), batchId).snapshot(0, encolados);
+    if (encolados > 0) {
+      actualizarContadoresLote(lote.id, tenant, "IA");
+      emitirLoteActualizado(tenant, lote.id);
+    }
+    return snapshot(cargar(principal.tenantId(), batchId));
   }
 
   /** Estado del lote con los jobs vivos en app.jobs (incluye el job que está emitiendo). */
@@ -813,48 +1079,13 @@ public class IngestaMasivaEscrituracionService {
     return fila;
   }
 
-  /** Antes 0 (sin timeout): un cliente caído quedaba registrado para siempre. EventSource reconecta. */
-  static final long SSE_TIMEOUT_MS = 30L * 60L * 1000L;
-
   public SseEmitter stream(UUID batchId) {
     require(batchId);
-    SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
-    streams.computeIfAbsent(batchId, id -> new CopyOnWriteArrayList<>()).add(emitter);
-    Runnable drop = () -> quitarEmisor(batchId, emitter);
-    emitter.onCompletion(drop);
-    emitter.onTimeout(drop);
-    emitter.onError(err -> drop.run());
-    return emitter;
-  }
-
-  /** Quita el emisor y, si la lista queda vacía, también la entrada del lote. */
-  private void quitarEmisor(UUID loteId, SseEmitter emitter) {
-    streams.computeIfPresent(
-        loteId,
-        (id, lista) -> {
-          lista.remove(emitter);
-          return lista.isEmpty() ? null : lista;
-        });
-  }
-
-  /** Ping: mantiene viva la conexión tras proxies y descubre clientes caídos (el envío falla). */
-  @Scheduled(fixedDelayString = "${lexia.ingesta.sse.latido-ms:25000}")
-  public void latidoSse() {
-    streams.forEach(
-        (loteId, lista) -> {
-          for (SseEmitter emitter : lista) {
-            try {
-              emitter.send(SseEmitter.event().comment("ping"));
-            } catch (IOException | IllegalStateException ex) {
-              emitter.complete();
-              quitarEmisor(loteId, emitter);
-            }
-          }
-        });
+    return ssePublisher.abrir(batchId, 30L * 60L * 1000L);
   }
 
   public int lotesConOyentes() {
-    return streams.size();
+    return ssePublisher.expedientesConOyentes();
   }
 
   public ResumenLote resumen(UUID batchId) {
@@ -918,7 +1149,7 @@ public class IngestaMasivaEscrituracionService {
     LOG.info("job PROCESAR_DOCUMENTO lote={} item={} doc={}", payload.loteId(), payload.itemId(), payload.docId());
   }
 
-  private void encolarProcesarIa(Lote lote, Fila fila, AuthPrincipal principal) {
+  private boolean encolarProcesarIa(Lote lote, Fila fila, AuthPrincipal principal) {
     ProcesarIaExpediente payload =
         new ProcesarIaExpediente(
             lote.id,
@@ -927,12 +1158,18 @@ public class IngestaMasivaEscrituracionService {
             principal.tenantId(),
             principal.userId(),
             fila.expedienteId.toString());
+    String idempotencyKey = "ingesta-ia:" + lote.id + ":" + fila.clientRowId;
     try {
-      jobs.encolar(principal.tenantId(), "PROCESAR_IA_EXPEDIENTE", objectMapper.writeValueAsString(payload), workerId);
+      boolean nuevo =
+          jobs.encolarIaExpediente(
+              principal.tenantId(), objectMapper.writeValueAsString(payload), workerId, idempotencyKey);
+      if (nuevo) {
+        LOG.info("job PROCESAR_IA_EXPEDIENTE lote={} item={}", payload.loteId(), payload.itemId());
+      }
+      return nuevo;
     } catch (JsonProcessingException ex) {
       throw ApiException.badRequest("No se pudo encolar el cotejo IA.");
     }
-    LOG.info("job PROCESAR_IA_EXPEDIENTE lote={} item={}", payload.loteId(), payload.itemId());
   }
 
   public void procesarDocumento(ProcesarDocumento payload, BooleanSupplier cancelado) {
@@ -970,6 +1207,35 @@ public class IngestaMasivaEscrituracionService {
           sesion,
           new DocumentoOcrResultadoDTO(
               payload.docId(), guardado.nombreOriginal(), tipo, texto, null, "LEGIBLE", null, confianza));
+      ClasificacionDocumentoService.Resultado clasificacion =
+          clasificador.clasificar(sesion, payload.docId(), texto, Modo.ASIGNAR);
+      if (StringUtils.hasText(clasificacion.tipoVigente())) {
+        tipo = clasificacion.tipoVigente();
+      } else if (StringUtils.hasText(clasificacion.tipoAsignado())) {
+        tipo = clasificacion.tipoAsignado();
+      }
+      if (clasificacion.ejecutado()
+          && clasificacion.tipoAsignado() != null
+          && !clasificacion.tipoAsignado().equalsIgnoreCase(payload.tipoDocumento())) {
+        LOG.info(
+            "ingesta-masiva clasificación doc={} heurística={} ia={} confianza={}",
+            payload.docId(),
+            payload.tipoDocumento(),
+            clasificacion.tipoAsignado(),
+            clasificacion.confianza());
+      }
+      final String tipoFinal = tipo;
+      carga.guardarResultadoOcr(
+          sesion,
+          new DocumentoOcrResultadoDTO(
+              payload.docId(),
+              guardado.nombreOriginal(),
+              tipoFinal,
+              texto,
+              null,
+              "LEGIBLE",
+              null,
+              confianza));
       boolean[] bloqueada = new boolean[1];
       if (fila != null && lote != null) {
         boolean escrita =
@@ -983,6 +1249,7 @@ public class IngestaMasivaEscrituracionService {
                   }
                   Archivo procesado = archivoDe(actual, payload.docId());
                   if (procesado != null) {
+                    procesado.tipo = tipoFinal;
                     procesado.texto = texto;
                     procesado.legible = true;
                     procesado.ocrListo = true;
@@ -1221,6 +1488,12 @@ public class IngestaMasivaEscrituracionService {
               : payload.expedienteId().toString();
       synchronized (fila) {
         fila.iaEstado = "EN_PROCESO";
+        fila.iaResumen = null;
+        fila.iaMensajeUsuario = null;
+        fila.iaErrorCodigo = null;
+        if (fila.iaInicioMs == 0) {
+          fila.iaInicioMs = System.currentTimeMillis();
+        }
       }
       persistirItemWorker(lote, fila);
       String unido = textoConsolidado(sesion);
@@ -1246,10 +1519,18 @@ public class IngestaMasivaEscrituracionService {
         fila.iaEstado = "COMPLETADO";
         fila.iaResumen = resumen;
         fila.ocrEstado = "COMPLETADO";
-        fila.duracionMs = Math.max(0, System.currentTimeMillis() - fila.inicioMs);
+        if (fila.inicioMs > 0) {
+          fila.duracionMs = Math.max(0, System.currentTimeMillis() - fila.inicioMs);
+        } else {
+          long ocr = Math.max(0L, fila.ocrDuracionMs);
+          long ia =
+              fila.iaInicioMs > 0 ? Math.max(0, System.currentTimeMillis() - fila.iaInicioMs) : 0L;
+          fila.duracionMs = ocr + ia;
+        }
       }
       persistirItemWorker(lote, fila);
       emitirLoteActualizado(payload.tenantId(), payload.loteId(), true);
+      loteNotificaciones.revisarCierreLote(payload.tenantId(), payload.loteId(), payload.userId());
     } catch (RuntimeException ex) {
       if (cancelado.getAsBoolean()) {
         LOG.warn("job PROCESAR_IA_EXPEDIENTE cancelado por timeout item={}", payload.itemId());
@@ -1260,12 +1541,20 @@ public class IngestaMasivaEscrituracionService {
               ? ex.getClass().getSimpleName()
               : ex.getMessage();
       LOG.error("job PROCESAR_IA_EXPEDIENTE ERROR lote={} item={} error_log={}", payload.loteId(), payload.itemId(), motivo);
+      ProveedorIaErrores.Clasificacion cls =
+          proveedorIaAlertas.registrarFallo(
+              payload.tenantId(),
+              payload.userId(),
+              "Ingesta masiva · cotejo IA",
+              motivo,
+              "/administracion?seccion=ia");
       try {
-        persistirErrorIa(payload, motivo);
+        persistirErrorIa(payload, motivo, cls);
       } catch (RuntimeException persistEx) {
         LOG.error("no se pudo persistir error IA item={}", payload.itemId(), persistEx);
       }
-      emitirItemError(payload.loteId(), payload.itemId(), motivo);
+      emitirItemError(payload.loteId(), payload.itemId(), cls.mensajeUsuario());
+      loteNotificaciones.revisarCierreLote(payload.tenantId(), payload.loteId(), payload.userId());
     }
   }
 
@@ -1274,18 +1563,14 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private void emitirLoteActualizado(UUID tenantId, UUID loteId, boolean iaCompletada) {
-    // El snapshot solo sirve al SSE de este nodo: sin oyentes no se recarga el lote entero.
-    if (!streams.containsKey(loteId)) {
-      return;
-    }
     Lote fresh = cargar(tenantId, loteId);
     if (fresh == null) {
       return;
     }
     LoteStatus status = snapshot(fresh);
-    emitir(loteId, "DOCUMENTO_LISTO", status);
+    ssePublisher.publicarPayloadPlano(loteId, "DOCUMENTO_LISTO", status);
     if (iaCompletada) {
-      emitir(loteId, "IA_COMPLETADA", status);
+      ssePublisher.publicarPayloadPlano(loteId, "IA_COMPLETADA", status);
     }
   }
 
@@ -1330,25 +1615,8 @@ public class IngestaMasivaEscrituracionService {
   }
 
   private void emitirItemError(UUID loteId, String itemId, String mensaje) {
-    for (SseEmitter emitter : streams.getOrDefault(loteId, new CopyOnWriteArrayList<>())) {
-      try {
-        emitter.send(SseEmitter.event().name("ITEM_ERROR").data(java.util.Map.of("itemId", itemId, "mensaje", mensaje)));
-      } catch (IOException | IllegalStateException ex) {
-        emitter.complete();
-        quitarEmisor(loteId, emitter);
-      }
-    }
-  }
-
-  private void emitir(UUID loteId, String evento, LoteStatus status) {
-    for (SseEmitter emitter : streams.getOrDefault(loteId, new CopyOnWriteArrayList<>())) {
-      try {
-        emitter.send(SseEmitter.event().name(evento).data(status));
-      } catch (IOException | IllegalStateException ex) {
-        emitter.complete();
-        quitarEmisor(loteId, emitter);
-      }
-    }
+    ssePublisher.publicarPayloadPlano(
+        loteId, "ITEM_ERROR", java.util.Map.of("itemId", itemId, "mensaje", mensaje));
   }
 
   private String exigirBorrador(Fila fila, String recibido) {
@@ -1608,6 +1876,17 @@ public class IngestaMasivaEscrituracionService {
     if (expedienteId == null || fila == null) {
       return "ocrIncompleto";
     }
+    if ("EN_PROCESO".equals(fila.iaEstado) || "CONSOLIDANDO".equals(fila.iaEstado)) {
+      return "iaEnCurso";
+    }
+    if ("COMPLETADO".equals(fila.iaEstado) || "OK".equals(fila.iaEstado)) {
+      return "iaHecha";
+    }
+    if (StringUtils.hasText(fila.iaResumen)
+        && !"ERROR".equals(fila.iaEstado)
+        && !"PENDIENTE".equals(fila.iaEstado)) {
+      return "iaHecha";
+    }
     for (Archivo archivo : fila.archivos) {
       if ("ROJO".equals(archivo.semaforo)) {
         return "semaforoRojo";
@@ -1619,7 +1898,8 @@ public class IngestaMasivaEscrituracionService {
     return null;
   }
 
-  private void persistirErrorIa(ProcesarIaExpediente payload, String motivo) {
+  private void persistirErrorIa(
+      ProcesarIaExpediente payload, String motivo, ProveedorIaErrores.Clasificacion clasificacion) {
     Lote lote = cargar(payload.tenantId(), payload.loteId(), payload.itemId());
     Fila fila = lote == null ? null : filaONull(lote, payload.itemId());
     if (lote == null || fila == null) {
@@ -1627,7 +1907,9 @@ public class IngestaMasivaEscrituracionService {
     }
     synchronized (fila) {
       fila.iaEstado = "ERROR";
-      fila.iaResumen = motivo;
+      fila.iaResumen = recortar(motivo, 400);
+      fila.iaErrorCodigo = clasificacion.codigo();
+      fila.iaMensajeUsuario = clasificacion.mensajeUsuario();
     }
     persistirItemWorker(lote, fila);
   }
@@ -1966,12 +2248,16 @@ public class IngestaMasivaEscrituracionService {
     throw ApiException.notFound("Fila no encontrada en el lote.");
   }
 
-  private static String tipoDe(Fila fila, String tipo) {
+  private static String tipoDe(Fila fila, String tipo, String nombreArchivo) {
     if (IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
       return IngestionMode.EXPEDIENTE_FISICO_ESCANEADO;
     }
     if (!StringUtils.hasText(tipo)) {
       throw ApiException.badRequest("Cada archivo separado necesita un tipo documental.");
+    }
+    if (StringUtils.hasText(nombreArchivo)
+        && nombreArchivo.toLowerCase(Locale.ROOT).contains("papeleta")) {
+      return "PAPELETA";
     }
     return tipo.trim();
   }
@@ -2093,10 +2379,21 @@ public class IngestaMasivaEscrituracionService {
 
     private static boolean filaListaParaCotejo(Fila fila) {
       synchronized (fila) {
-        if ("ERROR".equals(fila.ocrEstado) || "ERROR".equals(fila.iaEstado)) {
+        if ("ERROR".equals(fila.ocrEstado)) {
           return false;
         }
-        if (fila.expedienteId == null || fila.archivos.isEmpty() || "PROCESANDO".equals(fila.ocrEstado)) {
+        if ("PROCESANDO".equals(fila.ocrEstado)) {
+          return false;
+        }
+        if (fila.expedienteId == null || fila.archivos.isEmpty()) {
+          return false;
+        }
+        if ("EN_PROCESO".equals(fila.iaEstado)
+            || "COMPLETADO".equals(fila.iaEstado)
+            || "OK".equals(fila.iaEstado)) {
+          return false;
+        }
+        if (!"LISTO".equals(fila.ocrEstado) && !"COMPLETADO".equals(fila.ocrEstado)) {
           return false;
         }
         if ("VERDE".equals(fila.semaforo) || "NARANJA".equals(fila.semaforo)) {
@@ -2157,8 +2454,12 @@ public class IngestaMasivaEscrituracionService {
     private String observaciones;
     private String iaEstado = "PENDIENTE";
     private String iaResumen;
+    private String iaErrorCodigo;
+    private String iaMensajeUsuario;
     private long inicioMs;
     private long duracionMs;
+    private long ocrDuracionMs;
+    private long iaInicioMs;
     private final List<Archivo> archivos = new ArrayList<>();
 
     private Fila() {
@@ -2212,6 +2513,9 @@ public class IngestaMasivaEscrituracionService {
       semaforo = color;
       confianza = suma / procesables;
       observaciones = notas.isEmpty() ? null : recortar(String.join(" · ", notas), 800);
+      if (inicioMs > 0 && ocrDuracionMs == 0) {
+        ocrDuracionMs = Math.max(0, System.currentTimeMillis() - inicioMs);
+      }
     }
 
     private String textoConsolidado() {
@@ -2245,7 +2549,13 @@ public class IngestaMasivaEscrituracionService {
           observaciones,
           iaEstado,
           iaResumen,
-          items);
+          items,
+          inicioMs,
+          ocrDuracionMs,
+          iaInicioMs,
+          duracionMs,
+          iaErrorCodigo,
+          iaMensajeUsuario);
     }
   }
 

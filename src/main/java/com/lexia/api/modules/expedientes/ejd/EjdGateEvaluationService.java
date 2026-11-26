@@ -1,10 +1,8 @@
 package com.lexia.api.modules.expedientes.ejd;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -19,8 +17,6 @@ import com.lexia.api.modules.expedientes.proceso.GateDef;
 import com.lexia.api.modules.expedientes.proceso.GateDefRepository;
 import com.lexia.api.modules.expedientes.caso.LegalCase;
 import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
-import com.lexia.api.modules.expedientes.documentos.LegalDocument;
-import com.lexia.api.modules.expedientes.documentos.LegalDocumentRepository;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 
@@ -40,28 +36,25 @@ public class EjdGateEvaluationService {
   private final CaseGateRepository caseGates;
   private final CaseStageRepository caseStages;
   private final ProcessStageDefRepository stageDefs;
-  private final EjdOperationDocumentReqRepository operationDocumentReqs;
-  private final LegalDocumentRepository documents;
   private final EjdStageGateReqRepository stageGateReqs;
   private final LegalCaseRepository legalCases;
+  private final EjdValidationEvaluationService validationEvaluation;
 
   public EjdGateEvaluationService(
       GateDefRepository gateDefs,
       CaseGateRepository caseGates,
       CaseStageRepository caseStages,
       ProcessStageDefRepository stageDefs,
-      EjdOperationDocumentReqRepository operationDocumentReqs,
-      LegalDocumentRepository documents,
       EjdStageGateReqRepository stageGateReqs,
-      LegalCaseRepository legalCases) {
+      LegalCaseRepository legalCases,
+      EjdValidationEvaluationService validationEvaluation) {
     this.gateDefs = gateDefs;
     this.caseGates = caseGates;
     this.caseStages = caseStages;
     this.stageDefs = stageDefs;
-    this.operationDocumentReqs = operationDocumentReqs;
-    this.documents = documents;
     this.stageGateReqs = stageGateReqs;
     this.legalCases = legalCases;
+    this.validationEvaluation = validationEvaluation;
   }
 
   @Transactional
@@ -153,48 +146,15 @@ public class EjdGateEvaluationService {
 
   private void applyExecutiveTitleGate(CaseGate caseGate, LegalCase legalCase) {
     boolean ok =
-        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
-                legalCase.getId(), legalCase.getTenantId())
-            .stream()
-            .map(LegalDocument::getDocType)
-            .filter(type -> type != null && !type.isBlank())
-            .map(type -> type.trim().toUpperCase(Locale.ROOT))
+        validationEvaluation.presentDocumentTypeCodes(legalCase).stream()
             .anyMatch(type -> type.contains("TITULO") || type.contains("EJECUTIVO"));
     caseGate.applyResult(ok ? "PASS" : "FAIL");
     caseGates.save(caseGate);
   }
 
   private void applyDocumentGate(CaseGate caseGate, LegalCase legalCase) {
-    String operation = legalCase.getOperationTypeCode();
-    if (operation == null || operation.isBlank()) {
-      caseGate.applyResult("FAIL");
-      caseGates.save(caseGate);
-      return;
-    }
-    String op = operation.trim().toUpperCase(Locale.ROOT);
-    List<String> required =
-        operationDocumentReqs
-            .findByTenantIdOrderByOperationCodeAscSortOrderAsc(legalCase.getTenantId())
-            .stream()
-            .filter(row -> op.equals(row.getOperationCode()))
-            .map(EjdOperationDocumentReq::getDocumentTypeCode)
-            .toList();
-    if (required.isEmpty()) {
-      caseGate.applyResult("REVIEW_REQUIRED");
-      caseGates.save(caseGate);
-      return;
-    }
-    Set<String> present = new HashSet<>();
-    for (LegalDocument document :
-        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
-            legalCase.getId(), legalCase.getTenantId())) {
-      if (document.getDocType() != null && !document.getDocType().isBlank()) {
-        present.add(document.getDocType().trim().toUpperCase(Locale.ROOT));
-      }
-    }
-    boolean ok =
-        required.stream().allMatch(code -> present.contains(code.trim().toUpperCase(Locale.ROOT)));
-    caseGate.applyResult(ok ? "PASS" : "FAIL");
+    var snapshot = validationEvaluation.snapshotForGateG001(legalCase);
+    caseGate.applyResult(snapshot.gateResult());
     caseGates.save(caseGate);
   }
 

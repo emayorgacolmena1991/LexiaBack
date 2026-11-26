@@ -115,4 +115,12 @@ public class UserInvitation {
   public void revoke() {
     this.revokedAt = Instant.now();
   }
+
+  public void reissue(
+      String tokenHash, String displayName, UUID invitedBy, Instant expiresAt) {
+    this.tokenHash = tokenHash;
+    this.displayName = displayName;
+    this.invitedBy = invitedBy;
+    this.expiresAt = expiresAt;
+  }
 }

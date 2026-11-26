@@ -39,6 +39,7 @@ import com.lexia.api.modules.ia.ocr.CalidadDocumentoResultado;
 import com.lexia.api.modules.ia.ocr.DocumentosExtraidosStore;
 import com.lexia.api.modules.ia.ocr.LayoutExtractResult;
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
+import com.lexia.api.modules.ia.ocr.OcrProveedorAlertasService;
 import com.lexia.api.modules.ia.ocr.OcrFlujoDtos.ReuploadResponse;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService;
 import com.lexia.api.modules.ia.ocr.OcrSessionCacheService.OcrFileResult;
@@ -107,7 +108,8 @@ class DocumentosPosterioresOcrTest {
     ocr =
         new OcrAzureBatchService(
             azure, carga, cache, ocrRepo, Runnable::run, clasificador,
-            mock(org.springframework.transaction.PlatformTransactionManager.class));
+            mock(org.springframework.transaction.PlatformTransactionManager.class),
+            mock(OcrProveedorAlertasService.class));
 
     LegalCase legalCase = mock(LegalCase.class);
     when(legalCase.getProductCode()).thenReturn("VIV_HIPOTECADA_BIESS");

@@ -37,7 +37,17 @@ class IngestaJobWorkerTest {
     when(ingesta.workerId()).thenReturn(WORKER);
     // El executor no corre nada: cada job lanzado retiene su hilo, como uno en curso.
     ExecutorService executor = mock(ExecutorService.class);
-    worker = new IngestaJobWorker(jobs, ingesta, new ObjectMapper(), executor, 300, 360, 3);
+    worker =
+        new IngestaJobWorker(
+            jobs,
+            ingesta,
+            mock(LexiaJobsAlertasService.class),
+            new ObjectMapper(),
+            executor,
+            IngestaWorkerExecutorConfig.HILOS_DEFAULT,
+            300,
+            360,
+            3);
   }
 
   @Test
@@ -48,7 +58,7 @@ class IngestaJobWorkerTest {
     worker.poll();
     worker.poll();
 
-    verify(jobs, times(IngestaWorkerExecutorConfig.HILOS))
+    verify(jobs, times(IngestaWorkerExecutorConfig.HILOS_DEFAULT))
         .reclamar(eq("PROCESAR_DOCUMENTO"), eq(WORKER), anyLong());
   }
 

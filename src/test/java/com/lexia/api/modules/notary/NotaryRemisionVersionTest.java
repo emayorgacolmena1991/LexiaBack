@@ -207,7 +207,9 @@ class NotaryRemisionVersionTest {
             usuarios,
             mock(BrevoProperties.class),
             escrituras,
-            new ObjectMapper());
+            new ObjectMapper(),
+            mock(com.lexia.api.modules.identity.MembershipRepository.class),
+            mock(com.lexia.api.modules.expedientes.metricas.CaseCycleMetricsService.class));
   }
 
   @AfterEach

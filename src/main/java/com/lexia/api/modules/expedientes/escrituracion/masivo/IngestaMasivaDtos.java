@@ -53,7 +53,13 @@ public final class IngestaMasivaDtos {
       String observaciones,
       String iaEstado,
       String iaResumen,
-      List<ArchivoStatus> archivos) {}
+      List<ArchivoStatus> archivos,
+      long procesoInicioMs,
+      long ocrDuracionMs,
+      long iaInicioMs,
+      long procesoDuracionMs,
+      String iaErrorCodigo,
+      String iaMensajeUsuario) {}
 
   public record ResumenLote(
       UUID batchId,
@@ -112,4 +118,16 @@ public final class IngestaMasivaDtos {
   public record OverrideRequest(@JsonAlias("justificacion") String motivo) {}
 
   public record ConfirmarLoteRequest(String confirmadoPor) {}
+
+  public record ReclasificacionLoteFila(
+      String clientRowId, UUID expedienteId, int procesados, int omitidos) {}
+
+  /** Reclasificación IA de tipos documentales en todos los expedientes del lote. */
+  public record ReclasificacionLoteResponse(
+      UUID batchId,
+      int expedientes,
+      int documentosProcesados,
+      int documentosOmitidos,
+      int validacionesActualizadas,
+      List<ReclasificacionLoteFila> filas) {}
 }

@@ -39,27 +39,34 @@ public class IngestaJobWorker {
 
   private final JobRepository jobs;
   private final IngestaMasivaEscrituracionService ingesta;
+  private final LexiaJobsAlertasService jobsAlertas;
   private final ObjectMapper objectMapper;
   private final ExecutorService executor;
   private final long timeoutDocumentoSegundos;
   private final long timeoutIaSegundos;
   private final int maxIntentos;
+  private final int hilos;
 
   /** Solo se reclama con hilo libre: un job en cola gastaría su timeout sin haber empezado. */
-  private final Semaphore capacidad = new Semaphore(IngestaWorkerExecutorConfig.HILOS);
+  private final Semaphore capacidad;
 
   public IngestaJobWorker(
       JobRepository jobs,
       IngestaMasivaEscrituracionService ingesta,
+      LexiaJobsAlertasService jobsAlertas,
       ObjectMapper objectMapper,
       ExecutorService ingestaWorkerExecutor,
+      int ingestaWorkerHilos,
       @Value("${lexia.ingesta.worker.timeout-documento-s:300}") long timeoutDocumentoSegundos,
       @Value("${lexia.ingesta.worker.timeout-ia-s:360}") long timeoutIaSegundos,
       @Value("${lexia.ingesta.worker.max-intentos:3}") int maxIntentos) {
     this.jobs = jobs;
     this.ingesta = ingesta;
+    this.jobsAlertas = jobsAlertas;
     this.objectMapper = objectMapper;
     this.executor = ingestaWorkerExecutor;
+    this.hilos = ingestaWorkerHilos;
+    this.capacidad = new Semaphore(ingestaWorkerHilos);
     this.timeoutDocumentoSegundos = Math.max(1, timeoutDocumentoSegundos);
     this.timeoutIaSegundos = Math.max(1, timeoutIaSegundos);
     this.maxIntentos = Math.max(1, maxIntentos);
@@ -69,7 +76,7 @@ public class IngestaJobWorker {
   @Scheduled(fixedDelay = 2000)
   public void poll() {
     LOG.debug("ingesta poll tick");
-    for (int i = 0; i < IngestaWorkerExecutorConfig.HILOS; i++) {
+    for (int i = 0; i < hilos; i++) {
       if (!capacidad.tryAcquire()) {
         return;
       }
@@ -103,6 +110,9 @@ public class IngestaJobWorker {
       LOG.error("job colgado sin reintentos job={} intentos={}", job.id(), job.intentos());
       JobTerminalHandled item = terminalConItem(job);
       marcarItemComoError(job, item.loteId, item.itemId, "Job colgado: reintentos agotados");
+    }
+    if (!colgados.agotados().isEmpty()) {
+      jobsAlertas.notificarJobsAgotados(colgados.agotados());
     }
   }
 
@@ -183,7 +193,7 @@ public class IngestaJobWorker {
 
   /** Hilos ocupados ahora (métrica lexia.worker.hilos.ocupados). */
   public int hilosOcupados() {
-    return IngestaWorkerExecutorConfig.HILOS - capacidad.availablePermits();
+    return hilos - capacidad.availablePermits();
   }
 
   private void ejecutarDocumento(JobRow job, BooleanSupplier cancelado) {

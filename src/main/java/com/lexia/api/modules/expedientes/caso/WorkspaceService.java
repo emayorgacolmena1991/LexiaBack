@@ -185,7 +185,7 @@ public class WorkspaceService {
     List<ValidationItem> validations =
         buildValidations(legalCase.getProcessDefinitionId(), caseId, tenantId);
     ValidationSummary validationSummary = summarizeValidations(validations);
-    List<GateItem> gates = buildGates(legalCase.getProcessDefinitionId(), caseId, tenantId);
+    List<GateItem> gates = buildGates(legalCase);
     List<NoteItem> notes = buildNotes(caseId, tenantId);
     List<ActionItem> actions = buildActions(caseId, tenantId);
     List<TimelineItem> recentActivity = buildRecentActivity(notes, actions, validations);
@@ -438,7 +438,10 @@ public class WorkspaceService {
     return new ValidationSummary(completed, pending, observation);
   }
 
-  private List<GateItem> buildGates(UUID processDefinitionId, UUID caseId, UUID tenantId) {
+  private List<GateItem> buildGates(LegalCase legalCase) {
+    UUID processDefinitionId = legalCase.getProcessDefinitionId();
+    UUID caseId = legalCase.getId();
+    UUID tenantId = legalCase.getTenantId();
     if (processDefinitionId == null) {
       return List.of();
     }
@@ -451,12 +454,15 @@ public class WorkspaceService {
         .map(
             gate -> {
               GateDef definition = definitions.get(gate.getGateDefId());
+              String code = definition != null ? definition.getCode() : "—";
+              String detail = gateDetailForUi(legalCase, code, gate.getResult());
               return new GateItem(
                   gate.getId(),
-                  definition != null ? definition.getCode() : "—",
+                  code,
                   definition != null ? definition.getQuestion() : "Gate",
                   mapGateResult(gate.getResult()),
-                  gate.getResult());
+                  gate.getResult(),
+                  detail);
             })
         .sorted(
             Comparator.comparingInt(
@@ -467,6 +473,17 @@ public class WorkspaceService {
                         .findFirst()
                         .orElse(0)))
         .toList();
+  }
+
+  private String gateDetailForUi(LegalCase legalCase, String code, String resultCode) {
+    if (!"G-001".equals(code)) {
+      return null;
+    }
+    if (!"FAIL".equals(resultCode) && !"REVIEW_REQUIRED".equals(resultCode)) {
+      return null;
+    }
+    var snapshot = validationEvaluation.snapshotForGateG001(legalCase);
+    return snapshot.detail();
   }
 
   private List<NoteItem> buildNotes(UUID caseId, UUID tenantId) {

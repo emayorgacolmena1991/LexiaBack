@@ -58,6 +58,14 @@ public class CaseStage {
     return status;
   }
 
+  public Instant getStartedAt() {
+    return startedAt;
+  }
+
+  public Instant getCompletedAt() {
+    return completedAt;
+  }
+
   public void markCompleted(Instant when) {
     this.status = "completed";
     this.completedAt = when;

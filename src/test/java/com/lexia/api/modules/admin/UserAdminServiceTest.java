@@ -164,6 +164,59 @@ class UserAdminServiceTest {
   }
 
   @Test
+  void inviteReissuesExpiredInvitationInPlace() {
+    doNothing().when(authorization).requirePermission(eq("admin:usuarios:invitar"));
+    when(tenantParameters.getInviteTtlHours(TENANT_ID)).thenReturn(48);
+
+    Tenant tenant = mock(Tenant.class);
+    when(tenants.findById(TENANT_ID)).thenReturn(Optional.of(tenant));
+    when(tenant.getMaxUsers()).thenReturn(null);
+    when(tenant.getName()).thenReturn("Tenant Demo");
+
+    UUID userId = UUID.randomUUID();
+    AppUser user = AppUser.create("expirado@lexia.demo", "Invitado");
+    setField(user, "id", userId);
+    when(users.findByEmail("expirado@lexia.demo")).thenReturn(Optional.of(user));
+
+    Membership membership = Membership.invited(userId, TENANT_ID);
+    setField(membership, "id", MEMBERSHIP_ID);
+    when(memberships.findFirstByUserIdAndTenantIdAndDeletedAtIsNull(userId, TENANT_ID))
+        .thenReturn(Optional.of(membership));
+    when(memberships.save(any(Membership.class))).thenReturn(membership);
+
+    when(membershipRoles.findByMembershipId(MEMBERSHIP_ID)).thenReturn(List.of());
+    Role admin = Role.create(TENANT_ID, "ADMIN", "Administrador", null);
+    when(roles.findByTenantIdAndCode(TENANT_ID, "ADMIN")).thenReturn(Optional.of(admin));
+
+    UUID invitationId = UUID.randomUUID();
+    UserInvitation expired =
+        UserInvitation.issue(
+            TENANT_ID,
+            "expirado@lexia.demo",
+            "Invitado viejo",
+            "hash-viejo",
+            UUID.randomUUID(),
+            MEMBERSHIP_ID,
+            Instant.now().minus(Duration.ofDays(1)));
+    setField(expired, "id", invitationId);
+
+    when(invitations.findByTenantIdAndEmailIgnoreCaseAndAcceptedAtIsNullAndRevokedAtIsNull(
+            TENANT_ID, "expirado@lexia.demo"))
+        .thenReturn(List.of(expired));
+    when(invitations.save(any(UserInvitation.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    service.invite(
+        new AdminDtos.InviteUserRequest("expirado@lexia.demo", "Invitado nuevo", List.of("ADMIN")));
+
+    ArgumentCaptor<UserInvitation> captor = ArgumentCaptor.forClass(UserInvitation.class);
+    verify(invitations).save(captor.capture());
+    assertEquals(invitationId, captor.getValue().getId());
+    assertEquals("Invitado nuevo", captor.getValue().getDisplayName());
+    assertTrue(captor.getValue().getExpiresAt().isAfter(Instant.now()));
+    verify(invitations, never()).flush();
+  }
+
+  @Test
   void inviteEnforcesTenantUserLimit() {
     doNothing().when(authorization).requirePermission(eq("admin:usuarios:invitar"));
     Tenant tenant = mock(Tenant.class);

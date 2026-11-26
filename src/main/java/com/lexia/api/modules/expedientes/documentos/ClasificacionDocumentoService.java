@@ -34,6 +34,7 @@ public class ClasificacionDocumentoService {
   private final CaseDocumentoStore caseDocs;
   private final CargaDocumentoService carga;
   private final ObjectProvider<AnalisisDocumentoService> llm;
+  private final ObjectProvider<DocumentClasificacionMemoriaService> memoria;
   private final BigDecimal umbral;
   private final Duration timeout;
 
@@ -41,11 +42,13 @@ public class ClasificacionDocumentoService {
       CaseDocumentoStore caseDocs,
       CargaDocumentoService carga,
       ObjectProvider<AnalisisDocumentoService> llm,
+      ObjectProvider<DocumentClasificacionMemoriaService> memoria,
       @Value("${lexia.clasificacion.umbral:0.8}") double umbral,
       @Value("${lexia.clasificacion.timeout-ms:8000}") long timeoutMs) {
     this.caseDocs = caseDocs;
     this.carga = carga;
     this.llm = llm;
+    this.memoria = memoria;
     this.umbral = BigDecimal.valueOf(umbral);
     this.timeout = Duration.ofMillis(Math.max(1000, timeoutMs));
   }
@@ -199,11 +202,24 @@ public class ClasificacionDocumentoService {
     }
     AnalisisDocumentoService proveedor = llm.getIfAvailable();
     ClasificacionDocumento respuesta;
+    String entrada = recortar(textoOcr);
+    CaseDocumentoStore.CaseFileContext ctx = caseDocs.context(idExpediente);
+    DocumentClasificacionMemoriaService memoriaSvc = memoria.getIfAvailable();
+    if (ctx != null && memoriaSvc != null) {
+      List<String> ejemplos = memoriaSvc.ejemplosClasificacion(ctx.tenantId(), 3);
+      if (!ejemplos.isEmpty()) {
+        entrada =
+            String.join("\n\n", ejemplos)
+                + "\n\n<documento_actual>\n"
+                + entrada
+                + "\n</documento_actual>";
+      }
+    }
     try {
       if (proveedor == null) {
         throw new IllegalStateException("Sin proveedor LLM.");
       }
-      respuesta = proveedor.clasificarDocumento(recortar(textoOcr), tipos, timeout);
+      respuesta = proveedor.clasificarDocumento(entrada, tipos, timeout);
     } catch (RuntimeException e) {
       // Sin texto ni respuesta del documento en el log.
       LOG.warn(

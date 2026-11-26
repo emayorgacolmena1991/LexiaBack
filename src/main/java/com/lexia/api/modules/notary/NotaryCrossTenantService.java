@@ -18,9 +18,12 @@ import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudy;
 import com.lexia.api.modules.expedientes.escrituracion.core.TitleStudyRepository;
 import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
 import com.lexia.api.modules.expedientes.escrituracion.core.WritingFileRepository;
+import com.lexia.api.modules.expedientes.metricas.CaseCycleMetricsService;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.identity.AppUser;
 import com.lexia.api.modules.identity.AppUserRepository;
+import com.lexia.api.modules.identity.MembershipRepository;
+import com.lexia.api.modules.notifications.EmailAttachment;
 import com.lexia.api.modules.identity.AuditEvent;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
@@ -29,6 +32,8 @@ import com.lexia.api.modules.notifications.EmailNotificationService;
 import com.lexia.api.modules.tenancy.Tenant;
 import com.lexia.api.modules.tenancy.TenantRepository;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -79,6 +84,9 @@ public class NotaryCrossTenantService {
   private final BrevoProperties brevoProperties;
   private final NotaryEscrituraRepository escrituras;
   private final ObjectMapper mapper;
+  private final MembershipRepository memberships;
+  private final CaseCycleMetricsService cycleMetrics;
+  private static final long MAX_EMAIL_ATTACH_BYTES = 18L * 1024 * 1024;
 
   public NotaryCrossTenantService(
       AuthorizationService authorization,
@@ -102,7 +110,9 @@ public class NotaryCrossTenantService {
       AppUserRepository users,
       BrevoProperties brevoProperties,
       NotaryEscrituraRepository escrituras,
-      ObjectMapper mapper) {
+      ObjectMapper mapper,
+      MembershipRepository memberships,
+      CaseCycleMetricsService cycleMetrics) {
     this.authorization = authorization;
     this.tenants = tenants;
     this.profiles = profiles;
@@ -125,6 +135,8 @@ public class NotaryCrossTenantService {
     this.brevoProperties = brevoProperties;
     this.escrituras = escrituras;
     this.mapper = mapper;
+    this.memberships = memberships;
+    this.cycleMetrics = cycleMetrics;
   }
 
   @Transactional(readOnly = true)
@@ -362,6 +374,7 @@ public class NotaryCrossTenantService {
     remision.reenviar(body.observacionesBufete());
     crearVersion(remision, body.observacionesBufete());
     audit(firmId, "NOTARY_REMISION_VERSION_CREATED", remision.getId());
+    notifyNotary(remision, remision.getNotaryTenantId());
     return toRemisionDto(remision);
   }
 
@@ -474,6 +487,9 @@ public class NotaryCrossTenantService {
     remision.advanceStep();
     remisiones.save(remision);
     audit(AuthContext.require().tenantId(), "NOTARY_REMISION_ADVANCED", id);
+    if (NotaryRemisionEstado.NOTARIA_COMPLETADA.name().equals(remision.getEstado())) {
+      cycleMetrics.closeNotaryApproved(remision.getFirmTenantId(), remision.getFirmLegalCaseId());
+    }
     return toRemisionDto(remision);
   }
 
@@ -882,20 +898,93 @@ public class NotaryCrossTenantService {
 
   private void notifyNotary(NotaryRemision remision, UUID notaryTenantId) {
     NotaryTenantProfile profile = profiles.findById(notaryTenantId).orElse(null);
-    if (profile == null || profile.getContactEmail() == null || profile.getContactEmail().isBlank()) {
+    String notariaNombre = profile == null ? "Notaría" : profile.getOfficialName();
+    List<EmailAttachment> attachments = adjuntosCorreoRemision(remision);
+    LinkedHashSet<String> seen = new LinkedHashSet<>();
+    List<Recipient> recipients = new ArrayList<>();
+    if (profile != null
+        && profile.getContactEmail() != null
+        && !profile.getContactEmail().isBlank()) {
+      recipients.add(new Recipient(profile.getContactEmail(), profile.getOfficialName()));
+      seen.add(profile.getContactEmail().toLowerCase(Locale.ROOT));
+    }
+    for (Object[] row : memberships.findNotaryRemisionRecipientEmails(notaryTenantId)) {
+      String email = row[0] == null ? null : row[0].toString();
+      String name = row[1] == null ? email : row[1].toString();
+      if (email == null || email.isBlank()) {
+        continue;
+      }
+      String key = email.toLowerCase(Locale.ROOT);
+      if (seen.add(key)) {
+        recipients.add(new Recipient(email, name));
+      }
+    }
+    if (recipients.isEmpty()) {
+      LOG.warn("Sin destinatarios de correo para remisión {} notaría {}", remision.getId(), notaryTenantId);
       return;
     }
-    emails.sendNotariaRemisionFromBufete(
-        remision.getFirmTenantId(),
-        profile.getContactEmail(),
-        profile.getOfficialName(),
-        remision.getExpedienteCodigo(),
-        remision.getAsunto(),
-        "Bufete LEXIA",
-        profile.getOfficialName(),
-        remision.getObservacionesBufete(),
-        brevoProperties.getFrontendUrl() + "/notaria/remision/" + remision.getId());
+    String bandejaUrl = brevoProperties.getFrontendUrl() + "/notaria/remision/" + remision.getId();
+    for (Recipient r : recipients) {
+      emails.sendNotariaRemisionFromBufete(
+          remision.getFirmTenantId(),
+          r.email(),
+          r.name(),
+          remision.getExpedienteCodigo(),
+          remision.getAsunto(),
+          "Estudio jurídico / bufete",
+          notariaNombre,
+          remision.getObservacionesBufete(),
+          bandejaUrl,
+          attachments);
+    }
   }
+
+  private List<EmailAttachment> adjuntosCorreoRemision(NotaryRemision remision) {
+    NotaryRemisionVersion version =
+        remisionVersions
+            .findFirstByRemisionIdOrderByVersionNoDesc(remision.getId())
+            .orElse(null);
+    if (version == null) {
+      return List.of();
+    }
+    List<EmailAttachment> out = new ArrayList<>();
+    long total = 0;
+    total = agregarDocx(out, total, version.getMinutaFileName(), version.getMinutaStorageRef());
+    total = agregarDocx(out, total, version.getContratoFileName(), version.getContratoStorageRef());
+    for (NotaryRemisionDocument doc :
+        remisionDocuments.findByVersionIdOrderBySortOrderAsc(version.getId())) {
+      String key = doc.getStorageKey();
+      if (key == null || key.isBlank()) {
+        continue;
+      }
+      byte[] bytes = documentStorage.read(key);
+      if (bytes == null || bytes.length == 0) {
+        continue;
+      }
+      if (total + bytes.length > MAX_EMAIL_ATTACH_BYTES) {
+        LOG.warn("Adjuntos de correo truncados para remisión {} por límite de tamaño", remision.getId());
+        break;
+      }
+      String mime = guessMime(doc.getDisplayName());
+      out.add(new EmailAttachment(doc.getDisplayName(), mime, bytes));
+      total += bytes.length;
+    }
+    return out;
+  }
+
+  private long agregarDocx(List<EmailAttachment> out, long total, String fileName, String storageRef) {
+    if (storageRef == null || fileName == null) {
+      return total;
+    }
+    byte[] bytes = documentStorage.read(storageRef);
+    if (bytes == null || bytes.length == 0 || total + bytes.length > MAX_EMAIL_ATTACH_BYTES) {
+      return total;
+    }
+    out.add(new EmailAttachment(fileName, guessMime(fileName), bytes));
+    return total + bytes.length;
+  }
+
+  private record Recipient(String email, String name) {}
 
   private void notifyFirmDevolucion(NotaryRemision remision) {
     UUID userId = remision.getEmitidoPorUserId();

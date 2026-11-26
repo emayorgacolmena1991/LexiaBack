@@ -35,7 +35,8 @@ class CaseDocumentoStoreEliminarTest {
     ObjectProvider<ExpedienteSeguimientoService> provider =
         mock(ObjectProvider.class, CALLS_REAL_METHODS);
     doReturn(seguimiento).when(provider).getIfAvailable();
-    store = new CaseDocumentoStore(null, null, documents, null, ocr, null, provider);
+    store =
+        new CaseDocumentoStore(null, null, documents, null, ocr, null, provider, mock(ObjectProvider.class));
   }
 
   @Test

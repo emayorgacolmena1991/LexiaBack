@@ -248,6 +248,72 @@ public class EjdValidationEvaluationService {
     caseValidations.save(validation);
   }
 
+  public record DocumentAvailabilitySnapshot(String gateResult, String detail) {}
+
+  /**
+   * Misma lógica que EJD.V1 (documentos requeridos), para el gate G-001 y el workspace.
+   */
+  @Transactional(readOnly = true)
+  public DocumentAvailabilitySnapshot snapshotForGateG001(LegalCase legalCase) {
+    if (IngestionMode.from(legalCase.getIngestionMode()).isFisicoEscaneado()) {
+      Set<String> present = presentDocumentTypeCodes(legalCase);
+      String code = IngestionMode.EXPEDIENTE_FISICO_ESCANEADO;
+      if (present.contains(code)) {
+        return new DocumentAvailabilitySnapshot("PASS", null);
+      }
+      return new DocumentAvailabilitySnapshot(
+          "FAIL", "Falta marcar el expediente como " + IngestionMode.EXPEDIENTE_FISICO_ESCANEADO_LABEL + ".");
+    }
+    List<String> required = resolveRequiredDocumentCodes(legalCase);
+    String scopeLabel =
+        legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()
+            ? legalCase.getProductCode()
+            : legalCase.getOperationTypeCode();
+    if (scopeLabel == null || scopeLabel.isBlank()) {
+      return new DocumentAvailabilitySnapshot(
+          "REVIEW_REQUIRED", "Asigne producto BIESS u operación para evaluar la documentación.");
+    }
+    if (required.isEmpty()) {
+      return new DocumentAvailabilitySnapshot(
+          "REVIEW_REQUIRED",
+          "No hay documentos obligatorios configurados para " + scopeLabel + "; revise parametrización.");
+    }
+    Set<String> present = presentDocumentTypeCodes(legalCase);
+    List<String> missing =
+        required.stream()
+            .filter(code -> !present.contains(code.trim().toUpperCase(Locale.ROOT)))
+            .toList();
+    if (missing.isEmpty()) {
+      return new DocumentAvailabilitySnapshot("PASS", null);
+    }
+    List<String> sinTipo =
+        documents
+            .findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+                legalCase.getId(), legalCase.getTenantId())
+            .stream()
+            .filter(doc -> doc.getDocType() == null || doc.getDocType().isBlank())
+            .map(LegalDocument::getName)
+            .filter(name -> name != null && !name.isBlank())
+            .toList();
+    String detalle = "Falta: " + String.join(", ", nombresDocumento(legalCase, missing)) + ".";
+    if (!sinTipo.isEmpty()) {
+      detalle += " Sin tipo asignado: " + String.join(", ", sinTipo) + ".";
+    }
+    return new DocumentAvailabilitySnapshot("FAIL", detalle);
+  }
+
+  public Set<String> presentDocumentTypeCodes(LegalCase legalCase) {
+    Set<String> present = new HashSet<>();
+    for (LegalDocument document :
+        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+            legalCase.getId(), legalCase.getTenantId())) {
+      if (document.getDocType() != null && !document.getDocType().isBlank()) {
+        present.add(document.getDocType().trim().toUpperCase(Locale.ROOT));
+      }
+    }
+    return present;
+  }
+
   /** Descripción del requisito del producto; si no existe, el código en texto legible. */
   private List<String> nombresDocumento(LegalCase legalCase, List<String> codigos) {
     Map<String, DocumentRequirement> requisitos = requisitosProducto(legalCase);

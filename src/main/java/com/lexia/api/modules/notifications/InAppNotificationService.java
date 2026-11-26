@@ -42,6 +42,7 @@ public class InAppNotificationService {
 
   private static final Logger LOG = LoggerFactory.getLogger(InAppNotificationService.class);
   private static final String CATEGORY_ADMIN = "ADMIN";
+  public static final String CATEGORY_OPERATIONS = "OPERATIONS";
   private static final Duration SECURITY_DIGEST_WINDOW = Duration.ofHours(24);
   private static final DateTimeFormatter RELATIVE_ANCHOR =
       DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.forLanguageTag("es-CO"))
@@ -98,6 +99,24 @@ public class InAppNotificationService {
   }
 
   @Transactional
+  public NotificationListResponse listOperationsNotifications() {
+    AuthPrincipal principal = requireSession();
+    UUID tenantId = principal.tenantId();
+    UUID userId = principal.userId();
+    List<NotificationItem> items =
+        notifications
+            .findTop50ByTenantIdAndUserIdAndCategoryOrderByCreatedAtDesc(
+                tenantId, userId, CATEGORY_OPERATIONS)
+            .stream()
+            .map(this::toItem)
+            .toList();
+    long unread =
+        notifications.countByTenantIdAndUserIdAndCategoryAndReadAtIsNull(
+            tenantId, userId, CATEGORY_OPERATIONS);
+    return new NotificationListResponse(items, unread);
+  }
+
+  @Transactional
   public void syncAdminDigest(AuthPrincipal principal) {
     if (principal.tenantId() == null || !hasAdminInboxAccess()) {
       return;
@@ -139,6 +158,29 @@ public class InAppNotificationService {
       Map<String, String> params,
       String href,
       String dedupeKey) {
+    notifyUser(tenantId, userId, CATEGORY_ADMIN, type, params, href, dedupeKey);
+  }
+
+  @Transactional
+  public void notifyOperaciones(
+      UUID tenantId,
+      UUID userId,
+      String type,
+      Map<String, String> params,
+      String href,
+      String dedupeKey) {
+    notifyUser(tenantId, userId, CATEGORY_OPERATIONS, type, params, href, dedupeKey);
+  }
+
+  @Transactional
+  public void notifyUser(
+      UUID tenantId,
+      UUID userId,
+      String category,
+      String type,
+      Map<String, String> params,
+      String href,
+      String dedupeKey) {
     if (tenantId == null || userId == null) {
       return;
     }
@@ -156,7 +198,7 @@ public class InAppNotificationService {
           UserNotification.create(
               tenantId,
               userId,
-              CATEGORY_ADMIN,
+              category == null || category.isBlank() ? CATEGORY_ADMIN : category,
               type,
               writeParams(params),
               href,

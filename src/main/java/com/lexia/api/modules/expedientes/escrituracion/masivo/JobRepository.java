@@ -16,6 +16,42 @@ public class JobRepository {
     this.jdbc = jdbc;
   }
 
+  /**
+   * @return {@code true} si se creó un job nuevo; {@code false} si ya había uno vivo con la misma clave.
+   */
+  public boolean encolarIaExpediente(
+      UUID tenantId, String payloadJson, String workerId, String idempotencyKey) {
+    Boolean vivo =
+        jdbc.queryForObject(
+            """
+            SELECT EXISTS (
+              SELECT 1 FROM app.jobs
+               WHERE tenant_id = ?
+                 AND tipo = 'PROCESAR_IA_EXPEDIENTE'
+                 AND idempotency_key = ?
+                 AND estado IN ('PENDIENTE', 'EN_PROCESO')
+            )
+            """,
+            Boolean.class,
+            tenantId,
+            idempotencyKey);
+    if (Boolean.TRUE.equals(vivo)) {
+      return false;
+    }
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO app.jobs (id, tenant_id, tipo, payload, estado, prioridad, idempotency_key, worker_id)
+        VALUES (?, ?, 'PROCESAR_IA_EXPEDIENTE', ?::jsonb, 'PENDIENTE', 0, ?, ?)
+        """,
+        id,
+        tenantId,
+        payloadJson,
+        idempotencyKey,
+        workerId);
+    return true;
+  }
+
   public UUID encolar(UUID tenantId, String tipo, String payloadJson, String workerId) {
     UUID id = UUID.randomUUID();
     jdbc.update(
