@@ -30,7 +30,9 @@ public final class EscrituracionDtos {
       boolean esencial,
       boolean porPersona,
       String rolPersona,
-      String condicion) {
+      String condicion,
+      /** Requisito de una persona concreta; null = basta un documento del tipo. */
+      String comparecienteId) {
 
     public DocumentoRequisitoItem(
         String documentTypeCode,
@@ -39,7 +41,7 @@ public final class EscrituracionDtos {
         int maxValidityDays,
         String canton,
         int sortOrder) {
-      this(documentTypeCode, description, mandatory, maxValidityDays, canton, sortOrder, false, false, null, null);
+      this(documentTypeCode, description, mandatory, maxValidityDays, canton, sortOrder, false, false, null, null, null);
     }
   }
 
@@ -206,7 +208,9 @@ public final class EscrituracionDtos {
       java.util.Map<String, String> origenes,
       java.util.Map<String, ValorExtraido> valoresExtraidos,
       DatosBiessMinuta datosBiess,
-      java.util.Map<String, String> camposBiess) {}
+      java.util.Map<String, String> camposBiess,
+      /** P. ej. más vendedores de los que admite la plantilla (no bloquea). */
+      List<String> avisos) {}
 
   /**
    * Valor al que vuelve "Restaurar" un campo corregido a mano.

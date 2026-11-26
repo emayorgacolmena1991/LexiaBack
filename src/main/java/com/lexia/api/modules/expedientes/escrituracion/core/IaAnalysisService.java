@@ -75,6 +75,18 @@ public class IaAnalysisService {
   private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
   private final ObjectMapper objectMapper;
+  /** Opcional (setter): crea los comparecientes desde las listas del consolidado. */
+  private org.springframework.beans.factory.ObjectProvider<
+          com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+      comparecientes;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setComparecientes(
+      org.springframework.beans.factory.ObjectProvider<
+              com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+          comparecientes) {
+    this.comparecientes = comparecientes;
+  }
 
   public IaAnalysisService(
       LegalCaseRepository legalCases,
@@ -196,6 +208,7 @@ public class IaAnalysisService {
               : "No se obtuvo resultado de análisis IA.");
     }
 
+    sincronizarComparecientes(expedienteId, ext.payload().datosExtraidos());
     List<DocOcr> cabeceras = OcrExpedienteTexto.cabeceras(ocrText);
     List<DocumentoExtraido> extraidosLlm = ext.payload().documentosExtraidos();
     List<DocumentoExtraidoDTO> documentosExtraidos =
@@ -629,6 +642,28 @@ public class IaAnalysisService {
       }
     }
     return out;
+  }
+
+  /**
+   * Comparecientes desde las listas del consolidado. Si falla se registra y el análisis sigue: el
+   * abogado puede cargarlos a mano en la ficha.
+   */
+  private void sincronizarComparecientes(UUID expedienteId, DatosExtraidos datos) {
+    if (comparecientes == null) {
+      return;
+    }
+    var service = comparecientes.getIfAvailable();
+    if (service == null) {
+      return;
+    }
+    try {
+      service.sincronizarDesdeIa(expedienteId.toString(), datos);
+    } catch (RuntimeException e) {
+      LOG.warn(
+          "analizar-ia: comparecientes no sincronizados caseId={} causa={}",
+          expedienteId,
+          e.getClass().getSimpleName());
+    }
   }
 
   /**

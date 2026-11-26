@@ -159,6 +159,9 @@ public class MinutaGenerationService {
     Map<String, String> overrides =
         draft == null ? Map.of() : variablesService.leerOverrides(draft.getOverrides());
     MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, loadData(draft));
+    if (base != null) {
+      aplicarComparecientes(tenantId, caseId, base);
+    }
     if (base == null) {
       base = new MinutaViviendaData();
       completarDesdeConsolidado(tenantId, caseId, base);
@@ -171,7 +174,8 @@ public class MinutaGenerationService {
         descriptor,
         variablesService.consolidar(descriptor, data),
         variablesService.origenes(descriptor, base, biess, precio, overrides),
-        biess);
+        biess,
+        avisosPlantilla(data));
   }
 
   /**
@@ -197,6 +201,9 @@ public class MinutaGenerationService {
     MinutaDraft draft = ultimoDraft(file, tenantId, kind);
     MinutaViviendaData renderizado = draft == null ? null : loadData(draft);
     MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, renderizado);
+    if (base != null) {
+      aplicarComparecientes(tenantId, caseId, base);
+    }
     if (draft == null) {
       // Sin borrador, la vista previa lo crea: es generar. Un borrador existente se sigue viendo.
       exigirPrecioCompraventa(tenantId, caseId, kind);
@@ -238,7 +245,8 @@ public class MinutaGenerationService {
             descriptor,
             consolidadas,
             variablesService.origenes(descriptor, base, biessGuardado, precio, overrides),
-            biessGuardado));
+            biessGuardado,
+            avisosPlantilla(base)));
   }
 
   public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
@@ -293,7 +301,8 @@ public class MinutaGenerationService {
       MinutaTemplateDescriptor descriptor,
       VariablesConsolidadas c,
       Origenes origenes,
-      DatosBiessMinuta biess) {
+      DatosBiessMinuta biess,
+      List<String> avisos) {
     return new VariablesMinutaResponse(
         draft == null ? null : draft.getId(),
         descriptor.templateKind(),
@@ -310,7 +319,31 @@ public class MinutaGenerationService {
         origenes.origenes(),
         origenes.valoresExtraidos(),
         biess == null || biess.isEmpty() ? null : biess,
-        CampoPlantilla.mapa());
+        CampoPlantilla.mapa(),
+        avisos);
+  }
+
+  /** Más otorgantes por parte de los que tienen tags en la plantilla: aviso, no bloquea. */
+  static List<String> avisosPlantilla(MinutaViviendaData data) {
+    if (data == null || data.getComparecientes().isEmpty()) {
+      return List.of();
+    }
+    List<String> avisos = new java.util.ArrayList<>();
+    for (String parte : List.of("VENDEDORA", "COMPRADORA")) {
+      long n =
+          data.getComparecientes().stream()
+              .filter(p -> parte.equals(p.parte()))
+              .filter(p -> !"REPRESENTANTE".equals(p.rol()) && !"APODERADO".equals(p.rol()))
+              .count();
+      if (n > com.lexia.api.modules.expedientes.comparecientes.ComparecientesService.MAX_EN_PLANTILLA) {
+        avisos.add(
+            "La plantilla admite hasta "
+                + com.lexia.api.modules.expedientes.comparecientes.ComparecientesService.MAX_EN_PLANTILLA
+                + ("VENDEDORA".equals(parte) ? " vendedores" : " compradores")
+                + "; revise la minuta.");
+      }
+    }
+    return avisos;
   }
 
   /**
@@ -886,7 +919,37 @@ public class MinutaGenerationService {
    * Respaldo con el consolidado del estudio IA ({@code extracted_data}): solo completa lo que la
    * extracción de minuta dejó vacío.
    */
+  /** Opcional (setter): lista de comparecientes del expediente. */
+  private org.springframework.beans.factory.ObjectProvider<
+          com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+      comparecientes;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setComparecientes(
+      org.springframework.beans.factory.ObjectProvider<
+              com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+          comparecientes) {
+    this.comparecientes = comparecientes;
+  }
+
+  /**
+   * Los tags actuales ({@code _1}, {@code _2}, vendedor y cónyuge del vendedor) salen de la lista de
+   * comparecientes en orden, sin cambiar las plantillas; además {@code compradores_texto},
+   * {@code vendedores_texto} y la lista completa para la notaría. Sin lista no toca nada.
+   */
+  private void aplicarComparecientes(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+    if (comparecientes == null) {
+      return;
+    }
+    var service = comparecientes.getIfAvailable();
+    if (service != null) {
+      com.lexia.api.modules.expedientes.comparecientes.ComparecientesMinuta.aplicar(
+          data, service.filas(tenantId, caseId));
+    }
+  }
+
   private void completarDesdeConsolidado(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+    aplicarComparecientes(tenantId, caseId, data);
     Map<String, String> consolidado = new HashMap<>();
     for (ExtractedData row :
         extractedData.findByCaseIdAndTenantIdOrderByFieldLabelAsc(caseId, tenantId)) {

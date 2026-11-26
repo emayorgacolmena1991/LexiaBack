@@ -69,7 +69,36 @@ public final class CargaDocumentoDtos {
       java.time.Instant subidoEn,
       String observacion,
       /** Descripción que escribió el usuario para un documento OTRO; null en los demás tipos. */
-      String descripcionTipo) {
+      String descripcionTipo,
+      /** Compareciente al que pertenece el documento (cédula, papeleta, nombramiento, poder). */
+      String comparecienteId) {
+
+    public DocumentoCargadoDTO(
+        String idDocumento,
+        String nombreOriginal,
+        String tamano,
+        String codigoTipoDocumento,
+        String tipoSugerido,
+        String clasificacionEstado,
+        String clasificacionOrigen,
+        String subidoPor,
+        java.time.Instant subidoEn,
+        String observacion,
+        String descripcionTipo) {
+      this(
+          idDocumento,
+          nombreOriginal,
+          tamano,
+          codigoTipoDocumento,
+          tipoSugerido,
+          clasificacionEstado,
+          clasificacionOrigen,
+          subidoPor,
+          subidoEn,
+          observacion,
+          descripcionTipo,
+          null);
+    }
 
     public DocumentoCargadoDTO(
         String idDocumento,

@@ -123,7 +123,8 @@ public class ProductoBiessService {
                     r.esencial(),
                     r.porPersona(),
                     r.rolPersona(),
-                    r.condicion()))
+                    r.condicion(),
+                    r.comparecienteId()))
         .toList();
   }
 

@@ -69,6 +69,10 @@ public class LegalDocument implements Persistable<UUID> {
   @Column(name = "descripcion_tipo", length = MAX_DESCRIPCION_OTRO)
   private String descripcionTipo;
 
+  /** Persona a la que pertenece (cédula, papeleta, nombramiento, poder) (V121). */
+  @Column(name = "compareciente_id")
+  private UUID comparecienteId;
+
   /**
    * EJ-2: la trae el tercero (vendedor persona jurídica). No entra al consolidado del expediente;
    * EJ-3 la revisa aparte ({@code RevisionMinutaTerceroService}).
@@ -299,6 +303,16 @@ public class LegalDocument implements Persistable<UUID> {
 
   public String getDescripcionTipo() {
     return descripcionTipo;
+  }
+
+  public UUID getComparecienteId() {
+    return comparecienteId;
+  }
+
+  /** null desliga. */
+  public void ligarCompareciente(UUID comparecienteId) {
+    this.comparecienteId = comparecienteId;
+    this.updatedAt = Instant.now();
   }
 
   /** Promoción del borrador: la descripción de OTRO viaja con el documento. */

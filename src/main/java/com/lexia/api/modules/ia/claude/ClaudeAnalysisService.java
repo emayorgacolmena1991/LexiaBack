@@ -1221,10 +1221,43 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
     ObjectNode node = objectMapper.createObjectNode();
     node.put("type", "object");
     ObjectNode props = node.putObject("properties");
-    props.set("comprador", schemaPersona());
-    props.set("vendedor", schemaPersona());
+    props.set("compradores", schemaPersonas("Todas las personas de la parte compradora"));
+    props.set("vendedores", schemaPersonas("Todas las personas de la parte vendedora"));
     props.set("inmueble", schemaInmueble());
-    node.putArray("required").add("comprador").add("vendedor").add("inmueble");
+    node.putArray("required").add("compradores").add("vendedores").add("inmueble");
+    return node;
+  }
+
+  /** Lista sin tope de comparecientes de una parte (fase 4). */
+  private ObjectNode schemaPersonas(String descripcion) {
+    ObjectNode item = objectMapper.createObjectNode();
+    item.put("type", "object");
+    ObjectNode props = item.putObject("properties");
+    props.putObject("nombres").put("type", "string");
+    props.putObject("cedula").put("type", "string").put("description", "Cédula o RUC");
+    props.putObject("estadoCivil").put("type", "string");
+    ObjectNode rol = props.putObject("rol");
+    rol.put("type", "string");
+    rol.putArray("enum").add("TITULAR").add("CONYUGE").add("HEREDERO").add("REPRESENTANTE").add("APODERADO");
+    props.putObject("profesion").put("type", "string");
+    props.putObject("fechaNacimiento")
+        .put("type", "string")
+        .put("description", "dd/MM/yyyy según la cédula; vacío si no consta");
+    ObjectNode disc = props.putObject("discapacidad");
+    disc.putArray("type").add("boolean").add("null");
+    disc.put("description", "true solo si la cédula lo indica; null si no lo dice (nunca inventes false)");
+    props.putObject("esPersonaJuridica").put("type", "boolean");
+    props.putObject("compareceConApoderado").put("type", "boolean");
+    ObjectNode docs = props.putObject("documentoIds");
+    docs.put("type", "array");
+    docs.putObject("items").put("type", "string");
+    docs.put("description", "id de los <documento> de esta persona: cédula, votación, nombramiento, poder");
+    item.putArray("required").add("nombres").add("cedula").add("estadoCivil").add("rol").add("documentoIds");
+
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("type", "array");
+    node.put("description", descripcion);
+    node.set("items", item);
     return node;
   }
 

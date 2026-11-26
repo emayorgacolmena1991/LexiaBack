@@ -1,5 +1,8 @@
 package com.lexia.api.modules.expedientes.requisitos;
 
+import com.lexia.api.modules.expedientes.comparecientes.Compareciente;
+import com.lexia.api.modules.expedientes.comparecientes.ComparecienteRepository;
+import com.lexia.api.modules.expedientes.comparecientes.RolCompareciente;
 import com.lexia.api.modules.expedientes.documentos.DocumentRequirement;
 import com.lexia.api.modules.expedientes.documentos.DocumentRequirementRepository;
 import com.lexia.api.modules.expedientes.documentos.LegalDocument;
@@ -46,19 +49,30 @@ public class RequisitosService {
   private final ExpedienteCondicionRepository condiciones;
   private final CatalogRepository catalogs;
   private final CatalogItemRepository items;
+  private final ComparecienteRepository comparecientes;
 
   public RequisitosService(
       DocumentRequirementRepository requirements,
       ExpedienteCondicionRepository condiciones,
       CatalogRepository catalogs,
-      CatalogItemRepository items) {
+      CatalogItemRepository items,
+      ComparecienteRepository comparecientes) {
     this.requirements = requirements;
     this.condiciones = condiciones;
     this.catalogs = catalogs;
     this.items = items;
+    this.comparecientes = comparecientes;
   }
 
-  /** Requisito aplicable al caso. {@code condicion} null = aplica siempre. */
+  /** Nombre corto del documento por persona: «Cédula de …». */
+  private static final Map<String, String> NOMBRE_POR_PERSONA =
+      Map.of("CEDULA", "Cédula", "PAPELETA", "Certificado de votación");
+
+  /**
+   * Requisito aplicable al caso. {@code condicion} null = aplica siempre. {@code comparecienteId}:
+   * requisito de una persona concreta (solo está presente si hay un documento del tipo ligado a
+   * ella); null = basta un documento del tipo.
+   */
   public record RequisitoAplicable(
       String tipo,
       String descripcion,
@@ -69,7 +83,24 @@ public class RequisitosService {
       String condicion,
       String canton,
       int maxValidityDays,
-      int sortOrder) {}
+      int sortOrder,
+      String comparecienteId) {
+
+    public RequisitoAplicable(
+        String tipo,
+        String descripcion,
+        boolean obligatorio,
+        boolean esencial,
+        boolean porPersona,
+        String rolPersona,
+        String condicion,
+        String canton,
+        int maxValidityDays,
+        int sortOrder) {
+      this(tipo, descripcion, obligatorio, esencial, porPersona, rolPersona, condicion, canton,
+          maxValidityDays, sortOrder, null);
+    }
+  }
 
   /**
    * @param canton cantón normalizado ({@code ALL} si no hay).
@@ -102,7 +133,75 @@ public class RequisitosService {
       UUID tenantId, UUID expedienteId, String productCode, String canton) {
     Set<String> confirmadas =
         expedienteId == null ? Set.of() : condicionesConfirmadas(tenantId, expedienteId);
-    return resolver(tenantId, productCode, canton, confirmadas);
+    Resolucion base = resolver(tenantId, productCode, canton, confirmadas);
+    if (expedienteId == null || tenantId == null) {
+      return base;
+    }
+    List<Compareciente> personas =
+        comparecientes.findByTenantIdAndExpedienteIdOrderByParteAscOrdenAsc(tenantId, expedienteId);
+    return new Resolucion(
+        base.productCode(),
+        base.canton(),
+        base.cantonPropio(),
+        base.condiciones(),
+        porPersona(base.requisitos(), personas),
+        base.avisos());
+  }
+
+  /**
+   * Requisitos por persona: uno por compareciente del rol («Cédula de {nombre}»). Sin
+   * comparecientes del rol queda el requisito general.
+   */
+  static List<RequisitoAplicable> porPersona(
+      List<RequisitoAplicable> requisitos, List<Compareciente> personas) {
+    if (personas == null || personas.isEmpty()) {
+      return requisitos;
+    }
+    List<RequisitoAplicable> out = new ArrayList<>();
+    for (RequisitoAplicable r : requisitos) {
+      List<Compareciente> delRol = r.porPersona() ? delRol(personas, r.rolPersona()) : List.of();
+      if (delRol.isEmpty()) {
+        out.add(r);
+        continue;
+      }
+      String nombre =
+          NOMBRE_POR_PERSONA.getOrDefault(
+              r.tipo(), StringUtils.hasText(r.descripcion()) ? r.descripcion() : legible(r.tipo()));
+      for (Compareciente p : delRol) {
+        out.add(
+            new RequisitoAplicable(
+                r.tipo(),
+                nombre + " de " + p.getNombres(),
+                r.obligatorio(),
+                r.esencial(),
+                true,
+                r.rolPersona(),
+                r.condicion(),
+                r.canton(),
+                r.maxValidityDays(),
+                r.sortOrder(),
+                p.getId().toString()));
+      }
+    }
+    return List.copyOf(out);
+  }
+
+  /** Personas naturales a las que se pide el documento según el rol del requisito. */
+  private static List<Compareciente> delRol(List<Compareciente> personas, String rol) {
+    String r = rol == null ? "AMBOS" : rol;
+    return personas.stream()
+        .filter(p -> !p.isPersonaJuridica())
+        .filter(
+            p ->
+                switch (r) {
+                  case "REPRESENTANTE" -> p.rolEnum() == RolCompareciente.REPRESENTANTE;
+                  case "COMPRADOR" ->
+                      p.rolEnum().otorgante() && p.parteEnum() == RolCompareciente.Parte.COMPRADORA;
+                  case "VENDEDOR" ->
+                      p.rolEnum().otorgante() && p.parteEnum() == RolCompareciente.Parte.VENDEDORA;
+                  default -> p.rolEnum().otorgante();
+                })
+        .toList();
   }
 
   @Transactional(readOnly = true)

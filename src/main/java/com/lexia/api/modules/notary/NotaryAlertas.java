@@ -82,7 +82,7 @@ final class NotaryAlertas {
       return List.of();
     }
     List<Persona> compradores = compradores(payload);
-    Optional<Persona> vendedor = vendedor(payload);
+    List<Persona> vendedores = vendedores(payload);
     LocalDate[] fecha = new LocalDate[1];
     Supplier<LocalDate> ref =
         () -> {
@@ -115,7 +115,7 @@ final class NotaryAlertas {
               conDiscapacidad));
     }
     List<Persona> impuestos = new ArrayList<>(compradoresMayores);
-    vendedor.filter(v -> terceraEdad(v, ref)).ifPresent(impuestos::add);
+    vendedores.stream().filter(v -> terceraEdad(v, ref)).forEach(impuestos::add);
     if (!impuestos.isEmpty()) {
       alertas.add(
           alerta(
@@ -130,7 +130,7 @@ final class NotaryAlertas {
     // El vendedor suele ser compañía: sin fecha de nacimiento no se reclama su edad.
     List<Persona> sinEdad = new ArrayList<>();
     compradores.stream().filter(p -> p.nacimiento().isEmpty()).forEach(sinEdad::add);
-    vendedor.filter(v -> v.conFecha() && v.nacimiento().isEmpty()).ifPresent(sinEdad::add);
+    vendedores.stream().filter(v -> v.conFecha() && v.nacimiento().isEmpty()).forEach(sinEdad::add);
     if (!sinEdad.isEmpty()) {
       alertas.add(
           alerta(
@@ -172,8 +172,15 @@ final class NotaryAlertas {
     return Period.between(nacimiento, referencia).getYears();
   }
 
-  /** Comprador 1 siempre; el cónyuge solo si el payload trae algún dato suyo. */
+  /**
+   * Con la lista de comparecientes (fase 4) se usan todas las personas; sin ella, comprador 1
+   * siempre y el cónyuge solo si el payload trae algún dato suyo.
+   */
   private static List<Persona> compradores(JsonNode payload) {
+    List<Persona> deLista = deLista(payload, "COMPRADORA", ROL_COMPRADOR);
+    if (deLista != null) {
+      return deLista;
+    }
     List<Persona> compradores = new ArrayList<>();
     compradores.add(persona(payload, ROL_COMPRADOR, "conyuge_1", "Comprador"));
     boolean hayConyuge =
@@ -186,12 +193,57 @@ final class NotaryAlertas {
     return compradores;
   }
 
-  /** Solo cuenta si trae fecha de nacimiento: la plantilla lo trata como compañía. */
-  private static Optional<Persona> vendedor(JsonNode payload) {
-    if (vacio(payload, "fecha_nacimiento_vendedor")) {
-      return Optional.empty();
+  /**
+   * Vendedores con fecha de nacimiento (sin fecha se trata como compañía). Con la lista de
+   * comparecientes, todos los vendedores personas naturales; sin ella, solo el vendedor 1.
+   */
+  private static List<Persona> vendedores(JsonNode payload) {
+    List<Persona> deLista = deLista(payload, "VENDEDORA", ROL_VENDEDOR);
+    if (deLista != null) {
+      return deLista.stream().filter(Persona::conFecha).toList();
     }
-    return Optional.of(persona(payload, ROL_VENDEDOR, "vendedor", "Vendedor"));
+    if (vacio(payload, "fecha_nacimiento_vendedor")) {
+      return List.of();
+    }
+    return List.of(persona(payload, ROL_VENDEDOR, "vendedor", "Vendedor"));
+  }
+
+  /**
+   * Otorgantes personas naturales de una parte desde {@code comparecientes}; null si el payload no
+   * trae la lista (versiones anteriores a la fase 4). Sufijo de los dos primeros compradores:
+   * {@code conyuge_1}/{@code conyuge_2} (formulario de exoneración).
+   */
+  private static List<Persona> deLista(JsonNode payload, String parte, String rol) {
+    JsonNode lista = payload.get("comparecientes");
+    if (lista == null || !lista.isArray() || lista.isEmpty()) {
+      return null;
+    }
+    List<Persona> out = new ArrayList<>();
+    int i = 0;
+    for (JsonNode p : lista) {
+      String r = p.path("rol").asText("");
+      if (!parte.equals(p.path("parte").asText(""))
+          || "REPRESENTANTE".equals(r)
+          || "APODERADO".equals(r)
+          || p.path("personaJuridica").asBoolean(false)) {
+        continue;
+      }
+      i++;
+      String sufijo =
+          "COMPRADORA".equals(parte) && i <= 2 ? "conyuge_" + i : parte.toLowerCase(Locale.ROOT) + "_" + i;
+      String fecha = p.path("fechaNacimiento").asText("");
+      boolean conFecha = !MinutaViviendaData.isMissing(fecha);
+      String nombre = p.path("nombres").asText("");
+      out.add(
+          new Persona(
+              rol,
+              sufijo,
+              nombre.isBlank() ? ("COMPRADORA".equals(parte) ? "Comprador " : "Vendedor ") + i : nombre,
+              conFecha,
+              conFecha ? LetrasNotariales.parsearFecha(fecha) : Optional.empty(),
+              discapacidad(p.get("discapacidad"))));
+    }
+    return out;
   }
 
   private static Persona persona(JsonNode payload, String rol, String sufijo, String porDefecto) {

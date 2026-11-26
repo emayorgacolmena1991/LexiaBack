@@ -192,6 +192,56 @@ public class CargaDocumentoService {
     return productos.resolverRequisitos(tenant, uuidONull(draft.id()), draft.productCode(), draft.canton());
   }
 
+  private static DocumentoCargadoDTO conCompareciente(DocumentoCargadoDTO d, UUID compareciente) {
+    if (compareciente == null) {
+      return d;
+    }
+    return new DocumentoCargadoDTO(
+        d.idDocumento(),
+        d.nombreOriginal(),
+        d.tamano(),
+        d.codigoTipoDocumento(),
+        d.tipoSugerido(),
+        d.clasificacionEstado(),
+        d.clasificacionOrigen(),
+        d.subidoPor(),
+        d.subidoEn(),
+        d.observacion(),
+        d.descripcionTipo(),
+        compareciente.toString());
+  }
+
+  /**
+   * Liga un documento del borrador o expediente a un compareciente (null desliga). El servicio de
+   * comparecientes ya comprobó que la persona es de este expediente. 404 si el documento no está.
+   */
+  public void ligarCompareciente(String idExpediente, String idDocumento, UUID comparecienteId) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      caseDocs.ligarCompareciente(official, idDocumento, comparecienteId);
+      return;
+    }
+    DraftExpediente draft = requireDraft(idExpediente);
+    if (!draft.documentos().containsKey(idDocumento)) {
+      throw ApiException.notFound("Documento no encontrado: " + idDocumento);
+    }
+    if (comparecienteId == null) {
+      draft.comparecientes().remove(idDocumento);
+    } else {
+      draft.comparecientes().put(idDocumento, comparecienteId);
+    }
+  }
+
+  /** Id de documento → compareciente (borrador o expediente). */
+  public Map<String, UUID> comparecientesPorDocumento(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return caseDocs.comparecientesPorDocumento(official);
+    }
+    DraftExpediente draft = borradorONull(idExpediente);
+    return draft == null ? Map.of() : Map.copyOf(draft.comparecientes());
+  }
+
   /**
    * Borrador o expediente del tenant de la sesión (otro tenant → 404). {@code persistido}: true si
    * es un expediente oficial.
@@ -273,7 +323,9 @@ public class CargaDocumentoService {
     }
     DraftExpediente draft = requireDraft(idExpediente);
     return draft.documentos().values().stream()
-        .map(doc -> doc.toDto(draft.clasificaciones().get(doc.idDocumento())))
+        .map(doc -> conCompareciente(
+            doc.toDto(draft.clasificaciones().get(doc.idDocumento())),
+            draft.comparecientes().get(doc.idDocumento())))
         .toList();
   }
 
@@ -1183,6 +1235,8 @@ public class CargaDocumentoService {
     private final Map<String, DocumentoOcrResultadoDTO> ocrResultados = new ConcurrentHashMap<>();
     /** Clasificación por documento (automática o manual) hasta la promoción. */
     private final Map<String, ClasificacionBorrador> clasificaciones = new ConcurrentHashMap<>();
+    /** Documento → compareciente hasta la promoción (luego va en app.document). */
+    private final Map<String, UUID> comparecientes = new ConcurrentHashMap<>();
     private volatile boolean locked;
     private volatile PrevalidacionState prevalidacion;
     private volatile long ultimoUsoMs = System.currentTimeMillis();
@@ -1250,6 +1304,10 @@ public class CargaDocumentoService {
 
     Map<String, DocumentoOcrResultadoDTO> ocrResultados() {
       return ocrResultados;
+    }
+
+    Map<String, UUID> comparecientes() {
+      return comparecientes;
     }
 
     Map<String, ClasificacionBorrador> clasificaciones() {

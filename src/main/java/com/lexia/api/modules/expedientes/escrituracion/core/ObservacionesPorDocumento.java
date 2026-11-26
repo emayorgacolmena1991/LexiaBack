@@ -60,7 +60,10 @@ public class ObservacionesPorDocumento {
       if (resolucion == null) {
         return List.of();
       }
+      // Un código por tipo: los requisitos por persona repiten el tipo.
+      Set<String> vistos = new LinkedHashSet<>();
       return resolucion.requisitos().stream()
+          .filter(r -> vistos.add(r.tipo()))
           .map(
               r ->
                   new TipoPermitidoDTO(

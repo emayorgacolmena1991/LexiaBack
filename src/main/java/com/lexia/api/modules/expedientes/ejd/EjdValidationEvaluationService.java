@@ -279,12 +279,17 @@ public class EjdValidationEvaluationService {
       caseValidations.save(validation);
       return;
     }
+    // Tipo presente y tipo|persona presente (documento ligado a un compareciente).
     Set<String> present = new HashSet<>();
     for (LegalDocument document :
         documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
             legalCase.getId(), tenantId)) {
       if (document.getDocType() != null && !document.getDocType().isBlank()) {
-        present.add(document.getDocType().trim().toUpperCase(Locale.ROOT));
+        String tipo = document.getDocType().trim().toUpperCase(Locale.ROOT);
+        present.add(tipo);
+        if (document.getComparecienteId() != null) {
+          present.add(tipo + "|" + document.getComparecienteId());
+        }
       }
     }
     List<String> faltanEsenciales = new java.util.ArrayList<>();
@@ -292,7 +297,8 @@ public class EjdValidationEvaluationService {
     Set<String> vistos = new HashSet<>();
     for (RequisitoAplicable r : resolucion.requisitos()) {
       String codigo = r.tipo().trim().toUpperCase(Locale.ROOT);
-      if (!r.obligatorio() || present.contains(codigo) || !vistos.add(codigo + "|" + r.esencial())) {
+      String clave = r.comparecienteId() == null ? codigo : codigo + "|" + r.comparecienteId();
+      if (!r.obligatorio() || present.contains(clave) || !vistos.add(clave + "|" + r.esencial())) {
         continue;
       }
       String nombre =

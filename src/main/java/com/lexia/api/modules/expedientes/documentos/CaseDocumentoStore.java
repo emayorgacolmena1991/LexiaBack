@@ -115,7 +115,8 @@ public class CaseDocumentoStore {
               autor,
               doc.getCreatedAt(),
               doc.getObservacion(),
-              LegalDocument.TIPO_OTRO.equals(doc.getDocType()) ? doc.getDescripcionTipo() : null));
+              LegalDocument.TIPO_OTRO.equals(doc.getDocType()) ? doc.getDescripcionTipo() : null,
+              doc.getComparecienteId() == null ? null : doc.getComparecienteId().toString()));
     }
     return rows;
   }
@@ -181,6 +182,28 @@ public class CaseDocumentoStore {
         service -> service.documentoSubido(ctx.caseId(), ctx.tenantId(), original));
     return new DocumentoCargadoDTO(
         doc.getId().toString(), original, formatSize(bytes.length), doc.getDocType());
+  }
+
+  /** Liga el documento a un compareciente (null desliga). El compareciente ya se validó. */
+  @Transactional
+  public void ligarCompareciente(CaseFileContext ctx, String idDocumento, UUID comparecienteId) {
+    LegalDocument doc = requireDoc(ctx, idDocumento);
+    doc.ligarCompareciente(comparecienteId);
+    documents.save(doc);
+  }
+
+  /** Id de documento → compareciente, solo de los documentos ligados. */
+  @Transactional(readOnly = true)
+  public Map<String, UUID> comparecientesPorDocumento(CaseFileContext ctx) {
+    Map<String, UUID> out = new java.util.LinkedHashMap<>();
+    for (LegalDocument doc :
+        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+            ctx.caseId(), ctx.tenantId())) {
+      if (doc.getComparecienteId() != null) {
+        out.put(doc.getId().toString(), doc.getComparecienteId());
+      }
+    }
+    return out;
   }
 
   /** Promoción del borrador: copia la descripción de un documento OTRO. */

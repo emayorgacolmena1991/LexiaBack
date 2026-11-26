@@ -27,6 +27,17 @@ public class BorradorPromocionService {
   /** Opcional (setter): las condiciones del caso del borrador pasan al expediente. */
   private ObjectProvider<com.lexia.api.modules.expedientes.requisitos.CondicionesCasoService> condiciones;
 
+  /** Opcional (setter): los comparecientes del borrador pasan al expediente. */
+  private ObjectProvider<com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+      comparecientes;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setComparecientes(
+      ObjectProvider<com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+          comparecientes) {
+    this.comparecientes = comparecientes;
+  }
+
   @org.springframework.beans.factory.annotation.Autowired
   void setCondiciones(
       ObjectProvider<com.lexia.api.modules.expedientes.requisitos.CondicionesCasoService> condiciones) {
@@ -82,6 +93,10 @@ public class BorradorPromocionService {
     seguimiento.ifAvailable(service -> service.vincularBorrador(draft.getId().toString(), created.id()));
     if (condiciones != null) {
       condiciones.ifAvailable(
+          service -> service.moverDeBorrador(tenantId, draft.getId(), created.id()));
+    }
+    if (comparecientes != null) {
+      comparecientes.ifAvailable(
           service -> service.moverDeBorrador(tenantId, draft.getId(), created.id()));
     }
     return created.id();

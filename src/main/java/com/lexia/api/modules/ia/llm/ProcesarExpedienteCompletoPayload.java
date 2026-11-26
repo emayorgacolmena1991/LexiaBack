@@ -26,7 +26,10 @@ public record ProcesarExpedienteCompletoPayload(
         documentoId, su tipoDocumento, un resumen de 1-2 oraciones y datosClave (pares
         clave-valor: nombres, identificaciones, fechas, montos, linderos, registros). Usa solo
         datos de ese documento; no mezcles documentos ni inventes. Omite lo ilegible.
-      - datosConsolidados: comprador, vendedor e inmueble del expediente.
+      - datosConsolidados: compradores, vendedores e inmueble del expediente. compradores y
+        vendedores son listas SIN tope con TODAS las personas de cada parte (titulares, cónyuges,
+        herederos, representantes de compañías y apoderados), cada una con su rol y los id de
+        <documento> que le pertenecen (cédula, certificado de votación, nombramiento, poder).
       - dictamen: estado (APPROVED | WITH_OBSERVATIONS | REJECTED), resumen, observaciones y
         validaciones.
         Una observación es únicamente un problema que requiere acción. Lo que está correcto
@@ -56,11 +59,72 @@ public record ProcesarExpedienteCompletoPayload(
     }
   }
 
+  /**
+   * {@code compradores}/{@code vendedores}: todas las personas de cada parte (fase 4). {@code
+   * comprador}/{@code vendedor} se conservan para el consolidado guardado y los proveedores que aún
+   * devuelven una sola persona: si falta uno, se deriva del otro.
+   */
   @JsonIgnoreProperties(ignoreUnknown = true)
-  public record DatosExtraidos(Persona comprador, Persona vendedor, Inmueble inmueble) {}
+  public record DatosExtraidos(
+      Persona comprador,
+      Persona vendedor,
+      Inmueble inmueble,
+      List<Persona> compradores,
+      List<Persona> vendedores) {
 
+    @com.fasterxml.jackson.annotation.JsonCreator
+    public DatosExtraidos {
+      compradores = lista(compradores, comprador);
+      vendedores = lista(vendedores, vendedor);
+      comprador = comprador != null ? comprador : primero(compradores);
+      vendedor = vendedor != null ? vendedor : primero(vendedores);
+    }
+
+    public DatosExtraidos(Persona comprador, Persona vendedor, Inmueble inmueble) {
+      this(comprador, vendedor, inmueble, null, null);
+    }
+
+    private static List<Persona> lista(List<Persona> lista, Persona una) {
+      if (lista != null && !lista.isEmpty()) {
+        return lista.stream().filter(java.util.Objects::nonNull).toList();
+      }
+      return una == null ? List.of() : List.of(una);
+    }
+
+    private static Persona primero(List<Persona> lista) {
+      return lista.isEmpty() ? null : lista.get(0);
+    }
+  }
+
+  /**
+   * Persona del consolidado. {@code rol}: TITULAR, CONYUGE, HEREDERO, REPRESENTANTE o APODERADO;
+   * {@code fechaNacimiento} dd/MM/yyyy; {@code discapacidad} solo si la cédula lo dice;
+   * {@code documentoIds}: ids de sus documentos.
+   */
   @JsonIgnoreProperties(ignoreUnknown = true)
-  public record Persona(String nombres, String cedula, String estadoCivil) {}
+  public record Persona(
+      String nombres,
+      String cedula,
+      String estadoCivil,
+      String rol,
+      String profesion,
+      String fechaNacimiento,
+      Boolean discapacidad,
+      Boolean esPersonaJuridica,
+      Boolean compareceConApoderado,
+      List<String> documentoIds) {
+
+    @com.fasterxml.jackson.annotation.JsonCreator
+    public Persona {}
+
+    public Persona(String nombres, String cedula, String estadoCivil) {
+      this(nombres, cedula, estadoCivil, null, null, null, null, null, null, null);
+    }
+
+    public List<String> documentoIds() {
+      return documentoIds == null ? List.of() : documentoIds;
+    }
+  }
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record Inmueble(String claveCatastral, String linderos, Double avaluo) {}
