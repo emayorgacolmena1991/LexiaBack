@@ -1,0 +1,13 @@
+# Perfil puntual: sube referencias de disco a B2 y normaliza rutas absolutas.
+# Uso: LEXIA_STORAGE_PROVIDER=b2 ... --spring.profiles.active=migrar-storage --dry-run=false
+spring:
+  main:
+    web-application-type: none
+  flyway:
+    enabled: false
+
+lexia:
+  storage:
+    migracion:
+      dry-run: true
+      lote: 200
