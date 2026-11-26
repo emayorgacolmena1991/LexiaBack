@@ -35,6 +35,10 @@ import com.lexia.api.modules.expedientes.reglas.RuleDef;
 import com.lexia.api.modules.expedientes.reglas.RuleDefRepository;
 import com.lexia.api.modules.expedientes.proceso.ValidationDef;
 import com.lexia.api.modules.expedientes.proceso.ValidationDefRepository;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService.RequisitoAplicable;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService.Resolucion;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -61,6 +65,7 @@ public class EjdValidationEvaluationService {
   private final WritingFileRepository writingFiles;
   private final TitleStudyRepository titleStudies;
   private final TitleObservationRepository titleObservations;
+  private final RequisitosService requisitosService;
 
   public EjdValidationEvaluationService(
       ValidationDefRepository validationDefs,
@@ -76,7 +81,8 @@ public class EjdValidationEvaluationService {
       LexiaRulesEngine rulesEngine,
       WritingFileRepository writingFiles,
       TitleStudyRepository titleStudies,
-      TitleObservationRepository titleObservations) {
+      TitleObservationRepository titleObservations,
+      RequisitosService requisitos) {
     this.validationDefs = validationDefs;
     this.ruleDefs = ruleDefs;
     this.caseValidations = caseValidations;
@@ -91,6 +97,7 @@ public class EjdValidationEvaluationService {
     this.writingFiles = writingFiles;
     this.titleStudies = titleStudies;
     this.titleObservations = titleObservations;
+    this.requisitosService = requisitos;
   }
 
   @Transactional
@@ -193,6 +200,10 @@ public class EjdValidationEvaluationService {
     }
 
     boolean fisico = IngestionMode.from(legalCase.getIngestionMode()).isFisicoEscaneado();
+    if (!fisico && legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
+      evaluateProductPresence(legalCase, validation, rule);
+      return;
+    }
     List<String> required = resolveRequiredDocumentCodes(legalCase);
     String scopeLabel =
         legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()
@@ -248,6 +259,88 @@ public class EjdValidationEvaluationService {
     caseValidations.save(validation);
   }
 
+  /**
+   * Producto BIESS: misma resolución que wizard e ingesta (producto + cantón + condiciones
+   * confirmadas). Solo los esenciales obligatorios ausentes dan FAIL; los demás obligatorios
+   * (cantonales, condicionales) y el expediente sin cantón dan aviso (OBSERVATION, no bloquea).
+   */
+  private void evaluateProductPresence(LegalCase legalCase, CaseValidation validation, RuleDef rule) {
+    UUID tenantId = legalCase.getTenantId();
+    Resolucion resolucion =
+        requisitosService.resolverExpediente(
+            tenantId, legalCase.getId(), legalCase.getProductCode(), cantonDe(legalCase));
+    if (resolucion.requisitos().isEmpty()) {
+      validation.applyEvaluation(
+          "OBSERVATION",
+          "No hay documentos requeridos configurados para "
+              + legalCase.getProductCode()
+              + "; revise la parametrización.",
+          "v" + rule.getVersion());
+      caseValidations.save(validation);
+      return;
+    }
+    Set<String> present = new HashSet<>();
+    for (LegalDocument document :
+        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+            legalCase.getId(), tenantId)) {
+      if (document.getDocType() != null && !document.getDocType().isBlank()) {
+        present.add(document.getDocType().trim().toUpperCase(Locale.ROOT));
+      }
+    }
+    List<String> faltanEsenciales = new java.util.ArrayList<>();
+    List<String> faltanOtros = new java.util.ArrayList<>();
+    Set<String> vistos = new HashSet<>();
+    for (RequisitoAplicable r : resolucion.requisitos()) {
+      String codigo = r.tipo().trim().toUpperCase(Locale.ROOT);
+      if (!r.obligatorio() || present.contains(codigo) || !vistos.add(codigo + "|" + r.esencial())) {
+        continue;
+      }
+      String nombre =
+          r.descripcion() != null && !r.descripcion().isBlank()
+              ? r.descripcion()
+              : LexiaRulesEngine.nombreLegible(codigo);
+      (r.esencial() ? faltanEsenciales : faltanOtros).add(nombre);
+    }
+    String avisos =
+        resolucion.avisos().isEmpty() ? "" : " " + String.join(" ", resolucion.avisos());
+    if (!faltanEsenciales.isEmpty()) {
+      validation.applyEvaluation(
+          "FAIL",
+          "Faltan documentos esenciales: "
+              + String.join(", ", faltanEsenciales)
+              + "."
+              + (faltanOtros.isEmpty() ? "" : " Además faltan: " + String.join(", ", faltanOtros) + ".")
+              + avisos,
+          "v" + rule.getVersion());
+    } else if (!faltanOtros.isEmpty() || !avisos.isEmpty()) {
+      validation.applyEvaluation(
+          "OBSERVATION",
+          "Están los documentos esenciales."
+              + (faltanOtros.isEmpty() ? "" : " Faltan (no bloquea): " + String.join(", ", faltanOtros) + ".")
+              + avisos,
+          "v" + rule.getVersion());
+    } else {
+      validation.applyEvaluation(
+          "PASS",
+          "Están cargados los " + resolucion.requisitos().stream().filter(RequisitoAplicable::obligatorio).count()
+              + " documentos requeridos.",
+          "v" + rule.getVersion());
+    }
+    caseValidations.save(validation);
+  }
+
+  /** Cantón del expediente (writing_file); null si no lo tiene: no se asume Guayaquil. */
+  private String cantonDe(LegalCase legalCase) {
+    return writingFiles
+        .findByCaseIdAndTenantIdAndDeletedAtIsNull(legalCase.getId(), legalCase.getTenantId())
+        .map(
+            file ->
+                file.getCanton() != null && !file.getCanton().isBlank()
+                    ? file.getCanton()
+                    : file.getMunicipality())
+        .orElse(null);
+  }
+
   /** Descripción del requisito del producto; si no existe, el código en texto legible. */
   private List<String> nombresDocumento(LegalCase legalCase, List<String> codigos) {
     Map<String, DocumentRequirement> requisitos = requisitosProducto(legalCase);
@@ -282,22 +375,7 @@ public class EjdValidationEvaluationService {
       return List.of(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
     }
     UUID tenantId = legalCase.getTenantId();
-    if (legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
-      String product = legalCase.getProductCode().trim().toUpperCase(Locale.ROOT);
-      List<String> fromProduct =
-          documentRequirements
-              .findByTenantIdAndProductCodeOrderBySortOrderAsc(tenantId, product)
-              .stream()
-              .filter(DocumentRequirement::isMandatory)
-              .filter(r -> "ALL".equalsIgnoreCase(r.getCanton()))
-              .map(DocumentRequirement::getDocumentTypeCode)
-              .map(c -> c.trim().toUpperCase(Locale.ROOT))
-              .distinct()
-              .toList();
-      if (!fromProduct.isEmpty()) {
-        return fromProduct;
-      }
-    }
+    // Con producto BIESS la presencia la evalúa evaluateProductPresence (resolución única).
 
     String operation = legalCase.getOperationTypeCode();
     if (operation == null || operation.isBlank()) {

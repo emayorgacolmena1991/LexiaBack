@@ -40,6 +40,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
 
 /**
  * Carga y tipificación (paso 2). Al iniciar procesamiento dispara Azure→Gemini vía {@link
@@ -160,18 +161,51 @@ public class CargaDocumentoService {
     return new BorradorResponse(id, idActo, "BORRADOR", productCode, ingestionMode.name());
   }
 
+  /**
+   * Tipos que se pueden asignar a un documento (clasificación, selector, PATCH): el catálogo
+   * completo de escrituración del tenant más los requisitos del producto, no solo estos. OTRO no va
+   * en la lista (siempre se acepta, con descripción).
+   */
   public List<TipoPermitidoDTO> tiposPermitidos(String idExpediente) {
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
     if (official != null) {
       return tiposDe(
-          official.productCode(), official.canton(), official.ingestionMode(), null);
+          official.tenantId(), official.productCode(), official.canton(), official.ingestionMode(), null);
     }
     DraftExpediente draft = requireDraft(idExpediente);
-    return tiposDe(draft.productCode(), draft.canton(), draft.ingestionMode(), draft.idActo());
+    return tiposDe(
+        draft.tenantId(), draft.productCode(), draft.canton(), draft.ingestionMode(), draft.idActo());
+  }
+
+  /**
+   * Requisitos del borrador o expediente (producto + cantón + condiciones confirmadas): la misma
+   * resolución para wizard, ficha, IA, EJD.V1 e ingesta.
+   */
+  public RequisitosService.Resolucion requisitosAplicables(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return productos.resolverRequisitos(
+          official.tenantId(), official.caseId(), official.productCode(), official.canton());
+    }
+    DraftExpediente draft = requireDraft(idExpediente);
+    UUID tenant = draft.tenantId() != null ? draft.tenantId() : AuthContext.require().tenantId();
+    return productos.resolverRequisitos(tenant, uuidONull(draft.id()), draft.productCode(), draft.canton());
+  }
+
+  private static UUID uuidONull(String id) {
+    try {
+      return id == null ? null : UUID.fromString(id.trim());
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
   }
 
   private List<TipoPermitidoDTO> tiposDe(
-      String productCode, String canton, IngestionMode ingestionMode, String idActo) {
+      UUID tenantId,
+      String productCode,
+      String canton,
+      IngestionMode ingestionMode,
+      String idActo) {
     if (ingestionMode.isFisicoEscaneado()) {
       return List.of(
           new TipoPermitidoDTO(
@@ -180,6 +214,14 @@ public class CargaDocumentoService {
     }
     if (StringUtils.hasText(productCode)) {
       Map<String, TipoPermitidoDTO> byCode = new LinkedHashMap<>();
+      UUID tenant = tenantId;
+      if (tenant == null && AuthContext.get() != null) {
+        tenant = AuthContext.get().tenantId();
+      }
+      List<RequisitosService.TipoDocumental> catalogo = productos.catalogoTipos(tenant);
+      for (RequisitosService.TipoDocumental tipo : catalogo == null ? List.<RequisitosService.TipoDocumental>of() : catalogo) {
+        byCode.putIfAbsent(tipo.codigo(), new TipoPermitidoDTO(tipo.codigo(), tipo.nombre()));
+      }
       for (DocumentoRequisitoItem item : productos.detalle(productCode, canton).requisitos()) {
         String code = item.documentTypeCode();
         if (!StringUtils.hasText(code) || byCode.containsKey(code)) {
@@ -527,7 +569,9 @@ public class CargaDocumentoService {
     if (!draft.documentos().containsKey(p.fileId())) {
       throw ApiException.notFound("Documento no encontrado: " + p.fileId());
     }
-    StoredDoc replaced = p.candidato();
+    StoredDoc previo = draft.documentos().get(p.fileId());
+    StoredDoc replaced =
+        p.candidato().withTipo(p.tipoFinal(), previo == null ? null : previo.descripcion());
     draft.documentos().put(p.fileId(), replaced);
     draft.ocrResultados().remove(p.fileId());
     if (!p.escaneado() && !java.util.Objects.equals(p.tipoFinal(), p.tipoActual())) {
@@ -580,6 +624,10 @@ public class CargaDocumentoService {
       return Optional.empty();
     }
     String valor = tipo.trim();
+    if (LegalDocument.TIPO_OTRO.equals(valor)) {
+      // OTRO necesita descripción: solo se asigna por el PATCH de tipo, nunca por este camino.
+      return Optional.empty();
+    }
     List<TipoPermitidoDTO> catalogo = tiposPermitidos(idExpediente);
     if (catalogo.isEmpty()) {
       return Optional.of(valor);
@@ -613,11 +661,12 @@ public class CargaDocumentoService {
 
   public TipoActualizadoDTO actualizarTipo(
       String idExpediente, String idDocumento, ActualizarTipoRequest body) {
+    String codigo = body.codigoTipoDocumento().trim();
+    String descripcion = LegalDocument.descripcionOtro(codigo, body.descripcion());
     CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
     if (official != null) {
-      String codigo = body.codigoTipoDocumento().trim();
       exigirTipoPermitido(idExpediente, codigo);
-      return caseDocs.actualizarTipo(official, idDocumento, codigo);
+      return caseDocs.actualizarTipo(official, idDocumento, codigo, descripcion);
     }
     DraftExpediente draft = requireDraft(idExpediente);
     if (draft.locked()) {
@@ -627,9 +676,8 @@ public class CargaDocumentoService {
     if (doc == null) {
       throw ApiException.notFound("Documento no encontrado: " + idDocumento);
     }
-    String codigo = body.codigoTipoDocumento().trim();
     exigirTipoPermitido(idExpediente, codigo);
-    StoredDoc updated = doc.withTipo(codigo);
+    StoredDoc updated = doc.withTipo(codigo, descripcion);
     draft.documentos().put(idDocumento, updated);
     draft.marcarManual(idDocumento);
     return new TipoActualizadoDTO(idDocumento, codigo, "CLASIFICADO");
@@ -641,14 +689,69 @@ public class CargaDocumentoService {
    * requisito opcional de productos con compraventa (V104); si no está en el catálogo, se rechaza.
    */
   private void exigirTipoPermitido(String idExpediente, String codigo) {
+    // OTRO vale en todo producto (carga libre); su descripción se valida aparte.
+    if (LegalDocument.TIPO_OTRO.equals(codigo)) {
+      return;
+    }
+    if (LegalDocument.TIPO_MINUTA_TERCERO.equals(codigo)) {
+      // Solo en productos que la piden (vendedor compañía): el catálogo completo no basta.
+      exigirMinutaTerceroDelProducto(idExpediente);
+      return;
+    }
     Set<String> permitidos =
         tiposPermitidos(idExpediente).stream()
             .map(TipoPermitidoDTO::codigo)
             .collect(java.util.stream.Collectors.toSet());
-    boolean libre = permitidos.isEmpty() && !LegalDocument.TIPO_MINUTA_TERCERO.equals(codigo);
+    boolean libre = permitidos.isEmpty();
     if (!libre && !permitidos.contains(codigo)) {
       throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
     }
+  }
+
+  private void exigirMinutaTerceroDelProducto(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    String producto;
+    String canton;
+    if (official != null) {
+      producto = official.productCode();
+      canton = official.canton();
+    } else {
+      DraftExpediente draft = requireDraft(idExpediente);
+      producto = draft.productCode();
+      canton = draft.canton();
+    }
+    boolean admite =
+        StringUtils.hasText(producto)
+            && productos.detalle(producto, canton).requisitos().stream()
+                .anyMatch(r -> LegalDocument.TIPO_MINUTA_TERCERO.equals(r.documentTypeCode()));
+    if (!admite) {
+      throw ApiException.badRequest("Tipo documental no permitido para este expediente.");
+    }
+  }
+
+  /**
+   * Id de documento → descripción de los documentos OTRO (expediente o borrador del tenant). La IA
+   * los recibe con esa descripción como tipo. Vacío si el id no es del tenant.
+   */
+  public Map<String, String> descripcionesOtro(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return caseDocs.descripcionesOtro(official);
+    }
+    DraftExpediente draft = borradorONull(idExpediente);
+    if (draft == null) {
+      return Map.of();
+    }
+    Map<String, String> out = new LinkedHashMap<>();
+    synchronized (draft.documentos()) {
+      for (StoredDoc doc : draft.documentos().values()) {
+        if (LegalDocument.TIPO_OTRO.equals(doc.codigoTipoDocumento())
+            && StringUtils.hasText(doc.descripcion())) {
+          out.put(doc.idDocumento(), doc.descripcion());
+        }
+      }
+    }
+    return out;
   }
 
   /** Lectura del contenido por el bufete: solo se auditan los documentos de soporte. */
@@ -1266,11 +1369,36 @@ public class CargaDocumentoService {
       String tamano,
       String mimeType,
       byte[] bytes,
-      String codigoTipoDocumento) {
+      String codigoTipoDocumento,
+      String descripcion) {
+
+    /** {@code descripcion}: solo para OTRO (la escribe el usuario); pasa al documento al promover. */
+    public StoredDoc(
+        String idDocumento,
+        String nombreOriginal,
+        long sizeBytes,
+        String tamano,
+        String mimeType,
+        byte[] bytes,
+        String codigoTipoDocumento) {
+      this(
+          idDocumento, nombreOriginal, sizeBytes, tamano, mimeType, bytes, codigoTipoDocumento, null);
+    }
 
     StoredDoc withTipo(String codigo) {
+      return withTipo(codigo, LegalDocument.TIPO_OTRO.equals(codigo) ? descripcion : null);
+    }
+
+    StoredDoc withTipo(String codigo, String descripcionOtro) {
       return new StoredDoc(
-          idDocumento, nombreOriginal, sizeBytes, tamano, mimeType, bytes, codigo);
+          idDocumento,
+          nombreOriginal,
+          sizeBytes,
+          tamano,
+          mimeType,
+          bytes,
+          codigo,
+          LegalDocument.TIPO_OTRO.equals(codigo) ? descripcionOtro : null);
     }
 
     DocumentoCargadoDTO toDto() {
@@ -1285,7 +1413,11 @@ public class CargaDocumentoService {
           codigoTipoDocumento,
           clasificacion == null ? null : clasificacion.tipoSugerido(),
           clasificacion == null ? null : clasificacion.estado(),
-          clasificacion == null ? null : clasificacion.origen());
+          clasificacion == null ? null : clasificacion.origen(),
+          null,
+          null,
+          null,
+          descripcion);
     }
   }
 

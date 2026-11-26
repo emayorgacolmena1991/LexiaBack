@@ -114,9 +114,25 @@ public class CaseDocumentoStore {
               doc.getClasificacionOrigen(),
               autor,
               doc.getCreatedAt(),
-              doc.getObservacion()));
+              doc.getObservacion(),
+              LegalDocument.TIPO_OTRO.equals(doc.getDocType()) ? doc.getDescripcionTipo() : null));
     }
     return rows;
+  }
+
+  /** Id de documento → descripción, solo de los documentos OTRO del expediente (para la IA). */
+  @Transactional(readOnly = true)
+  public Map<String, String> descripcionesOtro(CaseFileContext ctx) {
+    Map<String, String> out = new java.util.LinkedHashMap<>();
+    for (LegalDocument doc :
+        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+            ctx.caseId(), ctx.tenantId())) {
+      if (LegalDocument.TIPO_OTRO.equals(doc.getDocType())
+          && StringUtils.hasText(doc.getDescripcionTipo())) {
+        out.put(doc.getId().toString(), doc.getDescripcionTipo());
+      }
+    }
+    return out;
   }
 
   @Transactional
@@ -167,6 +183,17 @@ public class CaseDocumentoStore {
         doc.getId().toString(), original, formatSize(bytes.length), doc.getDocType());
   }
 
+  /** Promoción del borrador: copia la descripción de un documento OTRO. */
+  @Transactional
+  public void describirOtro(CaseFileContext ctx, String idDocumento, String descripcion) {
+    if (!StringUtils.hasText(descripcion)) {
+      return;
+    }
+    LegalDocument doc = requireDoc(ctx, idDocumento);
+    doc.describirOtro(descripcion);
+    documents.save(doc);
+  }
+
   /** Auditoría de lectura del bufete; la de la notaría vive en la remisión. */
   public void registrarVista(CaseFileContext ctx, String idDocumento) {
     seguimiento.ifAvailable(
@@ -175,11 +202,18 @@ public class CaseDocumentoStore {
 
   @Transactional
   public TipoActualizadoDTO actualizarTipo(CaseFileContext ctx, String idDocumento, String codigo) {
+    return actualizarTipo(ctx, idDocumento, codigo, null);
+  }
+
+  /** {@code descripcionOtro}: ya validada; solo se guarda si el tipo es OTRO. */
+  @Transactional
+  public TipoActualizadoDTO actualizarTipo(
+      CaseFileContext ctx, String idDocumento, String codigo, String descripcionOtro) {
     LegalDocument doc = requireDoc(ctx, idDocumento);
     if (ctx.ingestionMode().isFisicoEscaneado()) {
       doc.classify(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
     } else {
-      doc.classify(codigo);
+      doc.classify(codigo, descripcionOtro);
     }
     documents.save(doc);
     tipoEnFilaOcr(ctx, doc);

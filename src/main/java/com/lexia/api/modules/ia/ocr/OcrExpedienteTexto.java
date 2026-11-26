@@ -121,6 +121,39 @@ public final class OcrExpedienteTexto {
     return out;
   }
 
+  /** Prefijo del tipo que recibe la IA para un documento OTRO: {@code OTRO: <descripción>}. */
+  public static final String PREFIJO_OTRO = LegalDocument.TIPO_OTRO + ": ";
+
+  /**
+   * Los documentos OTRO van a la IA con su descripción como tipo ({@code tipo="OTRO: …"}). Se
+   * reescriben solo las cabeceras cuyo id está en {@code descripcionPorId}; el texto no se toca.
+   */
+  public static String conDescripcionesOtro(String marcado, java.util.Map<String, String> descripcionPorId) {
+    if (!StringUtils.hasText(marcado) || descripcionPorId == null || descripcionPorId.isEmpty()) {
+      return marcado;
+    }
+    Matcher m = CABECERA.matcher(marcado);
+    StringBuilder sb = new StringBuilder();
+    while (m.find()) {
+      String attrs = m.group(1);
+      String id = atributo(attrs, "id");
+      String descripcion = id == null ? null : descripcionPorId.get(id);
+      String cabecera = m.group();
+      if (StringUtils.hasText(descripcion)) {
+        StringBuilder nueva = new StringBuilder("<documento id=\"").append(xml(id)).append("\"");
+        nueva.append(" tipo=\"").append(xml(PREFIJO_OTRO + descripcion.trim())).append("\"");
+        String nombre = atributo(attrs, "nombre");
+        if (StringUtils.hasText(nombre)) {
+          nueva.append(" nombre=\"").append(xml(nombre)).append("\"");
+        }
+        cabecera = nueva.append(">").toString();
+      }
+      m.appendReplacement(sb, Matcher.quoteReplacement(cabecera));
+    }
+    m.appendTail(sb);
+    return sb.toString();
+  }
+
   private static final Pattern CABECERA = Pattern.compile("<documento\\b([^>]*)>");
 
   private static String atributo(String attrs, String nombre) {

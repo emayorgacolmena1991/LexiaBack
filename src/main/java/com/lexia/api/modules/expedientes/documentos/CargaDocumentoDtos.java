@@ -41,6 +41,19 @@ public final class CargaDocumentoDtos {
   public record TipoPermitidoDTO(String codigo, String nombre) {}
 
   /**
+   * GET /{id}/requisitos: «Sugeridos para este caso» (producto + cantón + condiciones confirmadas).
+   * {@code avisos}: p. ej. expediente sin cantón.
+   */
+  public record RequisitosExpedienteDTO(
+      String productCode,
+      String canton,
+      boolean cantonPropio,
+      List<String> condiciones,
+      List<com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.DocumentoRequisitoItem>
+          requisitos,
+      List<String> avisos) {}
+
+  /**
    * Documento cargado (borrador o expediente). {@code tipoSugerido}/{@code clasificacionEstado}/
    * {@code clasificacionOrigen}: resultado del clasificador automático; null si no corrió.
    */
@@ -54,7 +67,34 @@ public final class CargaDocumentoDtos {
       String clasificacionOrigen,
       String subidoPor,
       java.time.Instant subidoEn,
-      String observacion) {
+      String observacion,
+      /** Descripción que escribió el usuario para un documento OTRO; null en los demás tipos. */
+      String descripcionTipo) {
+
+    public DocumentoCargadoDTO(
+        String idDocumento,
+        String nombreOriginal,
+        String tamano,
+        String codigoTipoDocumento,
+        String tipoSugerido,
+        String clasificacionEstado,
+        String clasificacionOrigen,
+        String subidoPor,
+        java.time.Instant subidoEn,
+        String observacion) {
+      this(
+          idDocumento,
+          nombreOriginal,
+          tamano,
+          codigoTipoDocumento,
+          tipoSugerido,
+          clasificacionEstado,
+          clasificacionOrigen,
+          subidoPor,
+          subidoEn,
+          observacion,
+          null);
+    }
 
     public DocumentoCargadoDTO(
         String idDocumento, String nombreOriginal, String tamano, String codigoTipoDocumento) {
@@ -106,7 +146,14 @@ public final class CargaDocumentoDtos {
     }
   }
 
-  public record ActualizarTipoRequest(@NotBlank @Size(max = 64) String codigoTipoDocumento) {}
+  /** {@code descripcion}: obligatoria solo para OTRO (máx. 120); se ignora en otros tipos. */
+  public record ActualizarTipoRequest(
+      @NotBlank @Size(max = 64) String codigoTipoDocumento, @Size(max = 120) String descripcion) {
+
+    public ActualizarTipoRequest(String codigoTipoDocumento) {
+      this(codigoTipoDocumento, null);
+    }
+  }
 
   public record TipoActualizadoDTO(String idDocumento, String codigoTipoDocumento, String estado) {}
 

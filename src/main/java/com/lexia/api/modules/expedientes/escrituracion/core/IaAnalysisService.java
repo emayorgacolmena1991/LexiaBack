@@ -174,6 +174,10 @@ public class IaAnalysisService {
         force
             ? ocrParaReanalisis(expedienteId, persistido, request)
             : loadOcrMarcado(expedienteId, persistido, request);
+    // Documentos OTRO: la IA los recibe con la descripción del usuario como tipo.
+    ocrText =
+        OcrExpedienteTexto.conDescripcionesOtro(
+            ocrText, observacionesPorDocumento.descripcionesOtro(expedienteId.toString()));
     List<DocOcr> reemplazados =
         documentosReemplazados(ocrText, request == null ? List.of() : request.documentosReemplazados());
     if (!pendientesPrevias.isEmpty() || !reemplazados.isEmpty()) {
@@ -736,16 +740,17 @@ public class IaAnalysisService {
     return StringUtils.hasText(value) ? value.trim() : null;
   }
 
+  /** Sin cantón: null (ya no se asume Guayaquil); el prompt y los requisitos lo avisan. */
   private static String cantonOf(ExpedienteBorrador borrador) {
     if (borrador != null && StringUtils.hasText(borrador.getCanton())) {
       return borrador.getCanton().trim();
     }
-    return "GUAYAQUIL";
+    return null;
   }
 
   private static String resolveCanton(WritingFile writingFile) {
     if (writingFile == null) {
-      return "GUAYAQUIL";
+      return null;
     }
     if (StringUtils.hasText(writingFile.getCanton())) {
       return writingFile.getCanton().trim();
@@ -753,6 +758,6 @@ public class IaAnalysisService {
     if (StringUtils.hasText(writingFile.getMunicipality())) {
       return writingFile.getMunicipality().trim();
     }
-    return "GUAYAQUIL";
+    return null;
   }
 }

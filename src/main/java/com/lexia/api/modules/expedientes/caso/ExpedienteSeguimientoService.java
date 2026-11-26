@@ -95,6 +95,8 @@ public class ExpedienteSeguimientoService {
         // Sin clasificación registrada el tipo lo puso el usuario: MANUAL.
         caseDocs.actualizarTipo(ctx, saved.idDocumento(), doc.codigoTipoDocumento());
       }
+      // La descripción de un documento OTRO viaja con él.
+      caseDocs.describirOtro(ctx, saved.idDocumento(), doc.descripcion());
       ids.put(doc.idDocumento(), saved.idDocumento());
     }
     for (DocumentoOcrResultadoDTO row : ocrDelBorrador(draftId)) {

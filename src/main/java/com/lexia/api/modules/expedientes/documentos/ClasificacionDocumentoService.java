@@ -28,7 +28,7 @@ import org.springframework.util.StringUtils;
 public class ClasificacionDocumentoService {
 
   private static final Logger LOG = LoggerFactory.getLogger(ClasificacionDocumentoService.class);
-  public static final String OTRO = "OTRO";
+  public static final String OTRO = LegalDocument.TIPO_OTRO;
   static final int MAX_CARACTERES = 4000;
 
   private final CaseDocumentoStore caseDocs;

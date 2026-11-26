@@ -8,4 +8,10 @@ public interface DocumentRequirementRepository extends JpaRepository<DocumentReq
 
   List<DocumentRequirement> findByTenantIdAndProductCodeOrderBySortOrderAsc(
       UUID tenantId, String productCode);
+
+  /** Catálogo de tipos de escrituración del tenant: todo tipo que aparece en la matriz. */
+  @org.springframework.data.jpa.repository.Query(
+      "select distinct r.documentTypeCode from DocumentRequirement r where r.tenantId = :tenantId")
+  List<String> tiposDelTenant(
+      @org.springframework.data.repository.query.Param("tenantId") UUID tenantId);
 }

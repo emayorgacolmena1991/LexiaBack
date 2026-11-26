@@ -20,6 +20,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 /**
  * Observaciones abiertas del estudio agrupadas por documento del expediente (pantalla E3).
@@ -48,17 +49,40 @@ public class ObservacionesPorDocumento {
   }
 
   /**
-   * Tipos requeridos del producto (catálogo de {@code tiposPermitidos}): se pasan a la IA para
+   * Requisitos aplicables del expediente (RequisitosService): se pasan a la IA para
    * {@code tipoDocumentoFaltante} y validan lo que devuelve. Vacío si el expediente no existe.
    */
   public List<TipoPermitidoDTO> tiposDelProducto(String idExpediente) {
     try {
-      return carga.tiposPermitidos(idExpediente);
+      // Requisitos aplicables (producto + cantón + condiciones confirmadas), no el catálogo
+      // completo: es lo que puede faltar. OTRO nunca está.
+      var resolucion = carga.requisitosAplicables(idExpediente);
+      if (resolucion == null) {
+        return List.of();
+      }
+      return resolucion.requisitos().stream()
+          .map(
+              r ->
+                  new TipoPermitidoDTO(
+                      r.tipo(), StringUtils.hasText(r.descripcion()) ? r.descripcion() : r.tipo()))
+          .toList();
     } catch (ApiException e) {
       if (e.getStatus() != HttpStatus.NOT_FOUND) {
         throw e;
       }
       return List.of();
+    }
+  }
+
+  /** Id → descripción de los documentos OTRO (van como tipo en {@code <documento>}). */
+  public Map<String, String> descripcionesOtro(String idExpediente) {
+    try {
+      return carga.descripcionesOtro(idExpediente);
+    } catch (ApiException e) {
+      if (e.getStatus() != HttpStatus.NOT_FOUND) {
+        throw e;
+      }
+      return Map.of();
     }
   }
 

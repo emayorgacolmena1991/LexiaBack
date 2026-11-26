@@ -10,17 +10,15 @@ import com.lexia.api.modules.identity.Catalog;
 import com.lexia.api.modules.identity.CatalogItem;
 import com.lexia.api.modules.identity.CatalogItemRepository;
 import com.lexia.api.modules.identity.CatalogRepository;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.lexia.api.modules.expedientes.documentos.DocumentRequirement;
 import com.lexia.api.modules.expedientes.documentos.DocumentRequirementRepository;
 import com.lexia.api.modules.expedientes.proceso.ProductTemplateRepository;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService.Resolucion;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService.TipoDocumental;
 
 @Service
 public class ProductoBiessService {
@@ -31,16 +29,19 @@ public class ProductoBiessService {
   private final CatalogItemRepository items;
   private final DocumentRequirementRepository requirements;
   private final ProductTemplateRepository templates;
+  private final RequisitosService requisitos;
 
   public ProductoBiessService(
       CatalogRepository catalogs,
       CatalogItemRepository items,
       DocumentRequirementRepository requirements,
-      ProductTemplateRepository templates) {
+      ProductTemplateRepository templates,
+      RequisitosService requisitos) {
     this.catalogs = catalogs;
     this.items = items;
     this.requirements = requirements;
     this.templates = templates;
+    this.requisitos = requisitos;
   }
 
   @Transactional(readOnly = true)
@@ -66,23 +67,13 @@ public class ProductoBiessService {
         .toList();
   }
 
+  /** Requisitos generales del producto y cantón (sin condiciones del caso): paso 1 del wizard. */
   @Transactional(readOnly = true)
   public ProductoDetalle detalle(String productCode, String canton) {
     UUID tenantId = AuthContext.require().tenantId();
     CatalogItem producto = requireProducto(tenantId, productCode);
-    String cantonNorm = normalizeCanton(canton);
     List<DocumentoRequisitoItem> docs =
-        resolveRequirements(tenantId, producto.getCode(), cantonNorm).stream()
-            .map(
-                r ->
-                    new DocumentoRequisitoItem(
-                        r.getDocumentTypeCode(),
-                        r.getDescription(),
-                        r.isMandatory(),
-                        r.getMaxValidityDays(),
-                        r.getCanton(),
-                        r.getSortOrder()))
-            .toList();
+        aItems(requisitos.resolver(tenantId, producto.getCode(), canton, List.of()));
     List<PlantillaItem> plantillas =
         templates
             .findByTenantIdAndProductCodeAndActiveTrueOrderBySortOrderAsc(
@@ -99,27 +90,40 @@ public class ProductoBiessService {
     return new ProductoDetalle(producto.getCode(), producto.getLabel(), docs, plantillas);
   }
 
+  /**
+   * Requisitos del borrador o expediente con sus condiciones confirmadas. Entrada única para
+   * carga, IA, ingesta, wizard y ficha ({@link RequisitosService}).
+   */
   @Transactional(readOnly = true)
-  public List<DocumentRequirement> resolveRequirements(
-      UUID tenantId, String productCode, String canton) {
-    String cantonNorm = normalizeCanton(canton);
-    Map<String, DocumentRequirement> byDoc = new LinkedHashMap<>();
-    for (DocumentRequirement row :
-        requirements.findByTenantIdAndProductCodeOrderBySortOrderAsc(tenantId, productCode)) {
-      if ("ALL".equalsIgnoreCase(row.getCanton())) {
-        byDoc.putIfAbsent(row.getDocumentTypeCode(), row);
-      }
+  public Resolucion resolverRequisitos(
+      UUID tenantId, UUID expedienteId, String productCode, String canton) {
+    return requisitos.resolverExpediente(tenantId, expedienteId, productCode, canton);
+  }
+
+  /** Catálogo completo de tipos de escrituración del tenant (sin OTRO). */
+  @Transactional(readOnly = true)
+  public List<TipoDocumental> catalogoTipos(UUID tenantId) {
+    return requisitos.catalogoTipos(tenantId);
+  }
+
+  public static List<DocumentoRequisitoItem> aItems(Resolucion resolucion) {
+    if (resolucion == null) {
+      return List.of();
     }
-    if (cantonNorm != null && !"ALL".equals(cantonNorm)) {
-      for (DocumentRequirement row :
-          requirements.findByTenantIdAndProductCodeOrderBySortOrderAsc(tenantId, productCode)) {
-        if (cantonNorm.equalsIgnoreCase(row.getCanton())) {
-          byDoc.put(row.getDocumentTypeCode(), row);
-        }
-      }
-    }
-    return byDoc.values().stream()
-        .sorted(Comparator.comparingInt(DocumentRequirement::getSortOrder))
+    return resolucion.requisitos().stream()
+        .map(
+            r ->
+                new DocumentoRequisitoItem(
+                    r.tipo(),
+                    r.descripcion(),
+                    r.obligatorio(),
+                    r.maxValidityDays(),
+                    r.canton(),
+                    r.sortOrder(),
+                    r.esencial(),
+                    r.porPersona(),
+                    r.rolPersona(),
+                    r.condicion()))
         .toList();
   }
 
@@ -159,15 +163,6 @@ public class ProductoBiessService {
   }
 
   public static String normalizeCanton(String canton) {
-    if (canton == null || canton.isBlank()) {
-      return "ALL";
-    }
-    return canton.trim().toUpperCase(Locale.ROOT)
-        .replace('Á', 'A')
-        .replace('É', 'E')
-        .replace('Í', 'I')
-        .replace('Ó', 'O')
-        .replace('Ú', 'U')
-        .replace('Ñ', 'N');
+    return RequisitosService.normalizarCanton(canton);
   }
 }

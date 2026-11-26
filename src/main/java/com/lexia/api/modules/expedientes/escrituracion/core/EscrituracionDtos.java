@@ -15,13 +15,33 @@ public final class EscrituracionDtos {
 
   public record ProductoItem(String code, String label, int sortOrder, int requisitosCount) {}
 
+  /**
+   * Requisito resuelto (producto + cantón + condiciones). {@code esencial}: bloquea el avance si
+   * falta; {@code porPersona}/{@code rolPersona}: uno por compareciente; {@code condicion}: null si
+   * aplica siempre.
+   */
   public record DocumentoRequisitoItem(
       String documentTypeCode,
       String description,
       boolean mandatory,
       int maxValidityDays,
       String canton,
-      int sortOrder) {}
+      int sortOrder,
+      boolean esencial,
+      boolean porPersona,
+      String rolPersona,
+      String condicion) {
+
+    public DocumentoRequisitoItem(
+        String documentTypeCode,
+        String description,
+        boolean mandatory,
+        int maxValidityDays,
+        String canton,
+        int sortOrder) {
+      this(documentTypeCode, description, mandatory, maxValidityDays, canton, sortOrder, false, false, null, null);
+    }
+  }
 
   public record PlantillaItem(
       String templateKind, String label, boolean companySuppliesCv, String storageKey) {}

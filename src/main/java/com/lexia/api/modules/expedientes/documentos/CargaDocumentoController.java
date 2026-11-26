@@ -9,6 +9,9 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Documento
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.IniciarProcesamientoResponse;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.PrevalidacionDTO;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.RequisitosExpedienteDTO;
+import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
@@ -77,6 +80,20 @@ public class CargaDocumentoController {
   @GetMapping("/{idExpediente}/tipos-permitidos")
   public List<TipoPermitidoDTO> tiposPermitidos(@PathVariable String idExpediente) {
     return cargaDocumentoService.tiposPermitidos(idExpediente);
+  }
+
+  /** Requisitos sugeridos del borrador o expediente; id de otro tenant → 404. */
+  @GetMapping("/{idExpediente}/requisitos")
+  public RequisitosExpedienteDTO requisitos(@PathVariable String idExpediente) {
+    requirePermission(PERMISO_LECTURA);
+    RequisitosService.Resolucion r = cargaDocumentoService.requisitosAplicables(idExpediente);
+    return new RequisitosExpedienteDTO(
+        r.productCode(),
+        r.canton(),
+        r.cantonPropio(),
+        r.condiciones(),
+        ProductoBiessService.aItems(r),
+        r.avisos());
   }
 
   @GetMapping("/{idExpediente}/documentos")
