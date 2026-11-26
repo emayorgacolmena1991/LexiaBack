@@ -36,7 +36,31 @@ public final class StorageMigracionProcesador {
     }
 
     Path archivo = paths.resolverArchivo(antes);
+    boolean heredada = StorageMigracionPaths.esHeredada(antes);
     if (archivo == null || !Files.isRegularFile(archivo)) {
+      if (!heredada) {
+        String claveExistente = normalizar(antes);
+        try {
+          if (bucket.existe(claveExistente)) {
+            if (dryRun) {
+              return new Salida(
+                  StorageMigracionResultado.DRY_RUN,
+                  antes,
+                  claveExistente,
+                  "dry-run: ya en bucket sin copia local",
+                  0);
+            }
+            return new Salida(
+                StorageMigracionResultado.YA_ESTABA,
+                antes,
+                claveExistente,
+                "objeto en bucket sin copia local",
+                0);
+          }
+        } catch (RuntimeException ex) {
+          return new Salida(StorageMigracionResultado.ERROR, antes, claveExistente, ex.getMessage(), 0);
+        }
+      }
       return new Salida(StorageMigracionResultado.FALTANTE, antes, null, "archivo no en disco", 0);
     }
 
@@ -65,7 +89,6 @@ public final class StorageMigracionProcesador {
       }
     }
 
-    boolean heredada = StorageMigracionPaths.esHeredada(antes);
     boolean mismaClave = Objects.equals(normalizar(antes), normalizar(clave));
 
     try {
