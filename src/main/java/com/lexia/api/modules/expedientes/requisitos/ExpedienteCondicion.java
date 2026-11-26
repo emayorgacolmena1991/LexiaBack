@@ -75,6 +75,42 @@ public class ExpedienteCondicion {
     return c;
   }
 
+  /** El abogado la confirma (también al agregarla a mano). */
+  public void confirmar(UUID usuario) {
+    this.confirmada = true;
+    this.descartada = false;
+    tocar(usuario);
+  }
+
+  /** El abogado la descarta: deja de contar y la IA no la vuelve a proponer. */
+  public void descartar(UUID usuario) {
+    this.confirmada = false;
+    this.descartada = true;
+    tocar(usuario);
+  }
+
+  /**
+   * Propuesta de la IA: actualiza la evidencia; la decisión del abogado (confirmada o descartada)
+   * no se toca.
+   */
+  public void registrarPropuesta(String evidencia, UUID documentoId, BigDecimal confianza) {
+    this.evidencia = evidencia;
+    this.documentoId = documentoId;
+    this.confianza = confianza;
+    this.updatedAt = Instant.now();
+  }
+
+  /** Promoción del borrador: la condición pasa al expediente oficial. */
+  public void moverA(UUID nuevoExpedienteId) {
+    this.expedienteId = nuevoExpedienteId;
+    this.updatedAt = Instant.now();
+  }
+
+  private void tocar(UUID usuario) {
+    this.actualizadoPor = usuario;
+    this.updatedAt = Instant.now();
+  }
+
   /** Cuenta para los requisitos. */
   public boolean vigente() {
     return confirmada && !descartada;

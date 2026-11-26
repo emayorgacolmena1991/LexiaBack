@@ -192,6 +192,28 @@ public class CargaDocumentoService {
     return productos.resolverRequisitos(tenant, uuidONull(draft.id()), draft.productCode(), draft.canton());
   }
 
+  /**
+   * Borrador o expediente del tenant de la sesión (otro tenant → 404). {@code persistido}: true si
+   * es un expediente oficial.
+   */
+  public record ContextoExpediente(
+      UUID tenantId, UUID expedienteId, String productCode, String canton, boolean persistido) {}
+
+  public ContextoExpediente contexto(String idExpediente) {
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return new ContextoExpediente(
+          official.tenantId(), official.caseId(), official.productCode(), official.canton(), true);
+    }
+    DraftExpediente draft = requireDraft(idExpediente);
+    UUID tenant = draft.tenantId() != null ? draft.tenantId() : AuthContext.require().tenantId();
+    UUID id = uuidONull(draft.id());
+    if (id == null) {
+      throw ApiException.notFound("Expediente no encontrado.");
+    }
+    return new ContextoExpediente(tenant, id, draft.productCode(), draft.canton(), false);
+  }
+
   private static UUID uuidONull(String id) {
     try {
       return id == null ? null : UUID.fromString(id.trim());

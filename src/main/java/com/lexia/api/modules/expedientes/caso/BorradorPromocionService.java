@@ -24,6 +24,14 @@ public class BorradorPromocionService {
   private final LegalCaseRepository legalCases;
   private final ObjectProvider<CaseService> caseServices;
   private final ObjectProvider<ExpedienteSeguimientoService> seguimiento;
+  /** Opcional (setter): las condiciones del caso del borrador pasan al expediente. */
+  private ObjectProvider<com.lexia.api.modules.expedientes.requisitos.CondicionesCasoService> condiciones;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setCondiciones(
+      ObjectProvider<com.lexia.api.modules.expedientes.requisitos.CondicionesCasoService> condiciones) {
+    this.condiciones = condiciones;
+  }
 
   public BorradorPromocionService(
       ExpedienteBorradorStore borradores,
@@ -72,6 +80,10 @@ public class BorradorPromocionService {
     CaseDetailItem created = requireCases().createCase(toCreateRequest(draft, extra));
     borradores.marcarPromovido(draft.getId(), tenantId, created.id());
     seguimiento.ifAvailable(service -> service.vincularBorrador(draft.getId().toString(), created.id()));
+    if (condiciones != null) {
+      condiciones.ifAvailable(
+          service -> service.moverDeBorrador(tenantId, draft.getId(), created.id()));
+    }
     return created.id();
   }
 

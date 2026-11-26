@@ -632,6 +632,16 @@ public class IaAnalysisService {
   }
 
   /**
+   * OCR marcado por documento tal como lo recibe la IA (con la descripción de los OTRO como tipo).
+   * Para llamadas auxiliares (p. ej. condiciones del caso). Lanza 400 si aún no hay OCR.
+   */
+  public String textoOcrParaIa(UUID expedienteId, boolean persistido) {
+    String marcado = loadOcrMarcado(expedienteId, persistido, null);
+    return OcrExpedienteTexto.conDescripcionesOtro(
+        marcado, observacionesPorDocumento.descripcionesOtro(expedienteId.toString()));
+  }
+
+  /**
    * OCR por archivo (caché de sesión o {@code documento_texto_ocr}). No une binarios.
    *
    * <p>Expediente persistido: solo su {@code caseId}, nunca el {@code sessionId} de un borrador
