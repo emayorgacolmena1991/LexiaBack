@@ -4,8 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Correo de observaciones al afiliado: texto modelo de la abogada (detalle documental, sección 4)
- * con el producto y las observaciones abiertas agrupadas. Solo se muestra para copiar.
+ * Correo de observaciones al afiliado: plantilla por tenant (texto modelo de la abogada por
+ * defecto, detalle documental sección 4) con el producto y las observaciones abiertas agrupadas.
+ * Solo se muestra para copiar.
  */
 public final class CorreoAfiliado {
 
@@ -13,6 +14,73 @@ public final class CorreoAfiliado {
   public record Grupo(String titulo, List<String> lineas) {}
 
   public record Firma(String estudio, String abogado, String telefono, String correo) {}
+
+  public static final String MARCA_ESTUDIO = "{estudio}";
+  public static final String MARCA_PRODUCTO = "{producto}";
+  public static final String MARCA_OBSERVACIONES = "{observaciones}";
+  public static final String MARCA_FIRMA = "{firma}";
+
+  public static final String PLANTILLA_POR_DEFECTO =
+      """
+      Buen día estimad@ afiliad@,
+
+      Reciba un cordial saludo de parte del Estudio Jurídico {estudio}.
+
+      Por medio del presente le informamos que el Banco del Instituto Ecuatoriano de Seguridad \
+      Social (BIESS) nos ha asignado su trámite para «ESTUDIO DE TÍTULO» correspondiente a la \
+      primera etapa de su proceso de «{producto}».
+
+      Tras la revisión de la documentación escaneada y cargada en la plataforma Logiflow-BIESS, se \
+      han identificado observaciones y/o documentos pendientes, los cuales deberán ser enviados \
+      únicamente por correo electrónico o WhatsApp, detallo:
+
+      {observaciones}
+
+      Nota: No se requiere presencia física, ni en el estudio jurídico ni en el BIESS para entregar \
+      la documentación solicitada.
+
+      Es importante considerar que el trámite debe cumplir previamente la fase de inspección del \
+      inmueble, a cargo del perito colaborador del BIESS:
+
+        • Si el informe pericial es favorable y el BIESS aprueba el préstamo, el trámite continúa.
+        • Si el informe es negativo, el vendedor deberá realizar las adecuaciones necesarias al \
+      inmueble y justificarlas ante el BIESS para la aprobación del crédito.
+        • Una vez superada esta fase, el BIESS entregará al Estudio Jurídico la carpeta física con \
+      los documentos originales proporcionados por usted a la entidad.
+
+      Mientras se realizan estas gestiones por parte del banco, solicitamos su apoyo con la \
+      siguiente información para adelantar con la realización de los contratos para la revisión de \
+      las partes (comprador/vendedor):
+
+      En cuanto a la cuantía de la compraventa, debe indicar:
+
+        • Valor total de la compraventa (igual o mayor al monto financiado por el BIESS). En caso de \
+      ser mayor y de haberse dado anticipo, indicar el monto y forma de pago (transferencia, cheque \
+      o efectivo).
+        • Adjuntar comprobante del anticipo, el cual es obligatorio y se adjunta a la escritura como \
+      respaldo de ambas partes.
+
+      Información personal de las partes:
+
+        • Profesión (compradores/vendedor)
+        • Dirección domiciliaria completa actual (compradores/vendedor)
+        • Si el afiliado es casado, indicar el correo electrónico del cónyuge no solicitante del \
+      crédito.
+
+      Finalmente, una vez que el préstamo hipotecario sea aprobado por el BIESS y el trámite sea \
+      enviado nuevamente a nuestro sistema por la entidad, inicia la instrumentación legal.
+
+      Aclaración importante sobre la instrumentación legal:
+
+      La instrumentación legal no es inmediata y se desarrolla por etapas obligatorias.
+
+      Agradecemos la paciencia, y quedamos atentos a su colaboración y a cualquier inquietud \
+      adicional.
+
+      Atentamente,
+
+      {firma}
+      """;
 
   private CorreoAfiliado() {}
 
@@ -28,21 +96,24 @@ public final class CorreoAfiliado {
   }
 
   public static String texto(String producto, List<Grupo> grupos, Firma firma) {
+    return texto(producto, grupos, firma, null);
+  }
+
+  /** {@code plantilla} vacía = la del estudio por defecto. */
+  public static String texto(String producto, List<Grupo> grupos, Firma firma, String plantilla) {
     Firma f = firma == null ? new Firma("", "", "", "") : firma;
-    String estudio = v(f.estudio()).isEmpty() ? "" : " " + v(f.estudio());
-    StringBuilder sb = new StringBuilder();
-    sb.append("Buen día estimad@ afiliad@,\n\n");
-    sb.append("Reciba un cordial saludo de parte del Estudio Jurídico").append(estudio).append(".\n\n");
-    sb.append(
-            "Por medio del presente le informamos que el Banco del Instituto Ecuatoriano de Seguridad"
-                + " Social (BIESS) nos ha asignado su trámite para «ESTUDIO DE TÍTULO» correspondiente a"
-                + " la primera etapa de su proceso de «")
-        .append(v(producto).isEmpty() ? "CRÉDITO HIPOTECARIO" : v(producto))
-        .append("».\n\n");
-    sb.append(
-        "Tras la revisión de la documentación escaneada y cargada en la plataforma Logiflow-BIESS, se"
-            + " han identificado observaciones y/o documentos pendientes, los cuales deberán ser"
-            + " enviados únicamente por correo electrónico o WhatsApp, detallo:\n\n");
+    String base = v(plantilla).isEmpty() ? PLANTILLA_POR_DEFECTO : plantilla;
+    String estudio = v(f.estudio());
+    String texto =
+        base.replace(" " + MARCA_ESTUDIO, estudio.isEmpty() ? "" : " " + estudio)
+            .replace(MARCA_ESTUDIO, estudio)
+            .replace(MARCA_PRODUCTO, v(producto).isEmpty() ? "CRÉDITO HIPOTECARIO" : v(producto))
+            .replace(MARCA_OBSERVACIONES, observaciones(grupos))
+            .replace(MARCA_FIRMA, firma(f));
+    return texto.stripTrailing() + "\n";
+  }
+
+  static String observaciones(List<Grupo> grupos) {
     List<Grupo> conLineas = new ArrayList<>();
     for (Grupo g : grupos == null ? List.<Grupo>of() : grupos) {
       if (g != null && g.lineas() != null && !g.lineas().isEmpty()) {
@@ -50,68 +121,33 @@ public final class CorreoAfiliado {
       }
     }
     if (conLineas.isEmpty()) {
-      sb.append("No se registran observaciones abiertas en este momento.\n\n");
+      return "No se registran observaciones abiertas en este momento.";
     }
+    StringBuilder sb = new StringBuilder();
     for (Grupo g : conLineas) {
+      if (!sb.isEmpty()) {
+        sb.append("\n");
+      }
       sb.append(v(g.titulo())).append(":\n");
       for (String linea : g.lineas()) {
         sb.append("  • ").append(v(linea)).append("\n");
       }
-      sb.append("\n");
     }
-    sb.append(
-        "Nota: No se requiere presencia física, ni en el estudio jurídico ni en el BIESS para entregar"
-            + " la documentación solicitada.\n\n");
-    sb.append(
-        "Es importante considerar que el trámite debe cumplir previamente la fase de inspección del"
-            + " inmueble, a cargo del perito colaborador del BIESS:\n\n");
-    sb.append(
-        "  • Si el informe pericial es favorable y el BIESS aprueba el préstamo, el trámite"
-            + " continúa.\n");
-    sb.append(
-        "  • Si el informe es negativo, el vendedor deberá realizar las adecuaciones necesarias al"
-            + " inmueble y justificarlas ante el BIESS para la aprobación del crédito.\n");
-    sb.append(
-        "  • Una vez superada esta fase, el BIESS entregará al Estudio Jurídico la carpeta física con"
-            + " los documentos originales proporcionados por usted a la entidad.\n\n");
-    sb.append(
-        "Mientras se realizan estas gestiones por parte del banco, solicitamos su apoyo con la"
-            + " siguiente información para adelantar con la realización de los contratos para la"
-            + " revisión de las partes (comprador/vendedor):\n\n");
-    sb.append("En cuanto a la cuantía de la compraventa, debe indicar:\n\n");
-    sb.append(
-        "  • Valor total de la compraventa (igual o mayor al monto financiado por el BIESS). En caso"
-            + " de ser mayor y de haberse dado anticipo, indicar el monto y forma de pago"
-            + " (transferencia, cheque o efectivo).\n");
-    sb.append(
-        "  • Adjuntar comprobante del anticipo, el cual es obligatorio y se adjunta a la escritura"
-            + " como respaldo de ambas partes.\n\n");
-    sb.append("Información personal de las partes:\n\n");
-    sb.append("  • Profesión (compradores/vendedor)\n");
-    sb.append("  • Dirección domiciliaria completa actual (compradores/vendedor)\n");
-    sb.append(
-        "  • Si el afiliado es casado, indicar el correo electrónico del cónyuge no solicitante del"
-            + " crédito.\n\n");
-    sb.append(
-        "Finalmente, una vez que el préstamo hipotecario sea aprobado por el BIESS y el trámite sea"
-            + " enviado nuevamente a nuestro sistema por la entidad, inicia la instrumentación"
-            + " legal.\n\n");
-    sb.append("Aclaración importante sobre la instrumentación legal:\n\n");
-    sb.append("La instrumentación legal no es inmediata y se desarrolla por etapas obligatorias.\n\n");
-    sb.append(
-        "Agradecemos la paciencia, y quedamos atentos a su colaboración y a cualquier inquietud"
-            + " adicional.\n\n");
-    sb.append("Atentamente,\n\n");
+    return sb.toString().stripTrailing();
+  }
+
+  static String firma(Firma f) {
+    List<String> lineas = new ArrayList<>();
     if (!v(f.abogado()).isEmpty()) {
-      sb.append("Ab. ").append(v(f.abogado())).append("\n");
+      lineas.add("Ab. " + v(f.abogado()));
     }
     if (!v(f.telefono()).isEmpty()) {
-      sb.append("Teléfono: ").append(v(f.telefono())).append("\n");
+      lineas.add("Teléfono: " + v(f.telefono()));
     }
     if (!v(f.correo()).isEmpty()) {
-      sb.append("Correo: ").append(v(f.correo())).append("\n");
+      lineas.add("Correo: " + v(f.correo()));
     }
-    return sb.toString().stripTrailing() + "\n";
+    return String.join("\n", lineas);
   }
 
   private static String v(String s) {

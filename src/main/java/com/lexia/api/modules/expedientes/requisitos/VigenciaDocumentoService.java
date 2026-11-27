@@ -37,8 +37,13 @@ public class VigenciaDocumentoService {
     VIGENTE,
     POR_VENCER,
     VENCIDO,
-    SIN_FECHA
+    SIN_FECHA,
+    /** dd/MM o MM/dd sin forma de saberlo: aviso para que el abogado confirme. */
+    FECHA_AMBIGUA
   }
+
+  /** Fecha leída del OCR; {@code ambigua}: día y mes podrían estar invertidos. */
+  record Fecha(LocalDate valor, boolean ambigua) {}
 
   public record ResultadoVigencia(
       UUID documentId,
@@ -124,8 +129,7 @@ public class VigenciaDocumentoService {
 
     // CEDULA: vigencia por fecha de vencimiento del documento mismo
     if ("CEDULA".equals(tipo)) {
-      LocalDate venc = fechaCampo(extraido, "fechaVencimiento");
-      return venc != null ? evaluar(doc, tipo, venc, hoy) : sinFecha(doc, tipo);
+      return porFecha(doc, tipo, fechaCampo(extraido, "fechaVencimiento"), 0, hoy);
     }
 
     // PAPELETA: válida hasta el día antes del próximo proceso electoral
@@ -144,18 +148,31 @@ public class VigenciaDocumentoService {
     }
 
     // Otros: si el doc tiene fechaVencimiento explícita, usarla
-    LocalDate venc = fechaCampo(extraido, "fechaVencimiento");
+    Fecha venc = fechaCampo(extraido, "fechaVencimiento");
     if (venc != null) {
-      return evaluar(doc, tipo, venc, hoy);
+      return porFecha(doc, tipo, venc, 0, hoy);
     }
     // O calcular desde emisión + maxValidityDays
     if (maxDias > 0) {
-      LocalDate emision = fechaCampo(extraido, "fechaEmision");
+      Fecha emision = fechaCampo(extraido, "fechaEmision");
       if (emision != null) {
-        return evaluar(doc, tipo, emision.plusDays(maxDias), hoy);
+        return porFecha(doc, tipo, emision, maxDias, hoy);
       }
     }
     return sinFecha(doc, tipo);
+  }
+
+  /** Sin fecha, fecha ambigua o vencimiento = fecha + {@code dias}. */
+  private ResultadoVigencia porFecha(LegalDocument doc, String tipo, Fecha fecha, int dias, LocalDate hoy) {
+    if (fecha == null) {
+      return sinFecha(doc, tipo);
+    }
+    if (fecha.ambigua()) {
+      return new ResultadoVigencia(
+          doc.getId(), tipo, doc.getName(), EstadoVigencia.FECHA_AMBIGUA,
+          "Fecha ambigua (día/mes): confirme la fecha del documento.", null);
+    }
+    return evaluar(doc, tipo, fecha.valor().plusDays(dias), hoy);
   }
 
   private ResultadoVigencia vigenciaPapeleta(LegalDocument doc, UUID tenantId, LocalDate hoy) {
@@ -164,10 +181,13 @@ public class VigenciaDocumentoService {
             tenantId,
             TenantParameterService.KEY_FECHA_ULTIMO_PROCESO_ELECTORAL,
             "2023-02-05");
+    // Pendiente de confirmar con la abogada: plazo entre procesos (por defecto 4 años).
+    String aniosRaw =
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_PAPELETA_VIGENCIA_ANIOS, "4");
     try {
       LocalDate ultimoProceso = LocalDate.parse(ultimoRaw.trim());
-      // El próximo proceso es 4 años después; la papeleta vence el día anterior
-      LocalDate venceEl = ultimoProceso.plusYears(4).minusDays(1);
+      // La papeleta vence el día anterior al próximo proceso electoral.
+      LocalDate venceEl = ultimoProceso.plusYears(Integer.parseInt(aniosRaw.trim())).minusDays(1);
       return evaluar(doc, "PAPELETA", venceEl, hoy);
     } catch (Exception e) {
       LOG.warn("vigenciaPapeleta: no se pudo calcular (param={}): {}", ultimoRaw, e.getMessage());
@@ -177,8 +197,7 @@ public class VigenciaDocumentoService {
 
   private ResultadoVigencia desdeEmision(
       LegalDocument doc, String tipo, DocumentoExtraidoDTO extraido, LocalDate hoy, int dias) {
-    LocalDate emision = fechaCampo(extraido, "fechaEmision");
-    return emision != null ? evaluar(doc, tipo, emision.plusDays(dias), hoy) : sinFecha(doc, tipo);
+    return porFecha(doc, tipo, fechaCampo(extraido, "fechaEmision"), dias, hoy);
   }
 
   private ResultadoVigencia evaluar(LegalDocument doc, String tipo, LocalDate vence, LocalDate hoy) {
@@ -216,7 +235,7 @@ public class VigenciaDocumentoService {
     return !comp.getFechaNacimiento().plusYears(65).isAfter(hoy);
   }
 
-  private LocalDate fechaCampo(DocumentoExtraidoDTO extraido, String campo) {
+  private Fecha fechaCampo(DocumentoExtraidoDTO extraido, String campo) {
     if (extraido == null) {
       return null;
     }
@@ -224,46 +243,58 @@ public class VigenciaDocumentoService {
     if (!StringUtils.hasText(val)) {
       return null;
     }
-    return parseFecha(val.trim());
+    return leerFecha(val.trim());
   }
 
-  static LocalDate parseFecha(String raw) {
+  /**
+   * ISO y mes en letras no son ambiguos. Numérica: día/mes (formato ecuatoriano); si el primer
+   * número pasa de 12 no hay duda; si ambos son ≤ 12 y distintos, queda ambigua.
+   */
+  static Fecha leerFecha(String raw) {
     if (!StringUtils.hasText(raw)) {
       return null;
     }
     String s = raw.trim();
     Matcher iso = FECHA_ISO.matcher(s);
     if (iso.find()) {
-      try {
-        return LocalDate.of(
-            Integer.parseInt(iso.group(1)),
-            Integer.parseInt(iso.group(2)),
-            Integer.parseInt(iso.group(3)));
-      } catch (Exception ignored) {
-      }
-    }
-    Matcher num = FECHA_NUM.matcher(s);
-    if (num.find()) {
-      try {
-        return LocalDate.of(
-            Integer.parseInt(num.group(3)),
-            Integer.parseInt(num.group(2)),
-            Integer.parseInt(num.group(1)));
-      } catch (Exception ignored) {
+      LocalDate f = fecha(iso.group(1), iso.group(2), iso.group(3));
+      if (f != null) {
+        return new Fecha(f, false);
       }
     }
     Matcher texto = FECHA_TEXTO.matcher(s);
     if (texto.find()) {
-      try {
-        int mes = mesANumero(texto.group(2));
-        if (mes > 0) {
-          return LocalDate.of(
-              Integer.parseInt(texto.group(3)), mes, Integer.parseInt(texto.group(1)));
-        }
-      } catch (Exception ignored) {
+      int mes = mesANumero(texto.group(2));
+      LocalDate f = mes > 0 ? fecha(texto.group(3), String.valueOf(mes), texto.group(1)) : null;
+      if (f != null) {
+        return new Fecha(f, false);
       }
     }
+    Matcher num = FECHA_NUM.matcher(s);
+    if (num.find()) {
+      int a = Integer.parseInt(num.group(1));
+      int b = Integer.parseInt(num.group(2));
+      if (a > 12 && b <= 12) {
+        LocalDate f = fecha(num.group(3), num.group(2), num.group(1));
+        return f == null ? null : new Fecha(f, false);
+      }
+      if (b > 12 && a <= 12) {
+        // Solo cabe mes/día: el documento usa el formato al revés.
+        LocalDate f = fecha(num.group(3), num.group(1), num.group(2));
+        return f == null ? null : new Fecha(f, false);
+      }
+      LocalDate f = fecha(num.group(3), num.group(2), num.group(1));
+      return f == null ? null : new Fecha(f, a != b);
+    }
     return null;
+  }
+
+  private static LocalDate fecha(String anio, String mes, String dia) {
+    try {
+      return LocalDate.of(Integer.parseInt(anio), Integer.parseInt(mes), Integer.parseInt(dia));
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 
   private static int mesANumero(String mes) {

@@ -8,10 +8,8 @@ import com.lexia.api.modules.expedientes.caso.LegalCaseRepository;
 import com.lexia.api.modules.expedientes.cierre.CartaFinanciamiento.Pagador;
 import com.lexia.api.modules.expedientes.cierre.CartaFinanciamiento.Pagos;
 import com.lexia.api.modules.expedientes.comparecientes.Compareciente;
-import com.lexia.api.modules.expedientes.comparecientes.ComparecientesMinuta;
 import com.lexia.api.modules.expedientes.comparecientes.ComparecientesService;
 import com.lexia.api.modules.expedientes.comparecientes.RolCompareciente;
-import com.lexia.api.modules.expedientes.comparecientes.RolCompareciente.Parte;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ObservacionCotejoItem;
 import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ObservacionesDocumentoItem;
 import com.lexia.api.modules.expedientes.escrituracion.core.ObservacionesPorDocumento;
@@ -21,13 +19,13 @@ import com.lexia.api.modules.expedientes.minutas.DocxMinutaRenderer;
 import com.lexia.api.modules.expedientes.minutas.MinutaGenerationService;
 import com.lexia.api.modules.expedientes.minutas.MinutaTemplateCatalog;
 import com.lexia.api.modules.expedientes.minutas.MinutaViviendaData;
+import com.lexia.api.modules.expedientes.minutas.NumeroALetras;
 import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
 import com.lexia.api.modules.expedientes.requisitos.CondicionCaso;
 import com.lexia.api.modules.expedientes.requisitos.ExpedienteCondicion;
 import com.lexia.api.modules.expedientes.requisitos.ExpedienteCondicionRepository;
 import com.lexia.api.modules.tenancy.TenantParameterService;
 import jakarta.validation.constraints.Size;
-import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.time.LocalDate;
@@ -112,7 +110,18 @@ public class CierreExpedienteService {
       String pagoAlcabalas,
       String pagoObras,
       boolean cartaDisponible,
-      List<String> faltantesInforme) {}
+      List<String> faltantesCarta,
+      List<String> faltantesInforme,
+      List<String> avisosInforme) {}
+
+  /** Lo que necesita el paso 5: sin armar el informe. */
+  public record EstadoCartaDTO(
+      UUID caseId,
+      boolean cartaDisponible,
+      String pagoPlusvalia,
+      String pagoAlcabalas,
+      String pagoObras,
+      List<String> faltantesCarta) {}
 
   public record DatosCierreRequest(
       LocalDate fechaEscritura,
@@ -148,20 +157,57 @@ public class CierreExpedienteService {
     return dto(legalCase, tenantId);
   }
 
+  @Transactional(readOnly = true)
+  public EstadoCartaDTO estadoCarta(UUID id) {
+    UUID tenantId = tenant();
+    return estado(requireCase(id, tenantId), tenantId);
+  }
+
   @Transactional
-  public DatosCierreDTO guardarPagos(UUID id, PagosCartaRequest body) {
+  public EstadoCartaDTO guardarPagos(UUID id, PagosCartaRequest body) {
     UUID tenantId = tenant();
     LegalCase legalCase = requireCase(id, tenantId);
     PagosCartaRequest b = body == null ? new PagosCartaRequest(null, null, null) : body;
     legalCase.setPagosCarta(pagador(b.plusvalia()), pagador(b.alcabalas()), pagador(b.obras()));
     legalCases.save(legalCase);
-    return dto(legalCase, tenantId);
+    return estado(legalCase, tenantId);
+  }
+
+  private EstadoCartaDTO estado(LegalCase legalCase, UUID tenantId) {
+    boolean disponible =
+        condicionConfirmada(tenantId, legalCase.getId(), CondicionCaso.FINANCIAMIENTO_GASTOS);
+    List<String> faltantes =
+        disponible
+            ? CartaFinanciamiento.faltantes(compradores(legalCase, tenantId), legalCase.getNumeroInstancia())
+            : List.of();
+    return new EstadoCartaDTO(
+        legalCase.getId(),
+        disponible,
+        legalCase.getCartaPagoPlusvalia(),
+        legalCase.getCartaPagoAlcabalas(),
+        legalCase.getCartaPagoObras(),
+        faltantes);
+  }
+
+  /** Compradores de la lista; la minuta (consulta pesada) solo si la lista no los tiene. */
+  private List<PartesCierre.Persona> compradores(LegalCase legalCase, UUID tenantId) {
+    List<Compareciente> filas = filas(tenantId, legalCase.getId());
+    List<PartesCierre.Persona> deLista = PartesCierre.de(filas, null).compradores();
+    return !deLista.isEmpty()
+        ? deLista
+        : PartesCierre.de(filas, minutas.datosConsolidados(tenantId, legalCase.getId())).compradores();
   }
 
   // ---------------------------------------------------------------- carta de financiamiento
 
   @Transactional(readOnly = true)
   public Archivo carta(UUID id) {
+    return carta(id, null);
+  }
+
+  /** {@code fecha}: la que elige el abogado; null = hoy. */
+  @Transactional(readOnly = true)
+  public Archivo carta(UUID id, LocalDate fecha) {
     UUID tenantId = tenant();
     LegalCase legalCase = requireCase(id, tenantId);
     if (!condicionConfirmada(tenantId, legalCase.getId(), CondicionCaso.FINANCIAMIENTO_GASTOS)) {
@@ -171,16 +217,10 @@ public class CierreExpedienteService {
           "La carta de financiamiento solo aplica cuando el estudio financia los gastos (condición"
               + " confirmada).");
     }
-    List<Compareciente> filas = filas(tenantId, legalCase.getId());
-    List<Compareciente> vendedores = ComparecientesMinuta.otorgantes(filas, Parte.VENDEDORA);
-    List<Compareciente> compradores = ComparecientesMinuta.otorgantes(filas, Parte.COMPRADORA);
-    List<String> faltantes = new ArrayList<>();
-    if (compradores.isEmpty()) {
-      faltantes.add("Compradores (lista de comparecientes)");
-    }
-    if (!StringUtils.hasText(legalCase.getNumeroInstancia())) {
-      faltantes.add("NIP");
-    }
+    PartesCierre.Partes partes = partes(legalCase, tenantId);
+    List<PartesCierre.Persona> vendedores = partes.vendedores();
+    List<PartesCierre.Persona> compradores = partes.compradores();
+    List<String> faltantes = CartaFinanciamiento.faltantes(compradores, legalCase.getNumeroInstancia());
     if (!faltantes.isEmpty()) {
       throw faltan("CARTA_INCOMPLETA", "Faltan datos para la carta de financiamiento.", faltantes);
     }
@@ -191,7 +231,11 @@ public class CierreExpedienteService {
             Pagador.de(legalCase.getCartaPagoObras()).orElse(null));
     Map<String, Object> datos =
         CartaFinanciamiento.datos(
-            vendedores, compradores, legalCase.getNumeroInstancia(), LocalDate.now(ZONA), pagos);
+            vendedores,
+            compradores,
+            legalCase.getNumeroInstancia(),
+            fecha == null ? LocalDate.now(ZONA) : fecha,
+            pagos);
     byte[] docx = renderer.renderPlantilla(CartaFinanciamiento.RECURSO, datos);
     LOG.info(
         "Carta de financiamiento case={} vendedores={} compradores={} bytes={}",
@@ -208,7 +252,8 @@ public class CierreExpedienteService {
   public Archivo informe(UUID id) {
     UUID tenantId = tenant();
     LegalCase legalCase = requireCase(id, tenantId);
-    InformeLegal.Datos datos = datosInforme(legalCase, tenantId);
+    InformeLegal.Datos datos =
+        datosInforme(legalCase, tenantId, minutas.datosConsolidados(tenantId, legalCase.getId()));
     List<String> faltantes = InformeLegal.faltantes(datos);
     if (!faltantes.isEmpty()) {
       throw faltan("INFORME_INCOMPLETO", "Faltan datos para el informe legal.", faltantes);
@@ -218,26 +263,28 @@ public class CierreExpedienteService {
     return new Archivo("informe_legal_" + legalCase.getCode() + ".xlsx", xlsx);
   }
 
-  InformeLegal.Datos datosInforme(LegalCase legalCase, UUID tenantId) {
+  private PartesCierre.Partes partes(LegalCase legalCase, UUID tenantId) {
+    return PartesCierre.de(
+        filas(tenantId, legalCase.getId()), minutas.datosConsolidados(tenantId, legalCase.getId()));
+  }
+
+  InformeLegal.Datos datosInforme(LegalCase legalCase, UUID tenantId, MinutaViviendaData d) {
     UUID caseId = legalCase.getId();
-    MinutaViviendaData d = minutas.datosConsolidados(tenantId, caseId);
     List<Compareciente> filas = filas(tenantId, caseId);
-    List<Compareciente> compradores = ComparecientesMinuta.otorgantes(filas, Parte.COMPRADORA);
-    List<Compareciente> vendedores = ComparecientesMinuta.otorgantes(filas, Parte.VENDEDORA);
+    PartesCierre.Partes partes = PartesCierre.de(filas, d);
     String producto = producto(legalCase, tenantId);
     boolean sustitucion =
         MinutaTemplateCatalog.PRODUCT_SUSTITUCION_HIPOTECA.equalsIgnoreCase(codigoProducto(legalCase, tenantId));
-    String descripcion = limpio(d.getDescripcionInmuebleHipoteca());
-    if (descripcion.isEmpty()) {
-      descripcion = limpio(d.getDescripcionInmueblesAntecedentes());
+    String bruta = limpio(d.getDescripcionInmuebleHipoteca());
+    if (bruta.isEmpty()) {
+      bruta = limpio(d.getDescripcionInmueblesAntecedentes());
     }
+    InformeLegal.Descripcion descripcion = InformeLegal.sinLinderos(bruta);
     return new InformeLegal.Datos(
         limpio(legalCase.getNumeroInstancia()),
-        compradores.isEmpty()
-            ? nombres(limpio(d.getNombreConyuge1()), limpio(d.getNombreConyuge2()))
-            : nombres(compradores),
+        PartesCierre.nombres(partes.compradores()),
         tipoContrato(legalCase, tenantId, producto),
-        descripcion,
+        descripcion.texto(),
         limpio(d.getParroquiaInmueble()).toUpperCase(ES),
         limpio(d.getCantonInmueble()).toUpperCase(ES),
         limpio(d.getProvinciaInmueble()).toUpperCase(ES),
@@ -245,15 +292,14 @@ public class CierreExpedienteService {
         limpio(legalCase.getCierreNotaria()),
         CartaFinanciamiento.fechaLarga(legalCase.getCierreFechaEscritura()),
         CartaFinanciamiento.fechaLarga(legalCase.getCierreFechaInscripcion()),
-        vendedores.isEmpty()
-            ? nombres(limpio(d.getNombreVendedor()), limpio(d.getNombreConyugeVendedor()))
-            : nombres(vendedores),
+        PartesCierre.nombres(partes.vendedores()),
         observacionesApoderados(filas),
         parametro(tenantId, TenantParameterService.KEY_FIRMA_CIUDAD, TenantParameterService.CIUDAD_POR_DEFECTO),
         CartaFinanciamiento.fechaLarga(legalCase.getCierreFechaInforme()),
         parametro(tenantId, TenantParameterService.KEY_FIRMA_ABOGADO, ""),
         parametro(tenantId, TenantParameterService.KEY_FIRMA_REGISTRO, ""),
-        !sustitucion);
+        !sustitucion,
+        descripcion.revisar() ? List.of(InformeLegal.AVISO_DESCRIPCION) : List.of());
   }
 
   /**
@@ -342,7 +388,12 @@ public class CierreExpedienteService {
             parametro(tenantId, TenantParameterService.KEY_FIRMA_ABOGADO, ""),
             parametro(tenantId, TenantParameterService.KEY_FIRMA_TELEFONO, ""),
             parametro(tenantId, TenantParameterService.KEY_FIRMA_CORREO, ""));
-    String texto = CorreoAfiliado.texto(producto, grupos, firma);
+    String texto =
+        CorreoAfiliado.texto(
+            producto,
+            grupos,
+            firma,
+            parametro(tenantId, TenantParameterService.KEY_CORREO_AFILIADO_PLANTILLA, ""));
     LOG.info(
         "Correo al afiliado case={} observaciones={} chars={}",
         legalCase.getId(),
@@ -385,6 +436,8 @@ public class CierreExpedienteService {
   // ---------------------------------------------------------------- apoyo
 
   private DatosCierreDTO dto(LegalCase legalCase, UUID tenantId) {
+    MinutaViviendaData minuta = minutas.datosConsolidados(tenantId, legalCase.getId());
+    InformeLegal.Datos informe = datosInforme(legalCase, tenantId, minuta);
     return new DatosCierreDTO(
         legalCase.getId(),
         legalCase.getCierreFechaEscritura(),
@@ -395,7 +448,11 @@ public class CierreExpedienteService {
         legalCase.getCartaPagoAlcabalas(),
         legalCase.getCartaPagoObras(),
         condicionConfirmada(tenantId, legalCase.getId(), CondicionCaso.FINANCIAMIENTO_GASTOS),
-        InformeLegal.faltantes(datosInforme(legalCase, tenantId)));
+        CartaFinanciamiento.faltantes(
+            PartesCierre.de(filas(tenantId, legalCase.getId()), minuta).compradores(),
+            legalCase.getNumeroInstancia()),
+        InformeLegal.faltantes(informe),
+        informe.avisos());
   }
 
   private LegalCase requireCase(UUID id, UUID tenantId) {
@@ -444,20 +501,6 @@ public class CierreExpedienteService {
     return valor == null ? "" : valor.trim();
   }
 
-  private static String nombres(List<Compareciente> personas) {
-    return CartaFinanciamiento.unir(personas.stream().map(CierreExpedienteService::nombre).toList());
-  }
-
-  private static String nombres(String... valores) {
-    List<String> out = new ArrayList<>();
-    for (String v : valores) {
-      if (!v.isEmpty()) {
-        out.add(v.toUpperCase(ES));
-      }
-    }
-    return CartaFinanciamiento.unir(out);
-  }
-
   private static String nombre(Compareciente c) {
     return c.getNombres() == null ? "" : c.getNombres().trim().toUpperCase(ES);
   }
@@ -466,18 +509,17 @@ public class CierreExpedienteService {
     return MinutaViviendaData.isMissing(valor) ? "" : valor.trim();
   }
 
-  /** «85.000,00»; si no es número, tal cual. */
+  /**
+   * «85.000,00» con el mismo parseo de la minuta. Vacío si no se puede interpretar: la celda no se
+   * escribe y la cuantía queda en faltantes.
+   */
   static String monto(String valor) {
-    if (valor.isEmpty()) {
-      return "";
-    }
-    try {
-      BigDecimal n = new BigDecimal(valor.replace("$", "").replace(",", "").trim());
-      return new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.forLanguageTag("es-EC")))
-          .format(n);
-    } catch (NumberFormatException e) {
-      return valor;
-    }
+    return NumeroALetras.parsearMonto(valor)
+        .map(
+            n ->
+                new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.forLanguageTag("es-EC")))
+                    .format(n))
+        .orElse("");
   }
 
   private static String pagador(String codigo) {

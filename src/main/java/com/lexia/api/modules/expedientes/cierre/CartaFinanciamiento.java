@@ -1,6 +1,6 @@
 package com.lexia.api.modules.expedientes.cierre;
 
-import com.lexia.api.modules.expedientes.comparecientes.Compareciente;
+import com.lexia.api.modules.expedientes.cierre.PartesCierre.Persona;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -44,11 +44,23 @@ public final class CartaFinanciamiento {
   /** Pagador de cada rubro (null = sin marcar). */
   public record Pagos(Pagador plusvalia, Pagador alcabalas, Pagador obras) {}
 
+  /** Sin compradores o sin NIP no se genera; vacío = lista para descargar. */
+  public static List<String> faltantes(List<Persona> compradores, String nip) {
+    List<String> out = new ArrayList<>();
+    if (compradores == null || compradores.isEmpty()) {
+      out.add("Compradores (lista de comparecientes o minuta)");
+    }
+    if (nip == null || nip.isBlank()) {
+      out.add("NIP");
+    }
+    return out;
+  }
+
   private CartaFinanciamiento() {}
 
   public static Map<String, Object> datos(
-      List<Compareciente> vendedores,
-      List<Compareciente> compradores,
+      List<Persona> vendedores,
+      List<Persona> compradores,
       String nip,
       LocalDate fecha,
       Pagos pagos) {
@@ -67,13 +79,13 @@ public final class CartaFinanciamiento {
   }
 
   /** «A con cédula de ciudadanía No. 0912345678 y B con cédula de ciudadanía No. …». */
-  static String identificacion(List<Compareciente> personas) {
+  static String identificacion(List<Persona> personas) {
     List<String> partes = new ArrayList<>();
-    for (Compareciente c : personas) {
-      StringBuilder sb = new StringBuilder(nombre(c));
-      if (c.getIdentificacion() != null && !c.getIdentificacion().isBlank()) {
-        sb.append(c.isPersonaJuridica() ? " con RUC No. " : " con cédula de ciudadanía No. ")
-            .append(c.getIdentificacion().trim());
+    for (Persona c : personas) {
+      StringBuilder sb = new StringBuilder(c.nombre());
+      if (!c.identificacion().isBlank()) {
+        sb.append(c.personaJuridica() ? " con RUC No. " : " con cédula de ciudadanía No. ")
+            .append(c.identificacion());
       }
       partes.add(sb.toString());
     }
@@ -81,19 +93,18 @@ public final class CartaFinanciamiento {
   }
 
   /** Un bloque por persona: línea de firma, parte, nombre y cédula. */
-  static String firmas(List<Compareciente> personas, String etiqueta) {
+  static String firmas(List<Persona> personas, String etiqueta) {
     List<String> bloques = new ArrayList<>();
-    for (Compareciente c : personas) {
-      String id = c.getIdentificacion() == null ? "" : c.getIdentificacion().trim();
+    for (Persona c : personas) {
       bloques.add(
           LINEA_FIRMA
               + "\n"
               + etiqueta
               + "\n"
-              + nombre(c)
+              + c.nombre()
               + "\n"
-              + (c.isPersonaJuridica() ? "RUC: " : "C.I.: ")
-              + id);
+              + (c.personaJuridica() ? "RUC: " : "C.I.: ")
+              + c.identificacion());
     }
     return String.join("\n\n\n", bloques);
   }
@@ -111,10 +122,6 @@ public final class CartaFinanciamiento {
       return partes.isEmpty() ? "" : partes.get(0);
     }
     return String.join(", ", partes.subList(0, partes.size() - 1)) + " y " + partes.get(partes.size() - 1);
-  }
-
-  private static String nombre(Compareciente c) {
-    return c.getNombres() == null ? "" : c.getNombres().trim().toUpperCase(Locale.ROOT);
   }
 
   private static void marcas(Map<String, Object> out, String rubro, Pagador pagador) {

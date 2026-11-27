@@ -101,8 +101,9 @@ public final class AdminDtos {
       @Size(max = 160) String abogado,
       @Size(max = 40) String registro,
       @Size(max = 40) String telefono,
-      @Size(max = 160) String correo,
-      @Size(max = 80) String ciudad) {}
+      @Size(max = 160) @Email String correo,
+      @Size(max = 80) String ciudad,
+      @Size(max = 8000) String plantillaCorreo) {}
 
   public record E2eInviteResponse(
       UUID invitationId, String email, String token, Instant expiresAt) {}

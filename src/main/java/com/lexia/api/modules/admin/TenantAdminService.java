@@ -2,6 +2,7 @@ package com.lexia.api.modules.admin;
 
 import com.lexia.api.modules.auth.AuthContext;
 import com.lexia.api.modules.auth.AuthException;
+import com.lexia.api.modules.expedientes.cierre.CorreoAfiliado;
 import com.lexia.api.modules.identity.AuditEvent;
 import com.lexia.api.modules.identity.AuditEventRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
@@ -143,6 +144,14 @@ public class TenantAdminService {
     guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_TELEFONO, request.telefono());
     guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_CORREO, request.correo());
     guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_CIUDAD, request.ciudad());
+    if (request.plantillaCorreo() != null) {
+      String plantilla = request.plantillaCorreo().strip();
+      // Igual al texto del estudio = sin personalizar: si el texto por defecto cambia, se usa el nuevo.
+      tenantParameters.setValue(
+          tenantId,
+          TenantParameterService.KEY_CORREO_AFILIADO_PLANTILLA,
+          plantilla.equals(CorreoAfiliado.PLANTILLA_POR_DEFECTO.strip()) ? "" : plantilla);
+    }
     audit("admin.tenant.firma_updated", "tenant", tenantId, "OK");
     return firma(tenantId);
   }
@@ -157,7 +166,14 @@ public class TenantAdminService {
         tenantParameters.getValue(
             tenantId,
             TenantParameterService.KEY_FIRMA_CIUDAD,
-            TenantParameterService.CIUDAD_POR_DEFECTO));
+            TenantParameterService.CIUDAD_POR_DEFECTO),
+        plantillaCorreo(tenantId));
+  }
+
+  private String plantillaCorreo(UUID tenantId) {
+    String guardada =
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_CORREO_AFILIADO_PLANTILLA, "");
+    return guardada == null || guardada.isBlank() ? CorreoAfiliado.PLANTILLA_POR_DEFECTO.strip() : guardada;
   }
 
   private void guardarSiViene(UUID tenantId, String key, String value) {

@@ -17,6 +17,8 @@ public class TenantParameterService {
   public static final String KEY_SLA_DEFAULT_HOURS = "sla_default_hours";
   /** Fecha del último proceso electoral (yyyy-MM-dd). Se usa para calcular vigencia de papeleta. */
   public static final String KEY_FECHA_ULTIMO_PROCESO_ELECTORAL = "fecha_ultimo_proceso_electoral";
+  /** Años entre procesos electorales para la vigencia de la papeleta (por defecto 4; por confirmar). */
+  public static final String KEY_PAPELETA_VIGENCIA_ANIOS = "papeleta_vigencia_anios";
   /** Firma del estudio: correo al afiliado e informe legal («Elaborado por»). Sin valor por defecto. */
   public static final String KEY_FIRMA_ESTUDIO = "firma_estudio";
   public static final String KEY_FIRMA_ABOGADO = "firma_abogado";
@@ -26,6 +28,8 @@ public class TenantParameterService {
   /** Ciudad de la carta de financiamiento y del informe legal. */
   public static final String KEY_FIRMA_CIUDAD = "firma_ciudad";
   public static final String CIUDAD_POR_DEFECTO = "Guayaquil";
+  /** Texto del correo al afiliado con {estudio}, {producto}, {observaciones} y {firma}; vacío = el del estudio. */
+  public static final String KEY_CORREO_AFILIADO_PLANTILLA = "correo_afiliado_plantilla";
 
   private final TenantParameterRepository parameters;
 

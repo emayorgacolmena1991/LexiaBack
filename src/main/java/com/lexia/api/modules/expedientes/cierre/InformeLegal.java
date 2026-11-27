@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.util.CellReference;
@@ -42,7 +44,43 @@ public final class InformeLegal {
       String fechaEmision,
       String abogado,
       String registro,
-      boolean conVendedores) {}
+      boolean conVendedores,
+      List<String> avisos) {
+
+    public Datos {
+      avisos = avisos == null ? List.of() : List.copyOf(avisos);
+    }
+  }
+
+  /** {@code revisar}: no se pudo separar con seguridad; el texto va tal cual. */
+  public record Descripcion(String texto, boolean revisar) {}
+
+  public static final String AVISO_DESCRIPCION =
+      "Revise que la descripción no incluya linderos ni área.";
+
+  /** Donde empiezan linderos o área total; desde ahí no va al informe. */
+  private static final Pattern MARCA_LINDEROS =
+      Pattern.compile(
+          "(?iU)\\b(cuyos\\s+linderos|linderos?|alinderad[oa]s?|por\\s+el\\s+(norte|sur|este|oeste)"
+              + "|norte\\s*:|(área|area|superficie)\\s+total"
+              + "|con\\s+(un|una)\\s+(área|area|superficie)|cuyas\\s+medidas)");
+
+  private static final int MINIMO_DESCRIPCION = 15;
+
+  /** Descripción del inmueble sin linderos ni área total (regla de la abogada). */
+  public static Descripcion sinLinderos(String raw) {
+    String t = raw == null ? "" : raw.trim();
+    Matcher m = MARCA_LINDEROS.matcher(t);
+    if (t.isEmpty() || !m.find()) {
+      return new Descripcion(t, false);
+    }
+    String corte =
+        t.substring(0, m.start())
+            .replaceAll("(?iU)[\\s,;:.\\-–]+$", "")
+            .replaceAll("(?iU)\\s+(y|con|que|el cual|la cual)$", "")
+            .replaceAll("(?iU)[\\s,;:.\\-–]+$", "");
+    return corte.length() < MINIMO_DESCRIPCION ? new Descripcion(t, true) : new Descripcion(corte, false);
+  }
 
   private InformeLegal() {}
 

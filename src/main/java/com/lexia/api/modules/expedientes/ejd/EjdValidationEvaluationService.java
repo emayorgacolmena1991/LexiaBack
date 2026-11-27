@@ -272,8 +272,26 @@ public class EjdValidationEvaluationService {
     caseValidations.save(validation);
   }
 
-  /** Resultado de presencia documental: PASS, FAIL u OBSERVATION con su texto. */
-  private record PresenciaProducto(String resultado, String detalle) {}
+  /** Por qué quedó así la presencia; el gate decide por esto, no por el texto. */
+  enum MotivoPresencia {
+    COMPLETO,
+    FALTAN_ESENCIALES,
+    FALTAN_NO_ESENCIALES,
+    SIN_REQUISITOS
+  }
+
+  /** Resultado de presencia documental: PASS, FAIL u OBSERVATION con su texto (solo para mostrar). */
+  record PresenciaProducto(String resultado, String detalle, MotivoPresencia motivo) {}
+
+  /** Gate G-001 con producto BIESS: solo bloquean los esenciales. */
+  static DocumentAvailabilitySnapshot snapshotDe(PresenciaProducto presencia) {
+    return switch (presencia.motivo()) {
+      case FALTAN_ESENCIALES -> new DocumentAvailabilitySnapshot("FAIL", presencia.detalle());
+      case SIN_REQUISITOS -> new DocumentAvailabilitySnapshot("REVIEW_REQUIRED", presencia.detalle());
+      case FALTAN_NO_ESENCIALES -> new DocumentAvailabilitySnapshot("PASS", presencia.detalle());
+      case COMPLETO -> new DocumentAvailabilitySnapshot("PASS", null);
+    };
+  }
 
   /**
    * Producto BIESS: misma resolución que wizard e ingesta (producto + cantón + condiciones
@@ -296,7 +314,8 @@ public class EjdValidationEvaluationService {
           "OBSERVATION",
           "No hay documentos requeridos configurados para "
               + legalCase.getProductCode()
-              + "; revise la parametrización.");
+              + "; revise la parametrización.",
+          MotivoPresencia.SIN_REQUISITOS);
     }
     // Tipo presente y tipo|persona presente (documento ligado a un compareciente).
     Set<String> present = new HashSet<>();
@@ -335,20 +354,23 @@ public class EjdValidationEvaluationService {
               + String.join(", ", faltanEsenciales)
               + "."
               + (faltanOtros.isEmpty() ? "" : " Además faltan: " + String.join(", ", faltanOtros) + ".")
-              + avisos);
+              + avisos,
+          MotivoPresencia.FALTAN_ESENCIALES);
     }
     if (!faltanOtros.isEmpty() || !avisos.isEmpty()) {
       return new PresenciaProducto(
           "OBSERVATION",
           "Están los documentos esenciales."
               + (faltanOtros.isEmpty() ? "" : " Faltan (no bloquea): " + String.join(", ", faltanOtros) + ".")
-              + avisos);
+              + avisos,
+          MotivoPresencia.FALTAN_NO_ESENCIALES);
     }
     return new PresenciaProducto(
         "PASS",
         "Están cargados los "
             + resolucion.requisitos().stream().filter(RequisitoAplicable::obligatorio).count()
-            + " documentos requeridos.");
+            + " documentos requeridos.",
+        MotivoPresencia.COMPLETO);
   }
 
   /** Cantón del expediente (writing_file); null si no lo tiene: no se asume Guayaquil. */
@@ -381,15 +403,7 @@ public class EjdValidationEvaluationService {
           "FAIL", "Falta marcar el expediente como " + IngestionMode.EXPEDIENTE_FISICO_ESCANEADO_LABEL + ".");
     }
     if (legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
-      PresenciaProducto presencia = presenciaProducto(legalCase);
-      return switch (presencia.resultado()) {
-        case "FAIL" -> new DocumentAvailabilitySnapshot("FAIL", presencia.detalle());
-        case "PASS" -> new DocumentAvailabilitySnapshot("PASS", null);
-        default ->
-            presencia.detalle().startsWith("No hay documentos requeridos")
-                ? new DocumentAvailabilitySnapshot("REVIEW_REQUIRED", presencia.detalle())
-                : new DocumentAvailabilitySnapshot("PASS", presencia.detalle());
-      };
+      return snapshotDe(presenciaProducto(legalCase));
     }
     List<String> required = resolveRequiredDocumentCodes(legalCase);
     String scopeLabel = legalCase.getOperationTypeCode();
@@ -617,6 +631,7 @@ public class EjdValidationEvaluationService {
     List<String> vencidos = new ArrayList<>();
     List<String> porVencer = new ArrayList<>();
     List<String> sinFecha = new ArrayList<>();
+    List<String> ambiguas = new ArrayList<>();
     boolean poderVencido = false;
     for (ResultadoVigencia r : resultados) {
       String tipo = r.docType().toUpperCase(Locale.ROOT);
@@ -629,6 +644,8 @@ public class EjdValidationEvaluationService {
         porVencer.add(r.docNombre() + " (vence " + r.fechaEfectiva() + ")");
       } else if (r.estado() == EstadoVigencia.SIN_FECHA) {
         sinFecha.add(r.docNombre());
+      } else if (r.estado() == EstadoVigencia.FECHA_AMBIGUA) {
+        ambiguas.add(r.docNombre());
       }
     }
     boolean hayEsencialVencido =
@@ -637,7 +654,7 @@ public class EjdValidationEvaluationService {
                 r ->
                     r.estado() == EstadoVigencia.VENCIDO
                         && tiposEsenciales.contains(r.docType().toUpperCase(Locale.ROOT)));
-    if (vencidos.isEmpty() && porVencer.isEmpty() && sinFecha.isEmpty()) {
+    if (vencidos.isEmpty() && porVencer.isEmpty() && sinFecha.isEmpty() && ambiguas.isEmpty()) {
       validation.applyEvaluation("PASS", "Todos los documentos están vigentes.", "v" + rule.getVersion());
     } else {
       StringBuilder sb = new StringBuilder();
@@ -652,6 +669,9 @@ public class EjdValidationEvaluationService {
       }
       if (!sinFecha.isEmpty()) {
         sb.append("Sin fecha de vigencia: ").append(String.join(", ", sinFecha)).append(". ");
+      }
+      if (!ambiguas.isEmpty()) {
+        sb.append("Fecha ambigua (confirme día y mes): ").append(String.join(", ", ambiguas)).append(". ");
       }
       String resultado = hayEsencialVencido ? "FAIL" : "OBSERVATION";
       validation.applyEvaluation(resultado, sb.toString().trim(), "v" + rule.getVersion());

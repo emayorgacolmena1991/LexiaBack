@@ -76,3 +76,9 @@ como modelo.
 | informe_legal.xlsx | (celda) | Fecha en la que se firmo la escritura |
 | informe_legal.xlsx | (celda) | Fecha en la que se salio inscrita la escritura del RP |
 | informe_legal.xlsx | (celda) | Fecha del informe |
+
+# Pendiente de la abogada: cierre y vigencias (no implementado hasta confirmar)
+
+- Vivienda Hipotecada BIESS: confirmar que el tipo de contrato del informe legal lleva la variante «CANCELACIÓN DE HIPOTECA, …» (hoy se aplica así).
+- Sustitución de hipoteca: confirmar o enviar la redacción del tipo de contrato (hoy: «CANCELACIÓN DE HIPOTECA E HIPOTECA ABIERTA Y PROHIBICIÓN VOLUNTARIA DE ENAJENAR Y GRAVAR – producto»).
+- Papeleta: confirmar la vigencia. Hoy vence el día anterior a `fecha_ultimo_proceso_electoral` + `papeleta_vigencia_anios` (parámetros por tenant; por defecto 2023-02-05 y 4 años).

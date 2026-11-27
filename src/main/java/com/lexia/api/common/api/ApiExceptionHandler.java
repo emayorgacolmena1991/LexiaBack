@@ -72,6 +72,9 @@ public class ApiExceptionHandler {
                   if ("email".equals(error.getField())) {
                     return "Ingresa un correo electrónico válido.";
                   }
+                  if ("correo".equals(error.getField())) {
+                    return "El correo de la firma no tiene un formato válido.";
+                  }
                   if ("password".equals(error.getField())) {
                     return "La contraseña debe tener al menos 8 caracteres.";
                   }

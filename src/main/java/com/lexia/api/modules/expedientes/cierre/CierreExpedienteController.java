@@ -6,6 +6,7 @@ import com.lexia.api.modules.expedientes.cierre.CierreExpedienteService.Archivo;
 import com.lexia.api.modules.expedientes.cierre.CierreExpedienteService.CorreoAfiliadoDTO;
 import com.lexia.api.modules.expedientes.cierre.CierreExpedienteService.DatosCierreDTO;
 import com.lexia.api.modules.expedientes.cierre.CierreExpedienteService.DatosCierreRequest;
+import com.lexia.api.modules.expedientes.cierre.CierreExpedienteService.EstadoCartaDTO;
 import com.lexia.api.modules.expedientes.cierre.CierreExpedienteService.PagosCartaRequest;
 import com.lexia.api.modules.identity.AuthorizationService;
 import jakarta.validation.Valid;
@@ -19,6 +20,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -52,17 +55,26 @@ public class CierreExpedienteController {
     return service.guardar(idExpediente, body);
   }
 
+  @GetMapping("/cierre/estado")
+  public EstadoCartaDTO estado(@PathVariable UUID idExpediente) {
+    PermisoExpediente.leer(authorization);
+    return service.estadoCarta(idExpediente);
+  }
+
   @PutMapping("/carta-financiamiento/pagos")
-  public DatosCierreDTO guardarPagos(
+  public EstadoCartaDTO guardarPagos(
       @PathVariable UUID idExpediente, @Valid @RequestBody PagosCartaRequest body) {
     PermisoExpediente.escribir(authorization);
     return service.guardarPagos(idExpediente, body);
   }
 
   @GetMapping("/carta-financiamiento")
-  public ResponseEntity<byte[]> carta(@PathVariable UUID idExpediente) {
+  public ResponseEntity<byte[]> carta(
+      @PathVariable UUID idExpediente,
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+          java.time.LocalDate fecha) {
     PermisoExpediente.leer(authorization);
-    return adjunto(service.carta(idExpediente));
+    return adjunto(service.carta(idExpediente, fecha));
   }
 
   @GetMapping("/informe-legal")
