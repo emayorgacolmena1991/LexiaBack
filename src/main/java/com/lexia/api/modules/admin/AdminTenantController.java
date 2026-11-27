@@ -39,4 +39,14 @@ public class AdminTenantController {
       @Valid @RequestBody AdminDtos.UpdateTenantSecurityRequest request) {
     return tenantAdminService.updateSecuritySettings(request);
   }
+
+  @GetMapping("/firma")
+  public AdminDtos.FirmaEstudio firma() {
+    return tenantAdminService.getFirma();
+  }
+
+  @PatchMapping("/firma")
+  public AdminDtos.FirmaEstudio updateFirma(@Valid @RequestBody AdminDtos.FirmaEstudio request) {
+    return tenantAdminService.updateFirma(request);
+  }
 }

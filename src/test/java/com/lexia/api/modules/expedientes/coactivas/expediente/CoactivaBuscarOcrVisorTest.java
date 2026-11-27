@@ -52,7 +52,7 @@ class CoactivaBuscarOcrVisorTest {
     service =
         new CoactivaExpedienteService(
             expedientes, null, null, null, null, archivos, storage, null, null, null, authorization,
-            null, analisisRepo, null, null, null, cache);
+            null, analisisRepo, null, null, null, cache, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
     expediente = CoactivaExpediente.create(TENANT, UUID.randomUUID(), "025-2024-00026", USER);
     when(expedientes.findByIdAndTenantIdAndDeletedAtIsNull(expediente.getId(), TENANT))
         .thenReturn(Optional.of(expediente));

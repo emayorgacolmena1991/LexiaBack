@@ -224,7 +224,13 @@ public class IngestaMasivaEscrituracionService {
         String tipo = tipoDe(fila, asignacion.tipoDocumento(), file.getOriginalFilename());
         DocumentoCargadoDTO doc = carga.subir(sesion, file);
         if (!IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode)) {
-          carga.asignarTipoHeuristico(sesion, doc.idDocumento(), tipo);
+          // OTRO lleva la descripción del usuario: va como tipo manual (la heurística no la guarda).
+          if (com.lexia.api.modules.expedientes.documentos.LegalDocument.TIPO_OTRO.equals(tipo)) {
+            carga.actualizarTipo(
+                sesion, doc.idDocumento(), new ActualizarTipoRequest(tipo, asignacion.descripcion()));
+          } else {
+            carga.asignarTipoHeuristico(sesion, doc.idDocumento(), tipo);
+          }
         }
         Archivo archivo = Archivo.nuevo(doc.idDocumento(), doc.nombreOriginal(), tipo);
         huboCambios |=
@@ -1238,6 +1244,8 @@ public class IngestaMasivaEscrituracionService {
               confianza));
       boolean[] bloqueada = new boolean[1];
       if (fila != null && lote != null) {
+        // Misma resolución de requisitos que wizard y EJD.V1 (producto + cantón + condiciones).
+        List<String> faltantes = documentosFaltantes(tenantId, fila);
         boolean escrita =
             mutarFila(
                 loteId,
@@ -1260,7 +1268,7 @@ public class IngestaMasivaEscrituracionService {
                   if (bloqueada[0]) {
                     marcarExpedienteBloqueado(actual);
                   } else if (esUltimoArchivo(actual)) {
-                    actual.cerrarOcr(List.of());
+                    actual.cerrarOcr(faltantes);
                   }
                   return true;
                 });
@@ -1661,7 +1669,11 @@ public class IngestaMasivaEscrituracionService {
     return id;
   }
 
-  private List<String> documentosFaltantes(Fila fila) {
+  /**
+   * Obligatorios de la resolución única que no tienen archivo de su tipo. Aviso en la fila
+   * (NARANJA), nunca bloquea. Si la resolución falla se registra y la fila sigue sin aviso.
+   */
+  private List<String> documentosFaltantes(UUID tenantId, Fila fila) {
     if (IngestionMode.FISICO_ESCANEADO.name().equals(fila.ingestionMode) || fila.archivos.isEmpty()) {
       return List.of();
     }
@@ -1673,18 +1685,25 @@ public class IngestaMasivaEscrituracionService {
         }
       }
       List<String> faltan = new ArrayList<>();
-      for (var requisito : productos.detalle(fila.productCode, fila.canton).requisitos()) {
-        if (requisito.mandatory()
-            && StringUtils.hasText(requisito.documentTypeCode())
-            && !presentes.contains(requisito.documentTypeCode())) {
-          faltan.add(
-              StringUtils.hasText(requisito.description())
-                  ? requisito.description()
-                  : requisito.documentTypeCode());
+      var resolucion =
+          productos.resolverRequisitos(tenantId, fila.expedienteId, fila.productCode, fila.canton);
+      for (var requisito : resolucion.requisitos()) {
+        if (requisito.obligatorio()
+            && StringUtils.hasText(requisito.tipo())
+            && !presentes.contains(requisito.tipo())) {
+          String nombre =
+              StringUtils.hasText(requisito.descripcion()) ? requisito.descripcion() : requisito.tipo();
+          if (!faltan.contains(nombre)) {
+            faltan.add(nombre);
+          }
         }
       }
       return faltan;
     } catch (RuntimeException ex) {
+      LOG.warn(
+          "ingesta-masiva faltantes no calculados fila={}: {}",
+          fila.clientRowId,
+          ex.getClass().getSimpleName());
       return List.of();
     }
   }

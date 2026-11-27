@@ -95,6 +95,12 @@ public class ExpedienteSeguimientoService {
         // Sin clasificación registrada el tipo lo puso el usuario: MANUAL.
         caseDocs.actualizarTipo(ctx, saved.idDocumento(), doc.codigoTipoDocumento());
       }
+      // La descripción de un documento OTRO y su compareciente viajan con él.
+      caseDocs.describirOtro(ctx, saved.idDocumento(), doc.descripcion());
+      UUID persona = carga.comparecientesPorDocumento(draftId).get(doc.idDocumento());
+      if (persona != null) {
+        caseDocs.ligarCompareciente(ctx, saved.idDocumento(), persona);
+      }
       ids.put(doc.idDocumento(), saved.idDocumento());
     }
     for (DocumentoOcrResultadoDTO row : ocrDelBorrador(draftId)) {

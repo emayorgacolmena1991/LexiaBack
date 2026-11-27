@@ -15,6 +15,17 @@ public class TenantParameterService {
   public static final String KEY_MFA_REQUIRED = "mfa_required";
   public static final String KEY_CASE_CODE_PATTERN = "case_code_pattern";
   public static final String KEY_SLA_DEFAULT_HOURS = "sla_default_hours";
+  /** Fecha del último proceso electoral (yyyy-MM-dd). Se usa para calcular vigencia de papeleta. */
+  public static final String KEY_FECHA_ULTIMO_PROCESO_ELECTORAL = "fecha_ultimo_proceso_electoral";
+  /** Firma del estudio: correo al afiliado e informe legal («Elaborado por»). Sin valor por defecto. */
+  public static final String KEY_FIRMA_ESTUDIO = "firma_estudio";
+  public static final String KEY_FIRMA_ABOGADO = "firma_abogado";
+  public static final String KEY_FIRMA_REGISTRO = "firma_registro";
+  public static final String KEY_FIRMA_TELEFONO = "firma_telefono";
+  public static final String KEY_FIRMA_CORREO = "firma_correo";
+  /** Ciudad de la carta de financiamiento y del informe legal. */
+  public static final String KEY_FIRMA_CIUDAD = "firma_ciudad";
+  public static final String CIUDAD_POR_DEFECTO = "Guayaquil";
 
   private final TenantParameterRepository parameters;
 

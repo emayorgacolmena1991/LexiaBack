@@ -9,6 +9,9 @@ import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.Documento
 import com.lexia.api.modules.ia.ocr.OcrAzureBatchService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.IniciarProcesamientoResponse;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.PrevalidacionDTO;
+import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.RequisitosExpedienteDTO;
+import com.lexia.api.modules.expedientes.reglas.ProductoBiessService;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoActualizadoDTO;
 import com.lexia.api.modules.expedientes.documentos.CargaDocumentoDtos.TipoPermitidoDTO;
 import com.lexia.api.modules.expedientes.caso.ExpedienteDtos.ResultadoCotejoDTO;
@@ -37,6 +40,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
+import com.lexia.api.modules.expedientes.requisitos.ValidacionesExpedienteService;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ValidacionesExpedienteDTO;
 
 /**
  * Paso 2–3: carga/tipificación + disparo IA (Azure→Gemini/Claude) + prevalidación + cotejo.
@@ -57,18 +62,21 @@ public class CargaDocumentoController {
   private final OcrAzureBatchService ocr;
   private final ClasificacionExpedienteService clasificacionExpediente;
   private final ObjectProvider<AuthorizationService> authorization;
+  private final ValidacionesExpedienteService validacionesService;
 
   public CargaDocumentoController(
       CargaDocumentoService cargaDocumentoService,
       ValidacionIaService validacionIaService,
       OcrAzureBatchService ocr,
       ClasificacionExpedienteService clasificacionExpediente,
-      ObjectProvider<AuthorizationService> authorization) {
+      ObjectProvider<AuthorizationService> authorization,
+      ValidacionesExpedienteService validacionesService) {
     this.cargaDocumentoService = cargaDocumentoService;
     this.validacionIaService = validacionIaService;
     this.ocr = ocr;
     this.clasificacionExpediente = clasificacionExpediente;
     this.authorization = authorization;
+    this.validacionesService = validacionesService;
   }
 
   @PostMapping("/borrador")
@@ -80,6 +88,20 @@ public class CargaDocumentoController {
   @GetMapping("/{idExpediente}/tipos-permitidos")
   public List<TipoPermitidoDTO> tiposPermitidos(@PathVariable String idExpediente) {
     return cargaDocumentoService.tiposPermitidos(idExpediente);
+  }
+
+  /** Requisitos sugeridos del borrador o expediente; id de otro tenant → 404. */
+  @GetMapping("/{idExpediente}/requisitos")
+  public RequisitosExpedienteDTO requisitos(@PathVariable String idExpediente) {
+    requirePermission(PERMISO_LECTURA);
+    RequisitosService.Resolucion r = cargaDocumentoService.requisitosAplicables(idExpediente);
+    return new RequisitosExpedienteDTO(
+        r.productCode(),
+        r.canton(),
+        r.cantonPropio(),
+        r.condiciones(),
+        ProductoBiessService.aItems(r),
+        r.avisos());
   }
 
   @GetMapping("/{idExpediente}/documentos")
@@ -178,6 +200,12 @@ public class CargaDocumentoController {
   @GetMapping("/{idExpediente}/ocr-resultados")
   public List<DocumentoOcrResultadoDTO> ocrResultados(@PathVariable String idExpediente) {
     return cargaDocumentoService.listarOcrResultados(idExpediente);
+  }
+
+  @GetMapping("/{idExpediente}/validaciones")
+  public ValidacionesExpedienteDTO validaciones(@PathVariable String idExpediente) {
+    requirePermission(PERMISO_LECTURA);
+    return validacionesService.validaciones(idExpediente);
   }
 
   /**

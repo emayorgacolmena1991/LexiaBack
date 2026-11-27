@@ -23,6 +23,68 @@ public class MinutaViviendaData {
   @JsonProperty("nombre_conyuge_1")
   private String nombreConyuge1 = "";
 
+  /**
+   * Compareciente de la lista del expediente (fase 4). Viaja en el payload de la remisión: la
+   * notaría calcula las alertas de edad y discapacidad sobre la lista completa.
+   */
+  public record PersonaMinuta(
+      String parte,
+      String rol,
+      String nombres,
+      String identificacion,
+      String estadoCivil,
+      String fechaNacimiento,
+      Boolean discapacidad,
+      boolean personaJuridica) {}
+
+  /** Todos los comparecientes, en orden (vacío si el expediente no los tiene). */
+  @JsonProperty("comparecientes")
+  private java.util.List<PersonaMinuta> comparecientes = new java.util.ArrayList<>();
+
+  /** Compradores redactados en lista (N personas), para plantillas futuras e informe legal. */
+  @JsonProperty("compradores_texto")
+  private String compradoresTexto = "";
+
+  /** Vendedores redactados en lista (N personas). */
+  @JsonProperty("vendedores_texto")
+  private String vendedoresTexto = "";
+
+  public java.util.List<PersonaMinuta> getComparecientes() {
+    return comparecientes;
+  }
+
+  public void setComparecientes(java.util.List<PersonaMinuta> comparecientes) {
+    this.comparecientes = comparecientes == null ? new java.util.ArrayList<>() : comparecientes;
+  }
+
+  public String getCompradoresTexto() {
+    return compradoresTexto;
+  }
+
+  public void setCompradoresTexto(String compradoresTexto) {
+    this.compradoresTexto = compradoresTexto == null ? "" : compradoresTexto;
+  }
+
+  public String getVendedoresTexto() {
+    return vendedoresTexto;
+  }
+
+  public void setVendedoresTexto(String vendedoresTexto) {
+    this.vendedoresTexto = vendedoresTexto == null ? "" : vendedoresTexto;
+  }
+
+  /** Número de instancia de proceso del expediente ({@code legal_case.numero_instancia}). */
+  @JsonProperty("nip")
+  private String nip = "";
+
+  public String getNip() {
+    return nip;
+  }
+
+  public void setNip(String nip) {
+    this.nip = nip == null ? "" : nip;
+  }
+
   @JsonProperty("cedula_conyuge_1")
   private String cedulaConyuge1 = "";
 
@@ -407,6 +469,7 @@ public class MinutaViviendaData {
     ETIQUETAS.put("fecha_inscripcion_antecedente", "Fecha de inscripción del antecedente");
     ETIQUETAS.put("repertorio_antecedente", "Repertorio del antecedente");
     ETIQUETAS.put("notaria_antecedente", "Notaría del antecedente");
+    ETIQUETAS.put("nip", "NIP (número de instancia de proceso)");
   }
 
   public static String etiqueta(String campo) {
@@ -1007,6 +1070,9 @@ public class MinutaViviendaData {
   public Map<String, Object> toTemplateMap() {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put("nombre_conyuge_1", blankToNodata(nombreConyuge1));
+    map.put("compradores_texto", blankToNodata(compradoresTexto));
+    map.put("vendedores_texto", blankToNodata(vendedoresTexto));
+    map.put("nip", blankToNodata(nip));
     map.put("cedula_conyuge_1", digitosConLetras(cedulaConyuge1));
     map.put("nombre_conyuge_2", blankToNodata(nombreConyuge2));
     map.put("cedula_conyuge_2", digitosConLetras(cedulaConyuge2));

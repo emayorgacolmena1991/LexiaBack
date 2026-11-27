@@ -95,6 +95,15 @@ public final class AdminDtos {
 
   public record UpdateTenantSecurityRequest(Integer inviteTtlHours, Boolean mfaRequired) {}
 
+  /** Firma del estudio (correo al afiliado, informe legal). null en la petición = no se toca. */
+  public record FirmaEstudio(
+      @Size(max = 160) String estudio,
+      @Size(max = 160) String abogado,
+      @Size(max = 40) String registro,
+      @Size(max = 40) String telefono,
+      @Size(max = 160) String correo,
+      @Size(max = 80) String ciudad) {}
+
   public record E2eInviteResponse(
       UUID invitationId, String email, String token, Instant expiresAt) {}
 

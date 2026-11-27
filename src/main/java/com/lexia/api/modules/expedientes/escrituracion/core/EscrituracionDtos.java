@@ -15,13 +15,35 @@ public final class EscrituracionDtos {
 
   public record ProductoItem(String code, String label, int sortOrder, int requisitosCount) {}
 
+  /**
+   * Requisito resuelto (producto + cantón + condiciones). {@code esencial}: bloquea el avance si
+   * falta; {@code porPersona}/{@code rolPersona}: uno por compareciente; {@code condicion}: null si
+   * aplica siempre.
+   */
   public record DocumentoRequisitoItem(
       String documentTypeCode,
       String description,
       boolean mandatory,
       int maxValidityDays,
       String canton,
-      int sortOrder) {}
+      int sortOrder,
+      boolean esencial,
+      boolean porPersona,
+      String rolPersona,
+      String condicion,
+      /** Requisito de una persona concreta; null = basta un documento del tipo. */
+      String comparecienteId) {
+
+    public DocumentoRequisitoItem(
+        String documentTypeCode,
+        String description,
+        boolean mandatory,
+        int maxValidityDays,
+        String canton,
+        int sortOrder) {
+      this(documentTypeCode, description, mandatory, maxValidityDays, canton, sortOrder, false, false, null, null, null);
+    }
+  }
 
   public record PlantillaItem(
       String templateKind, String label, boolean companySuppliesCv, String storageKey) {}
@@ -186,7 +208,9 @@ public final class EscrituracionDtos {
       java.util.Map<String, String> origenes,
       java.util.Map<String, ValorExtraido> valoresExtraidos,
       DatosBiessMinuta datosBiess,
-      java.util.Map<String, String> camposBiess) {}
+      java.util.Map<String, String> camposBiess,
+      /** P. ej. más vendedores de los que admite la plantilla (no bloquea). */
+      List<String> avisos) {}
 
   /**
    * Valor al que vuelve "Restaurar" un campo corregido a mano.
@@ -255,4 +279,16 @@ public final class EscrituracionDtos {
       String ingestionMode,
       EstudioTituloResponse estudio,
       List<MinutaItem> minutas) {}
+
+  /** Vigencia calculada por el sistema para un documento clasificado. */
+  public record VigenciaDocumentoDTO(
+      String documentId,
+      String docType,
+      String nombre,
+      String estado,
+      String mensaje,
+      String fechaEfectiva) {}
+
+  /** Panel de validaciones del expediente: vigencias por documento. */
+  public record ValidacionesExpedienteDTO(List<VigenciaDocumentoDTO> vigencias) {}
 }

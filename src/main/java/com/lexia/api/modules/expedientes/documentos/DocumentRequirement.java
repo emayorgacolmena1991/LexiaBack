@@ -40,6 +40,22 @@ public class DocumentRequirement {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
+  /** Código de {@code CondicionCaso}; null = aplica siempre (V122). */
+  @Column(length = 40)
+  private String condicion;
+
+  /** Se pide uno por compareciente del rol indicado. */
+  @Column(name = "por_persona", nullable = false)
+  private boolean porPersona;
+
+  /** COMPRADOR, VENDEDOR, AMBOS, REPRESENTANTE o null. */
+  @Column(name = "rol_persona", length = 16)
+  private String rolPersona;
+
+  /** Ausente, vencido o con datos que no coinciden bloquea el avance (EJD.V1). */
+  @Column(nullable = false)
+  private boolean esencial;
+
   public UUID getId() {
     return id;
   }
@@ -74,5 +90,21 @@ public class DocumentRequirement {
 
   public int getSortOrder() {
     return sortOrder;
+  }
+
+  public String getCondicion() {
+    return condicion;
+  }
+
+  public boolean isPorPersona() {
+    return porPersona;
+  }
+
+  public String getRolPersona() {
+    return rolPersona;
+  }
+
+  public boolean isEsencial() {
+    return esencial;
   }
 }

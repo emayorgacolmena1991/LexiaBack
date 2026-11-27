@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
@@ -13,6 +14,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.lexia.api.common.api.ApiException;
 import com.lexia.api.common.storage.ArchivoStorageLocal;
 import com.lexia.api.modules.actos.ActoNotarialService;
 import com.lexia.api.modules.auth.AuthContext;
@@ -262,5 +264,104 @@ class ClasificacionBorradorTest {
     assertEquals(LegalDocument.ESTADO_ERROR, clasificar(docId).estado());
     assertEquals(LegalDocument.ESTADO_ERROR, enElWizard(docId).clasificacionEstado());
     assertNull(enElWizard(docId).tipoDocumento());
+  }
+
+  // --- Fase 1: documento OTRO con descripción (carga libre) ---
+
+  @Test
+  void otroConDescripcionSeAceptaAunqueNoEsteEnElCatalogoYPasaAlExpediente() {
+    String docId = subir("junta.pdf");
+
+    carga.actualizarTipo(
+        DRAFT.toString(),
+        docId,
+        new ActualizarTipoRequest("OTRO", "  Certificado   de la junta parroquial "));
+
+    DocumentoCargadoDTO wizard = enElWizard(docId);
+    assertEquals("OTRO", wizard.tipoDocumento());
+    assertEquals("Certificado de la junta parroquial", wizard.descripcionTipo());
+    assertEquals(LegalDocument.ORIGEN_MANUAL, wizard.clasificacionOrigen());
+    assertEquals(
+        Map.of(docId, "Certificado de la junta parroquial"), carga.descripcionesOtro(DRAFT.toString()));
+
+    LegalDocument promovido = promover();
+
+    assertEquals("OTRO", promovido.getDocType());
+    assertEquals("Certificado de la junta parroquial", promovido.getDescripcionTipo());
+    assertEquals(
+        Map.of(promovido.getId().toString(), "Certificado de la junta parroquial"),
+        carga.descripcionesOtro(CASO.toString()));
+  }
+
+  @Test
+  void otroSinDescripcionDa400() {
+    String docId = subir("junta.pdf");
+
+    ApiException sinTexto =
+        assertThrows(
+            ApiException.class,
+            () -> carga.actualizarTipo(DRAFT.toString(), docId, new ActualizarTipoRequest("OTRO", "  ")));
+    ApiException nulo =
+        assertThrows(
+            ApiException.class,
+            () -> carga.actualizarTipo(DRAFT.toString(), docId, new ActualizarTipoRequest("OTRO")));
+
+    assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, sinTexto.getStatus());
+    assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, nulo.getStatus());
+    assertNull(enElWizard(docId).tipoDocumento(), "no se asigna el tipo");
+  }
+
+  @Test
+  void otroConDescripcionDeMasDe120CaracteresDa400() {
+    String docId = subir("junta.pdf");
+
+    ApiException e =
+        assertThrows(
+            ApiException.class,
+            () ->
+                carga.actualizarTipo(
+                    DRAFT.toString(), docId, new ActualizarTipoRequest("OTRO", "x".repeat(121))));
+
+    assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, e.getStatus());
+  }
+
+  @Test
+  void tipoFueraDelCatalogoQueNoEsOtroSigueRechazado() {
+    String docId = subir("junta.pdf");
+
+    ApiException e =
+        assertThrows(
+            ApiException.class,
+            () -> carga.actualizarTipo(DRAFT.toString(), docId, new ActualizarTipoRequest("PODER")));
+
+    assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, e.getStatus());
+  }
+
+  @Test
+  void enElExpedienteSalirDeOtroBorraLaDescripcion() {
+    subir("junta.pdf");
+    String caseDocId = promover().getId().toString();
+
+    carga.actualizarTipo(CASO.toString(), caseDocId, new ActualizarTipoRequest("OTRO", "Poder especial"));
+    LegalDocument doc = guardados.get(UUID.fromString(caseDocId));
+    assertEquals("OTRO", doc.getDocType());
+    assertEquals("Poder especial", doc.getDescripcionTipo());
+
+    carga.actualizarTipo(CASO.toString(), caseDocId, new ActualizarTipoRequest("CEDULA", "ignorada"));
+    assertEquals("CEDULA", doc.getDocType());
+    assertNull(doc.getDescripcionTipo());
+    assertEquals(Map.of(), carga.descripcionesOtro(CASO.toString()));
+  }
+
+  @Test
+  void elClasificadorPuedeSugerirOtroPeroNuncaLoAsigna() {
+    String docId = subir("raro.pdf");
+    llmResponde("NO_EXISTE", 0.99);
+
+    Resultado r = clasificar(docId);
+
+    assertEquals("OTRO", r.tipoDetectado());
+    assertNull(r.tipoAsignado());
+    assertEquals(LegalDocument.ESTADO_POR_REVISAR, enElWizard(docId).clasificacionEstado());
   }
 }

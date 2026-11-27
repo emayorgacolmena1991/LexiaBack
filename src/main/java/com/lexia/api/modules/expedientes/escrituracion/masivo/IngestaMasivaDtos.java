@@ -27,7 +27,13 @@ public final class IngestaMasivaDtos {
   public record AsignacionArchivo(
       @NotBlank @Size(max = 80) String clientRowId,
       @NotBlank @Size(max = 40) String borradorId,
-      @Size(max = 64) String tipoDocumento) {}
+      @Size(max = 64) String tipoDocumento,
+      @Size(max = 120) String descripcion) {
+
+    public AsignacionArchivo(String clientRowId, String borradorId, String tipoDocumento) {
+      this(clientRowId, borradorId, tipoDocumento, null);
+    }
+  }
 
   public record ArchivoStatus(
       String fileId,

@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.ejd;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -9,6 +10,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,14 @@ import com.lexia.api.modules.expedientes.reglas.RuleDef;
 import com.lexia.api.modules.expedientes.reglas.RuleDefRepository;
 import com.lexia.api.modules.expedientes.proceso.ValidationDef;
 import com.lexia.api.modules.expedientes.proceso.ValidationDefRepository;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService.RequisitoAplicable;
+import com.lexia.api.modules.expedientes.requisitos.RequisitosService.Resolucion;
+import com.lexia.api.modules.expedientes.requisitos.VigenciaDocumentoService;
+import com.lexia.api.modules.expedientes.requisitos.VigenciaDocumentoService.EstadoVigencia;
+import com.lexia.api.modules.expedientes.requisitos.VigenciaDocumentoService.ResultadoVigencia;
+import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -61,6 +71,14 @@ public class EjdValidationEvaluationService {
   private final WritingFileRepository writingFiles;
   private final TitleStudyRepository titleStudies;
   private final TitleObservationRepository titleObservations;
+  private final RequisitosService requisitosService;
+  /** Setter injection: condicional, puede ser null en tests sin auth. */
+  private VigenciaDocumentoService vigenciaService;
+
+  @Autowired
+  void setVigenciaDocumentoService(ObjectProvider<VigenciaDocumentoService> provider) {
+    this.vigenciaService = provider.getIfAvailable();
+  }
 
   public EjdValidationEvaluationService(
       ValidationDefRepository validationDefs,
@@ -76,7 +94,8 @@ public class EjdValidationEvaluationService {
       LexiaRulesEngine rulesEngine,
       WritingFileRepository writingFiles,
       TitleStudyRepository titleStudies,
-      TitleObservationRepository titleObservations) {
+      TitleObservationRepository titleObservations,
+      RequisitosService requisitos) {
     this.validationDefs = validationDefs;
     this.ruleDefs = ruleDefs;
     this.caseValidations = caseValidations;
@@ -91,6 +110,7 @@ public class EjdValidationEvaluationService {
     this.writingFiles = writingFiles;
     this.titleStudies = titleStudies;
     this.titleObservations = titleObservations;
+    this.requisitosService = requisitos;
   }
 
   @Transactional
@@ -193,6 +213,10 @@ public class EjdValidationEvaluationService {
     }
 
     boolean fisico = IngestionMode.from(legalCase.getIngestionMode()).isFisicoEscaneado();
+    if (!fisico && legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
+      evaluateProductPresence(legalCase, validation, rule);
+      return;
+    }
     List<String> required = resolveRequiredDocumentCodes(legalCase);
     String scopeLabel =
         legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()
@@ -248,10 +272,102 @@ public class EjdValidationEvaluationService {
     caseValidations.save(validation);
   }
 
+  /** Resultado de presencia documental: PASS, FAIL u OBSERVATION con su texto. */
+  private record PresenciaProducto(String resultado, String detalle) {}
+
+  /**
+   * Producto BIESS: misma resolución que wizard e ingesta (producto + cantón + condiciones
+   * confirmadas). Solo los esenciales obligatorios ausentes dan FAIL; los demás obligatorios
+   * (cantonales, condicionales) y el expediente sin cantón dan aviso (OBSERVATION, no bloquea).
+   */
+  private void evaluateProductPresence(LegalCase legalCase, CaseValidation validation, RuleDef rule) {
+    PresenciaProducto presencia = presenciaProducto(legalCase);
+    validation.applyEvaluation(presencia.resultado(), presencia.detalle(), "v" + rule.getVersion());
+    caseValidations.save(validation);
+  }
+
+  private PresenciaProducto presenciaProducto(LegalCase legalCase) {
+    UUID tenantId = legalCase.getTenantId();
+    Resolucion resolucion =
+        requisitosService.resolverExpediente(
+            tenantId, legalCase.getId(), legalCase.getProductCode(), cantonDe(legalCase));
+    if (resolucion.requisitos().isEmpty()) {
+      return new PresenciaProducto(
+          "OBSERVATION",
+          "No hay documentos requeridos configurados para "
+              + legalCase.getProductCode()
+              + "; revise la parametrización.");
+    }
+    // Tipo presente y tipo|persona presente (documento ligado a un compareciente).
+    Set<String> present = new HashSet<>();
+    for (LegalDocument document :
+        documents.findByCaseIdAndTenantIdAndDeletedAtIsNullOrderByUpdatedAtDesc(
+            legalCase.getId(), tenantId)) {
+      if (document.getDocType() != null && !document.getDocType().isBlank()) {
+        String tipo = document.getDocType().trim().toUpperCase(Locale.ROOT);
+        present.add(tipo);
+        if (document.getComparecienteId() != null) {
+          present.add(tipo + "|" + document.getComparecienteId());
+        }
+      }
+    }
+    List<String> faltanEsenciales = new java.util.ArrayList<>();
+    List<String> faltanOtros = new java.util.ArrayList<>();
+    Set<String> vistos = new HashSet<>();
+    for (RequisitoAplicable r : resolucion.requisitos()) {
+      String codigo = r.tipo().trim().toUpperCase(Locale.ROOT);
+      String clave = r.comparecienteId() == null ? codigo : codigo + "|" + r.comparecienteId();
+      if (!r.obligatorio() || present.contains(clave) || !vistos.add(clave + "|" + r.esencial())) {
+        continue;
+      }
+      String nombre =
+          r.descripcion() != null && !r.descripcion().isBlank()
+              ? r.descripcion()
+              : LexiaRulesEngine.nombreLegible(codigo);
+      (r.esencial() ? faltanEsenciales : faltanOtros).add(nombre);
+    }
+    String avisos =
+        resolucion.avisos().isEmpty() ? "" : " " + String.join(" ", resolucion.avisos());
+    if (!faltanEsenciales.isEmpty()) {
+      return new PresenciaProducto(
+          "FAIL",
+          "Faltan documentos esenciales: "
+              + String.join(", ", faltanEsenciales)
+              + "."
+              + (faltanOtros.isEmpty() ? "" : " Además faltan: " + String.join(", ", faltanOtros) + ".")
+              + avisos);
+    }
+    if (!faltanOtros.isEmpty() || !avisos.isEmpty()) {
+      return new PresenciaProducto(
+          "OBSERVATION",
+          "Están los documentos esenciales."
+              + (faltanOtros.isEmpty() ? "" : " Faltan (no bloquea): " + String.join(", ", faltanOtros) + ".")
+              + avisos);
+    }
+    return new PresenciaProducto(
+        "PASS",
+        "Están cargados los "
+            + resolucion.requisitos().stream().filter(RequisitoAplicable::obligatorio).count()
+            + " documentos requeridos.");
+  }
+
+  /** Cantón del expediente (writing_file); null si no lo tiene: no se asume Guayaquil. */
+  private String cantonDe(LegalCase legalCase) {
+    return writingFiles
+        .findByCaseIdAndTenantIdAndDeletedAtIsNull(legalCase.getId(), legalCase.getTenantId())
+        .map(
+            file ->
+                file.getCanton() != null && !file.getCanton().isBlank()
+                    ? file.getCanton()
+                    : file.getMunicipality())
+        .orElse(null);
+  }
+
   public record DocumentAvailabilitySnapshot(String gateResult, String detail) {}
 
   /**
-   * Misma lógica que EJD.V1 (documentos requeridos), para el gate G-001 y el workspace.
+   * Misma lógica que EJD.V1 (documentos requeridos), para el gate G-001 y el workspace. Con
+   * producto BIESS solo bloquean los esenciales: lo no esencial faltante pasa el gate con aviso.
    */
   @Transactional(readOnly = true)
   public DocumentAvailabilitySnapshot snapshotForGateG001(LegalCase legalCase) {
@@ -264,11 +380,19 @@ public class EjdValidationEvaluationService {
       return new DocumentAvailabilitySnapshot(
           "FAIL", "Falta marcar el expediente como " + IngestionMode.EXPEDIENTE_FISICO_ESCANEADO_LABEL + ".");
     }
+    if (legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
+      PresenciaProducto presencia = presenciaProducto(legalCase);
+      return switch (presencia.resultado()) {
+        case "FAIL" -> new DocumentAvailabilitySnapshot("FAIL", presencia.detalle());
+        case "PASS" -> new DocumentAvailabilitySnapshot("PASS", null);
+        default ->
+            presencia.detalle().startsWith("No hay documentos requeridos")
+                ? new DocumentAvailabilitySnapshot("REVIEW_REQUIRED", presencia.detalle())
+                : new DocumentAvailabilitySnapshot("PASS", presencia.detalle());
+      };
+    }
     List<String> required = resolveRequiredDocumentCodes(legalCase);
-    String scopeLabel =
-        legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()
-            ? legalCase.getProductCode()
-            : legalCase.getOperationTypeCode();
+    String scopeLabel = legalCase.getOperationTypeCode();
     if (scopeLabel == null || scopeLabel.isBlank()) {
       return new DocumentAvailabilitySnapshot(
           "REVIEW_REQUIRED", "Asigne producto BIESS u operación para evaluar la documentación.");
@@ -348,22 +472,7 @@ public class EjdValidationEvaluationService {
       return List.of(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
     }
     UUID tenantId = legalCase.getTenantId();
-    if (legalCase.getProductCode() != null && !legalCase.getProductCode().isBlank()) {
-      String product = legalCase.getProductCode().trim().toUpperCase(Locale.ROOT);
-      List<String> fromProduct =
-          documentRequirements
-              .findByTenantIdAndProductCodeOrderBySortOrderAsc(tenantId, product)
-              .stream()
-              .filter(DocumentRequirement::isMandatory)
-              .filter(r -> "ALL".equalsIgnoreCase(r.getCanton()))
-              .map(DocumentRequirement::getDocumentTypeCode)
-              .map(c -> c.trim().toUpperCase(Locale.ROOT))
-              .distinct()
-              .toList();
-      if (!fromProduct.isEmpty()) {
-        return fromProduct;
-      }
-    }
+    // Con producto BIESS la presencia la evalúa evaluateProductPresence (resolución única).
 
     String operation = legalCase.getOperationTypeCode();
     if (operation == null || operation.isBlank()) {
@@ -476,25 +585,76 @@ public class EjdValidationEvaluationService {
           "PENDING",
           "Aún no hay documentos clasificados para revisar su vigencia.",
           "v" + rule.getVersion());
-    } else {
-      Map<String, DocumentRequirement> requisitos = requisitosProducto(legalCase);
-      List<String> revisar =
-          typedDocs.stream()
-              .map(
-                  doc -> {
-                    DocumentRequirement requisito =
-                        requisitos.get(doc.getDocType().trim().toUpperCase(Locale.ROOT));
-                    return requisito == null
-                        ? "'" + doc.getName() + "'"
-                        : "'" + doc.getName() + "' (máx. " + requisito.getMaxValidityDays() + " días)";
-                  })
-              .toList();
+      caseValidations.save(validation);
+      return;
+    }
+    if (vigenciaService == null) {
+      // Sin servicio de vigencia (entorno sin auth), usar texto de aviso genérico.
       validation.applyEvaluation(
           "OBSERVATION",
-          "LEXIA aún no lee la fecha de emisión: verifique manualmente la vigencia de "
-              + String.join(", ", revisar)
-              + ".",
+          "Verifique manualmente la vigencia de los " + typedDocs.size() + " documento(s) clasificado(s).",
           "v" + rule.getVersion());
+      caseValidations.save(validation);
+      return;
+    }
+    Resolucion resolucion =
+        requisitosService.resolverExpediente(
+            legalCase.getTenantId(),
+            legalCase.getId(),
+            legalCase.getProductCode(),
+            cantonDe(legalCase));
+    Set<String> tiposEsenciales =
+        resolucion.requisitos().stream()
+            .filter(r -> r.obligatorio() && r.esencial())
+            .map(r -> r.tipo().trim().toUpperCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+    List<ResultadoVigencia> resultados =
+        vigenciaService.calcular(
+            legalCase.getTenantId(),
+            legalCase.getId(),
+            typedDocs,
+            resolucion.requisitos());
+    List<String> vencidos = new ArrayList<>();
+    List<String> porVencer = new ArrayList<>();
+    List<String> sinFecha = new ArrayList<>();
+    boolean poderVencido = false;
+    for (ResultadoVigencia r : resultados) {
+      String tipo = r.docType().toUpperCase(Locale.ROOT);
+      if (r.estado() == EstadoVigencia.VENCIDO) {
+        vencidos.add(r.docNombre() + " (" + r.fechaEfectiva() + ")");
+        if ("PODER".equals(tipo)) {
+          poderVencido = true;
+        }
+      } else if (r.estado() == EstadoVigencia.POR_VENCER) {
+        porVencer.add(r.docNombre() + " (vence " + r.fechaEfectiva() + ")");
+      } else if (r.estado() == EstadoVigencia.SIN_FECHA) {
+        sinFecha.add(r.docNombre());
+      }
+    }
+    boolean hayEsencialVencido =
+        resultados.stream()
+            .anyMatch(
+                r ->
+                    r.estado() == EstadoVigencia.VENCIDO
+                        && tiposEsenciales.contains(r.docType().toUpperCase(Locale.ROOT)));
+    if (vencidos.isEmpty() && porVencer.isEmpty() && sinFecha.isEmpty()) {
+      validation.applyEvaluation("PASS", "Todos los documentos están vigentes.", "v" + rule.getVersion());
+    } else {
+      StringBuilder sb = new StringBuilder();
+      if (!vencidos.isEmpty()) {
+        sb.append("Vencidos: ").append(String.join(", ", vencidos)).append(". ");
+      }
+      if (poderVencido) {
+        sb.append("El poder está vencido: requiere RAZÓN DE VIGENCIA DE PODER. ");
+      }
+      if (!porVencer.isEmpty()) {
+        sb.append("Por vencer: ").append(String.join(", ", porVencer)).append(". ");
+      }
+      if (!sinFecha.isEmpty()) {
+        sb.append("Sin fecha de vigencia: ").append(String.join(", ", sinFecha)).append(". ");
+      }
+      String resultado = hayEsencialVencido ? "FAIL" : "OBSERVATION";
+      validation.applyEvaluation(resultado, sb.toString().trim(), "v" + rule.getVersion());
     }
     caseValidations.save(validation);
   }

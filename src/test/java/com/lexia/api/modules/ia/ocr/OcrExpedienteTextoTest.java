@@ -50,4 +50,33 @@ class OcrExpedienteTextoTest {
     assertFalse(payload.contains("MINUTA_COMPRAVENTA_TERCERO"));
     assertFalse(payload.contains("MINUTA TERCERO"));
   }
+
+  @Test
+  void documentoOtroVaConSuDescripcionComoTipo() {
+    String payload =
+        OcrExpedienteTexto.documentos(
+            List.of(
+                new DocOcr("cedula-1", "CEDULA", "cedula.pdf", "JUAN PEREZ 0102030405"),
+                new DocOcr("otro-2", "OTRO", "junta.pdf", "certificado de la junta")));
+
+    String conDescripcion =
+        OcrExpedienteTexto.conDescripcionesOtro(
+            payload, java.util.Map.of("otro-2", "Certificado de la junta \"parroquial\""));
+
+    assertTrue(
+        conDescripcion.contains(
+            "<documento id=\"otro-2\" tipo=\"OTRO: Certificado de la junta &quot;parroquial&quot;\""
+                + " nombre=\"junta.pdf\">"));
+    assertTrue(conDescripcion.contains("<documento id=\"cedula-1\" tipo=\"CEDULA\" nombre=\"cedula.pdf\">"));
+    assertTrue(conDescripcion.contains("certificado de la junta"));
+    List<DocOcr> cabeceras = OcrExpedienteTexto.cabeceras(conDescripcion);
+    assertTrue(cabeceras.get(1).tipo().startsWith(OcrExpedienteTexto.PREFIJO_OTRO));
+  }
+
+  @Test
+  void sinDescripcionesElTextoNoCambia() {
+    String payload =
+        OcrExpedienteTexto.documentos(List.of(new DocOcr("x", "OTRO", null, "texto")));
+    assertTrue(payload.equals(OcrExpedienteTexto.conDescripcionesOtro(payload, java.util.Map.of())));
+  }
 }

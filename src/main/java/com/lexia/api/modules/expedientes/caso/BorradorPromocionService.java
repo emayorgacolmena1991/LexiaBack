@@ -24,6 +24,25 @@ public class BorradorPromocionService {
   private final LegalCaseRepository legalCases;
   private final ObjectProvider<CaseService> caseServices;
   private final ObjectProvider<ExpedienteSeguimientoService> seguimiento;
+  /** Opcional (setter): las condiciones del caso del borrador pasan al expediente. */
+  private ObjectProvider<com.lexia.api.modules.expedientes.requisitos.CondicionesCasoService> condiciones;
+
+  /** Opcional (setter): los comparecientes del borrador pasan al expediente. */
+  private ObjectProvider<com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+      comparecientes;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setComparecientes(
+      ObjectProvider<com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+          comparecientes) {
+    this.comparecientes = comparecientes;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setCondiciones(
+      ObjectProvider<com.lexia.api.modules.expedientes.requisitos.CondicionesCasoService> condiciones) {
+    this.condiciones = condiciones;
+  }
 
   public BorradorPromocionService(
       ExpedienteBorradorStore borradores,
@@ -44,6 +63,19 @@ public class BorradorPromocionService {
     UUID caseId = asegurarExpediente(request.draftId(), request);
     CaseService cases = requireCases();
     return cases.getCase(caseId);
+  }
+
+  /** Id oficial sin promover: el expediente, o el expediente al que ya se promovió el borrador. */
+  @Transactional(readOnly = true)
+  public java.util.Optional<UUID> expedienteOficial(UUID id) {
+    UUID tenantId = AuthContext.require().tenantId();
+    if (legalCases.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId).isPresent()) {
+      return java.util.Optional.of(id);
+    }
+    return borradores
+        .find(id, tenantId)
+        .map(ExpedienteBorrador::getPromotedCaseId)
+        .filter(c -> legalCases.findByIdAndTenantIdAndDeletedAtIsNull(c, tenantId).isPresent());
   }
 
   /** Id oficial. Si {@code id} ya es expediente, lo devuelve. Si es borrador, lo promueve. */
@@ -72,6 +104,14 @@ public class BorradorPromocionService {
     CaseDetailItem created = requireCases().createCase(toCreateRequest(draft, extra));
     borradores.marcarPromovido(draft.getId(), tenantId, created.id());
     seguimiento.ifAvailable(service -> service.vincularBorrador(draft.getId().toString(), created.id()));
+    if (condiciones != null) {
+      condiciones.ifAvailable(
+          service -> service.moverDeBorrador(tenantId, draft.getId(), created.id()));
+    }
+    if (comparecientes != null) {
+      comparecientes.ifAvailable(
+          service -> service.moverDeBorrador(tenantId, draft.getId(), created.id()));
+    }
     return created.id();
   }
 

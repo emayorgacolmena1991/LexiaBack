@@ -41,7 +41,12 @@ class CargaDocumentoPermisosTest {
     doReturn(authorization).when(provider).getIfAvailable();
     controller =
         new CargaDocumentoController(
-            carga, mock(ValidacionIaService.class), ocr, mock(ClasificacionExpedienteService.class), provider);
+            carga,
+            mock(ValidacionIaService.class),
+            ocr,
+            mock(ClasificacionExpedienteService.class),
+            provider,
+            mock(com.lexia.api.modules.expedientes.requisitos.ValidacionesExpedienteService.class));
     reupload = new DocumentReuploadController(ocr, provider);
     doThrow(new AuthException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Sin permiso"))
         .when(authorization)

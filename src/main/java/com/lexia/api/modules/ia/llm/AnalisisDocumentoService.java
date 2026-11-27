@@ -26,6 +26,25 @@ public interface AnalisisDocumentoService {
   record ClasificacionDocumento(String tipo, double confianza, String modelo) {}
 
   /**
+   * Condiciones del caso a partir del OCR del expediente ({@code <documento id tipo>}). Salida
+   * estructurada: solo códigos de {@code opciones} (lista cerrada), con el id del documento, la
+   * evidencia breve y la confianza 0-1. Una llamada, sin reintentos, con {@code limite} como
+   * timeout. Lanza excepción si no puede responder. Default: no soportado.
+   */
+  default DeteccionCondiciones detectarCondiciones(
+      String ocrMarcado, java.util.List<OpcionCondicion> opciones, java.time.Duration limite) {
+    throw new UnsupportedOperationException(
+        "Detección de condiciones no disponible para este proveedor LLM.");
+  }
+
+  /** Código de condición y qué buscar en los documentos. */
+  record OpcionCondicion(String codigo, String pista) {}
+
+  record CondicionDetectada(String codigo, String documentoId, String evidencia, double confianza) {}
+
+  record DeteccionCondiciones(java.util.List<CondicionDetectada> condiciones, String modelo) {}
+
+  /**
    * Una sola llamada por expediente: extracción por documento (cotejo) + datos consolidados +
    * dictamen. El prompt ya viene resuelto. El OCR llega marcado por archivo
    * ({@code <documento id="...">}), sin PDF unificado.

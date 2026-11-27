@@ -58,3 +58,21 @@ Puntos exactos a reemplazar, todos dentro de `{{?tiene_comprador_2}}…{{/tiene_
 Cuando llegue la redacción: partir cada sección en `{{?compradores_casados_entre_si}}` (texto actual) y una
 sección nueva para no casados (agregar su dato en `secciones()`), con `tools/plantillas/compradores_condicionales.py`
 como modelo.
+
+# Comentarios de la carta de financiamiento
+
+| Plantilla | Párrafo | Comentario |
+|---|---|---|
+| carta_financiamiento.docx | Yo {{vendedores_identificacion}}, en calidad de VENDEDOR(ES), y {{compradores_identificacion}},  en calidad de COMPRADOR | Se coloca solo nombre y cedula de los compareciente a la CV |
+| carta_financiamiento.docx | Adicionalmente, declaramos expresamente que hemos realizado la simulación en la aplicación informática facilitada por el | Se coloca el número de NIP, identificación del proceso |
+| carta_financiamiento.docx | Para constancia de lo acordado, las partes suscriben el presente documento en la ciudad de Guayaquil,  {{fecha_carta}} | Fecha en la que firman |
+
+# Instrucciones quitadas del informe legal
+
+| Plantilla | Celda | Instrucción |
+|---|---|---|
+| informe_legal.xlsx | (celda) | Se coloca el valor que deseembolsa el BIESS |
+| informe_legal.xlsx | (celda) | Se coloca el número de Notaria con la que se trabajo |
+| informe_legal.xlsx | (celda) | Fecha en la que se firmo la escritura |
+| informe_legal.xlsx | (celda) | Fecha en la que se salio inscrita la escritura del RP |
+| informe_legal.xlsx | (celda) | Fecha del informe |

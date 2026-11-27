@@ -65,6 +65,14 @@ public class LegalDocument implements Persistable<UUID> {
   @Column(length = 500)
   private String observacion;
 
+  /** Descripción que escribe el usuario para un documento OTRO (V122). */
+  @Column(name = "descripcion_tipo", length = MAX_DESCRIPCION_OTRO)
+  private String descripcionTipo;
+
+  /** Persona a la que pertenece (cédula, papeleta, nombramiento, poder) (V123). */
+  @Column(name = "compareciente_id")
+  private UUID comparecienteId;
+
   /**
    * EJ-2: la trae el tercero (vendedor persona jurídica). No entra al consolidado del expediente;
    * EJ-3 la revisa aparte ({@code RevisionMinutaTerceroService}).
@@ -80,6 +88,35 @@ public class LegalDocument implements Persistable<UUID> {
    */
   public static boolean esSoloSoporte(String codigo) {
     return TIPO_MINUTA_TERCERO.equals(codigo) || TIPO_SOPORTE_INGRESOS.equals(codigo);
+  }
+
+  /**
+   * Documento que no está en el catálogo: vale para todo producto y nunca es requisito. Su
+   * descripción (la escribe el usuario) va en {@code descripcion_tipo}.
+   */
+  public static final String TIPO_OTRO = "OTRO";
+
+  public static final int MAX_DESCRIPCION_OTRO = 120;
+
+  /**
+   * Descripción obligatoria de OTRO, recortada; {@code null} para cualquier otro tipo.
+   *
+   * @throws ApiException 400 si es OTRO y falta la descripción o pasa de 120 caracteres.
+   */
+  public static String descripcionOtro(String codigo, String descripcion) {
+    if (!TIPO_OTRO.equals(codigo)) {
+      return null;
+    }
+    String texto = descripcion == null ? "" : descripcion.trim().replaceAll("\\s+", " ");
+    if (texto.isEmpty()) {
+      throw com.lexia.api.common.api.ApiException.badRequest(
+          "Describe brevemente el documento de tipo Otro.");
+    }
+    if (texto.length() > MAX_DESCRIPCION_OTRO) {
+      throw com.lexia.api.common.api.ApiException.badRequest(
+          "La descripción del documento admite hasta " + MAX_DESCRIPCION_OTRO + " caracteres.");
+    }
+    return texto;
   }
 
   public static final String ORIGEN_AUTO = "AUTO";
@@ -151,6 +188,22 @@ public class LegalDocument implements Persistable<UUID> {
     }
     this.docType = docType;
     this.updatedAt = Instant.now();
+  }
+
+  /**
+   * Tipo elegido por el usuario con su descripción si es OTRO ({@code null} conserva la que había).
+   * Al salir de OTRO se borra la descripción.
+   */
+  public void classify(String docType, String descripcionOtro) {
+    boolean eraOtro = TIPO_OTRO.equals(this.docType);
+    classify(docType);
+    if (TIPO_OTRO.equals(docType)) {
+      if (descripcionOtro != null) {
+        this.descripcionTipo = descripcionOtro;
+      }
+    } else if (eraOtro) {
+      this.descripcionTipo = null;
+    }
   }
 
   /** Tipo elegido por el usuario (PATCH, wizard): ninguna clasificación AUTO lo pisa. */
@@ -280,6 +333,28 @@ public class LegalDocument implements Persistable<UUID> {
 
   public String getObservacion() {
     return observacion;
+  }
+
+  public String getDescripcionTipo() {
+    return descripcionTipo;
+  }
+
+  public UUID getComparecienteId() {
+    return comparecienteId;
+  }
+
+  /** null desliga. */
+  public void ligarCompareciente(UUID comparecienteId) {
+    this.comparecienteId = comparecienteId;
+    this.updatedAt = Instant.now();
+  }
+
+  /** Promoción del borrador: la descripción de OTRO viaja con el documento. */
+  public void describirOtro(String descripcion) {
+    if (TIPO_OTRO.equals(docType)) {
+      this.descripcionTipo = descripcion;
+      this.updatedAt = Instant.now();
+    }
   }
 
   public void registrarCarga(UUID uploadedBy, String observacion) {

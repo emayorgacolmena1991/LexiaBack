@@ -16,6 +16,9 @@ import org.springframework.util.StringUtils;
 public class ExpedienteCompletoLlmService {
 
   public static final String DEFAULT_PROMPT_KEY = "PROMPT_DEFAULT";
+  static final String CANTON_NO_INDICADO = "NO INDICADO";
+  private static final org.slf4j.Logger LOG =
+      org.slf4j.LoggerFactory.getLogger(ExpedienteCompletoLlmService.class);
 
   private final AnalisisDocumentoService analisis;
   private final ProductPromptMapRepository productPromptMapRepository;
@@ -31,6 +34,11 @@ public class ExpedienteCompletoLlmService {
   }
 
   public Ejecucion ejecutar(String ocrMarcado, String productCode, String canton) {
+    return ejecutar(ocrMarcado, productCode, canton, "");
+  }
+
+  public Ejecucion ejecutar(
+      String ocrMarcado, String productCode, String canton, String contextoExpediente) {
     if (!StringUtils.hasText(ocrMarcado)) {
       throw ApiException.badRequest("Sin texto OCR para procesar el expediente.");
     }
@@ -45,10 +53,15 @@ public class ExpedienteCompletoLlmService {
                 .filter(StringUtils::hasText)
                 .orElse(DEFAULT_PROMPT_KEY)
             : DEFAULT_PROMPT_KEY;
-    String cantonResuelto = StringUtils.hasText(canton) ? canton.trim() : "GUAYAQUIL";
+    // Sin cantón no se asume Guayaquil: el prompt lo dice y solo aplican requisitos generales.
+    String cantonResuelto = StringUtils.hasText(canton) ? canton.trim() : CANTON_NO_INDICADO;
+    if (!StringUtils.hasText(canton)) {
+      LOG.warn("analisis-ia sin cantón producto={}: solo requisitos generales", code);
+    }
+    String ctx = contextoExpediente != null ? contextoExpediente : "";
     String prompt =
         promptRegistryService.resolvePrompt(
-            promptKey, Map.of("canton", cantonResuelto, "vigenciaDias", "60"));
+            promptKey, Map.of("canton", cantonResuelto, "contextoExpediente", ctx));
     return new Ejecucion(promptKey, analisis.procesarExpedienteCompleto(ocrMarcado, prompt));
   }
 

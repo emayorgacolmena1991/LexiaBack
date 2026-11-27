@@ -75,6 +75,27 @@ public class IaAnalysisService {
   private final DocumentosExtraidosStore documentos;
   private final AuthorizationService authorization;
   private final ObjectMapper objectMapper;
+  /** Opcional (setter): crea los comparecientes desde las listas del consolidado. */
+  private org.springframework.beans.factory.ObjectProvider<
+          com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+      comparecientes;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setComparecientes(
+      org.springframework.beans.factory.ObjectProvider<
+              com.lexia.api.modules.expedientes.comparecientes.ComparecientesService>
+          comparecientes) {
+    this.comparecientes = comparecientes;
+  }
+
+  /** Setter: requisitos del producto para armar el contexto del prompt. */
+  private com.lexia.api.modules.expedientes.requisitos.RequisitosService requisitosService;
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setRequisitosService(
+      com.lexia.api.modules.expedientes.requisitos.RequisitosService requisitosService) {
+    this.requisitosService = requisitosService;
+  }
 
   public IaAnalysisService(
       LegalCaseRepository legalCases,
@@ -174,6 +195,10 @@ public class IaAnalysisService {
         force
             ? ocrParaReanalisis(expedienteId, persistido, request)
             : loadOcrMarcado(expedienteId, persistido, request);
+    // Documentos OTRO: la IA los recibe con la descripción del usuario como tipo.
+    ocrText =
+        OcrExpedienteTexto.conDescripcionesOtro(
+            ocrText, observacionesPorDocumento.descripcionesOtro(expedienteId.toString()));
     List<DocOcr> reemplazados =
         documentosReemplazados(ocrText, request == null ? List.of() : request.documentosReemplazados());
     if (!pendientesPrevias.isEmpty() || !reemplazados.isEmpty()) {
@@ -181,7 +206,9 @@ public class IaAnalysisService {
     }
     List<TipoPermitidoDTO> tiposProducto = observacionesPorDocumento.tiposDelProducto(expedienteId.toString());
     ocrText = ocrText + contextoTipos(tiposProducto);
-    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
+    String contextoExpediente =
+        buildContextoExpediente(tenantId, expedienteId, legalCase != null, productCode, canton);
+    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton, contextoExpediente);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
       throw new ApiException(
@@ -192,6 +219,7 @@ public class IaAnalysisService {
               : "No se obtuvo resultado de análisis IA.");
     }
 
+    sincronizarComparecientes(expedienteId, ext.payload().datosExtraidos());
     List<DocOcr> cabeceras = OcrExpedienteTexto.cabeceras(ocrText);
     List<DocumentoExtraido> extraidosLlm = ext.payload().documentosExtraidos();
     List<DocumentoExtraidoDTO> documentosExtraidos =
@@ -628,6 +656,38 @@ public class IaAnalysisService {
   }
 
   /**
+   * Comparecientes desde las listas del consolidado. Si falla se registra y el análisis sigue: el
+   * abogado puede cargarlos a mano en la ficha.
+   */
+  private void sincronizarComparecientes(UUID expedienteId, DatosExtraidos datos) {
+    if (comparecientes == null) {
+      return;
+    }
+    var service = comparecientes.getIfAvailable();
+    if (service == null) {
+      return;
+    }
+    try {
+      service.sincronizarDesdeIa(expedienteId.toString(), datos);
+    } catch (RuntimeException e) {
+      LOG.warn(
+          "analizar-ia: comparecientes no sincronizados caseId={} causa={}",
+          expedienteId,
+          e.getClass().getSimpleName());
+    }
+  }
+
+  /**
+   * OCR marcado por documento tal como lo recibe la IA (con la descripción de los OTRO como tipo).
+   * Para llamadas auxiliares (p. ej. condiciones del caso). Lanza 400 si aún no hay OCR.
+   */
+  public String textoOcrParaIa(UUID expedienteId, boolean persistido) {
+    String marcado = loadOcrMarcado(expedienteId, persistido, null);
+    return OcrExpedienteTexto.conDescripcionesOtro(
+        marcado, observacionesPorDocumento.descripcionesOtro(expedienteId.toString()));
+  }
+
+  /**
    * OCR por archivo (caché de sesión o {@code documento_texto_ocr}). No une binarios.
    *
    * <p>Expediente persistido: solo su {@code caseId}, nunca el {@code sessionId} de un borrador
@@ -736,16 +796,17 @@ public class IaAnalysisService {
     return StringUtils.hasText(value) ? value.trim() : null;
   }
 
+  /** Sin cantón: null (ya no se asume Guayaquil); el prompt y los requisitos lo avisan. */
   private static String cantonOf(ExpedienteBorrador borrador) {
     if (borrador != null && StringUtils.hasText(borrador.getCanton())) {
       return borrador.getCanton().trim();
     }
-    return "GUAYAQUIL";
+    return null;
   }
 
   private static String resolveCanton(WritingFile writingFile) {
     if (writingFile == null) {
-      return "GUAYAQUIL";
+      return null;
     }
     if (StringUtils.hasText(writingFile.getCanton())) {
       return writingFile.getCanton().trim();
@@ -753,6 +814,50 @@ public class IaAnalysisService {
     if (StringUtils.hasText(writingFile.getMunicipality())) {
       return writingFile.getMunicipality().trim();
     }
-    return "GUAYAQUIL";
+    return null;
+  }
+
+  private String buildContextoExpediente(
+      UUID tenantId, UUID expedienteId, boolean persistido, String productCode, String canton) {
+    if (!persistido || requisitosService == null) {
+      return "";
+    }
+    try {
+      StringBuilder sb = new StringBuilder();
+      var resolucion =
+          requisitosService.resolverExpediente(tenantId, expedienteId, productCode, canton);
+      var reqs = resolucion.requisitos();
+      if (!reqs.isEmpty()) {
+        sb.append("REQUISITOS APLICABLES:\n");
+        for (var r : reqs) {
+          if (!r.obligatorio()) continue;
+          sb.append("- ").append(r.tipo());
+          if (r.esencial()) sb.append(" [ESENCIAL]");
+          if (StringUtils.hasText(r.descripcion())) sb.append(": ").append(r.descripcion());
+          sb.append("\n");
+        }
+      }
+      var compSvc = comparecientes != null ? comparecientes.getIfAvailable() : null;
+      if (compSvc != null) {
+        List<com.lexia.api.modules.expedientes.comparecientes.Compareciente> filas =
+            compSvc.filas(tenantId, expedienteId);
+        if (!filas.isEmpty()) {
+          sb.append("COMPARECIENTES:\n");
+          for (var c : filas) {
+            sb.append("- ").append(c.getNombres());
+            if (StringUtils.hasText(c.getIdentificacion())) {
+              sb.append(" (").append(c.getIdentificacion()).append(")");
+            }
+            if (c.getParte() != null) sb.append(" parte=").append(c.getParte());
+            if (c.getRol() != null) sb.append(" rol=").append(c.getRol());
+            sb.append("\n");
+          }
+        }
+      }
+      return sb.toString().trim();
+    } catch (Exception e) {
+      LOG.warn("buildContextoExpediente: {}", e.getMessage());
+      return "";
+    }
   }
 }
