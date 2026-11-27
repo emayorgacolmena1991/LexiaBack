@@ -19,6 +19,9 @@ import com.lexia.api.modules.expedientes.metricas.CaseCycleMetricsDtos.StageInte
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDef;
 import com.lexia.api.modules.expedientes.proceso.ProcessStageDefRepository;
 import com.lexia.api.modules.identity.AuthorizationService;
+import com.lexia.api.modules.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -29,7 +32,12 @@ import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -43,6 +51,9 @@ public class CaseCycleMetricsService {
   private final CoactivaExpedienteRepository coactivaExpedientes;
   private final AuthorizationService authorization;
   private final ObjectMapper mapper;
+  private final PlatformTransactionManager transactionManager;
+
+  private static final Logger LOG = LoggerFactory.getLogger(CaseCycleMetricsService.class);
 
   public CaseCycleMetricsService(
       LegalCaseRepository legalCases,
@@ -52,7 +63,9 @@ public class CaseCycleMetricsService {
       CoactivaEtapaHistorialRepository coactivaHistorial,
       CoactivaExpedienteRepository coactivaExpedientes,
       AuthorizationService authorization,
-      ObjectMapper mapper) {
+      ObjectMapper mapper,
+      PlatformTransactionManager transactionManager) {
+    this.transactionManager = transactionManager;
     this.legalCases = legalCases;
     this.snapshots = snapshots;
     this.caseStages = caseStages;
@@ -159,8 +172,46 @@ public class CaseCycleMetricsService {
     closeCycle(tenantId, caseId, CaseCycleMetricsDtos.OUTCOME_COACTIVE_ARCHIVED);
   }
 
+  /**
+   * La notaría aprueba con su propio tenant en la conexión, pero el caso y el snapshot son del
+   * estudio: con RLS no se verían. Se cierra tras el commit, en una transacción nueva con el tenant
+   * del estudio.
+   */
   public void closeNotaryApproved(UUID firmTenantId, UUID caseId) {
-    closeCycle(firmTenantId, caseId, CaseCycleMetricsDtos.OUTCOME_NOTARY_APPROVED);
+    Runnable cerrar =
+        () ->
+            enTenant(
+                firmTenantId,
+                () -> closeCycle(firmTenantId, caseId, CaseCycleMetricsDtos.OUTCOME_NOTARY_APPROVED));
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              cerrar.run();
+            }
+          });
+    } else {
+      cerrar.run();
+    }
+  }
+
+  private void enTenant(UUID tenantId, Runnable accion) {
+    UUID previo = TenantContext.getTenantId();
+    TenantContext.setTenantId(tenantId);
+    try {
+      TransactionTemplate tx = new TransactionTemplate(transactionManager);
+      tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+      tx.executeWithoutResult(status -> accion.run());
+    } catch (RuntimeException ex) {
+      LOG.warn("No se pudo cerrar el ciclo del caso en tenant {}: {}", tenantId, ex.getMessage());
+    } finally {
+      if (previo == null) {
+        TenantContext.clear();
+      } else {
+        TenantContext.setTenantId(previo);
+      }
+    }
   }
 
   private List<StageIntervalItem> buildStageIntervals(LegalCase legalCase) {
