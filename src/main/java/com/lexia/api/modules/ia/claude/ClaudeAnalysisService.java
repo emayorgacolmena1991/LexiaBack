@@ -84,9 +84,9 @@ public class ClaudeAnalysisService implements AnalisisDocumentoService {
 
       TAREAS EN ESTA ÚNICA LLAMADA:
       1. EXTRAER datosClave de cada documento (para el cotejo entre documentos).
-      2. CONSOLIDAR comprador, vendedor e inmueble.
-      3. DICTAMINAR: compara Cédula vs Papeleta y Avalúo vs Historia de Dominio; reporta
-         discrepancias, vigencias vencidas y gravámenes.
+      2. CONSOLIDAR todos los comparecientes (pueden ser varios compradores y/o vendedores) e inmueble.
+      3. DICTAMINAR: compara Cédula vs Papeleta de cada compareciente y Avalúo vs Historia de Dominio;
+         reporta discrepancias, vigencias según las fechas que consten en los documentos y gravámenes.
 
       Responde exclusivamente invocando la herramienta %s.
       """

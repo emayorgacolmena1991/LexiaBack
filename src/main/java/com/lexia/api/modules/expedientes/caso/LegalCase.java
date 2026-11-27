@@ -62,6 +62,29 @@ public class LegalCase implements Persistable<UUID> {
   @Column(name = "numero_instancia", length = 80)
   private String numeroInstancia;
 
+  /** Escritura nueva (V122): no confundir con la escritura antecedente de la minuta. */
+  @Column(name = "cierre_fecha_escritura")
+  private java.time.LocalDate cierreFechaEscritura;
+
+  @Column(name = "cierre_notaria", length = 200)
+  private String cierreNotaria;
+
+  @Column(name = "cierre_fecha_inscripcion")
+  private java.time.LocalDate cierreFechaInscripcion;
+
+  @Column(name = "cierre_fecha_informe")
+  private java.time.LocalDate cierreFechaInforme;
+
+  /** Carta de financiamiento: VENDEDOR, CLIENTE o FINANCIADO (null = sin marcar). */
+  @Column(name = "carta_pago_plusvalia", length = 12)
+  private String cartaPagoPlusvalia;
+
+  @Column(name = "carta_pago_alcabalas", length = 12)
+  private String cartaPagoAlcabalas;
+
+  @Column(name = "carta_pago_obras", length = 12)
+  private String cartaPagoObras;
+
   @Column(name = "ingestion_mode", length = 32)
   private String ingestionMode;
 
@@ -228,6 +251,53 @@ public class LegalCase implements Persistable<UUID> {
 
   public void setNumeroInstancia(String numeroInstancia) {
     this.numeroInstancia = numeroInstancia;
+    this.updatedAt = Instant.now();
+  }
+
+  public java.time.LocalDate getCierreFechaEscritura() {
+    return cierreFechaEscritura;
+  }
+
+  public String getCierreNotaria() {
+    return cierreNotaria;
+  }
+
+  public java.time.LocalDate getCierreFechaInscripcion() {
+    return cierreFechaInscripcion;
+  }
+
+  public java.time.LocalDate getCierreFechaInforme() {
+    return cierreFechaInforme;
+  }
+
+  public void setDatosCierre(
+      java.time.LocalDate fechaEscritura,
+      String notaria,
+      java.time.LocalDate fechaInscripcion,
+      java.time.LocalDate fechaInforme) {
+    this.cierreFechaEscritura = fechaEscritura;
+    this.cierreNotaria = notaria;
+    this.cierreFechaInscripcion = fechaInscripcion;
+    this.cierreFechaInforme = fechaInforme;
+    this.updatedAt = Instant.now();
+  }
+
+  public String getCartaPagoPlusvalia() {
+    return cartaPagoPlusvalia;
+  }
+
+  public String getCartaPagoAlcabalas() {
+    return cartaPagoAlcabalas;
+  }
+
+  public String getCartaPagoObras() {
+    return cartaPagoObras;
+  }
+
+  public void setPagosCarta(String plusvalia, String alcabalas, String obras) {
+    this.cartaPagoPlusvalia = plusvalia;
+    this.cartaPagoAlcabalas = alcabalas;
+    this.cartaPagoObras = obras;
     this.updatedAt = Instant.now();
   }
 

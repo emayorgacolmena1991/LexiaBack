@@ -65,6 +65,19 @@ public class BorradorPromocionService {
     return cases.getCase(caseId);
   }
 
+  /** Id oficial sin promover: el expediente, o el expediente al que ya se promovió el borrador. */
+  @Transactional(readOnly = true)
+  public java.util.Optional<UUID> expedienteOficial(UUID id) {
+    UUID tenantId = AuthContext.require().tenantId();
+    if (legalCases.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId).isPresent()) {
+      return java.util.Optional.of(id);
+    }
+    return borradores
+        .find(id, tenantId)
+        .map(ExpedienteBorrador::getPromotedCaseId)
+        .filter(c -> legalCases.findByIdAndTenantIdAndDeletedAtIsNull(c, tenantId).isPresent());
+  }
+
   /** Id oficial. Si {@code id} ya es expediente, lo devuelve. Si es borrador, lo promueve. */
   @Transactional
   public UUID asegurarExpediente(UUID id) {

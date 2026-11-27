@@ -40,6 +40,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import com.lexia.api.modules.expedientes.reglas.ValidacionIaService;
+import com.lexia.api.modules.expedientes.requisitos.ValidacionesExpedienteService;
+import com.lexia.api.modules.expedientes.escrituracion.core.EscrituracionDtos.ValidacionesExpedienteDTO;
 
 /**
  * Paso 2–3: carga/tipificación + disparo IA (Azure→Gemini/Claude) + prevalidación + cotejo.
@@ -59,16 +61,19 @@ public class CargaDocumentoController {
   private final ValidacionIaService validacionIaService;
   private final OcrAzureBatchService ocr;
   private final ObjectProvider<AuthorizationService> authorization;
+  private final ValidacionesExpedienteService validacionesService;
 
   public CargaDocumentoController(
       CargaDocumentoService cargaDocumentoService,
       ValidacionIaService validacionIaService,
       OcrAzureBatchService ocr,
-      ObjectProvider<AuthorizationService> authorization) {
+      ObjectProvider<AuthorizationService> authorization,
+      ValidacionesExpedienteService validacionesService) {
     this.cargaDocumentoService = cargaDocumentoService;
     this.validacionIaService = validacionIaService;
     this.ocr = ocr;
     this.authorization = authorization;
+    this.validacionesService = validacionesService;
   }
 
   @PostMapping("/borrador")
@@ -192,5 +197,11 @@ public class CargaDocumentoController {
   @GetMapping("/{idExpediente}/ocr-resultados")
   public List<DocumentoOcrResultadoDTO> ocrResultados(@PathVariable String idExpediente) {
     return cargaDocumentoService.listarOcrResultados(idExpediente);
+  }
+
+  @GetMapping("/{idExpediente}/validaciones")
+  public ValidacionesExpedienteDTO validaciones(@PathVariable String idExpediente) {
+    requirePermission(PERMISO_LECTURA);
+    return validacionesService.validaciones(idExpediente);
   }
 }

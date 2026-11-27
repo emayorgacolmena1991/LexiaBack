@@ -34,6 +34,11 @@ public class ExpedienteCompletoLlmService {
   }
 
   public Ejecucion ejecutar(String ocrMarcado, String productCode, String canton) {
+    return ejecutar(ocrMarcado, productCode, canton, "");
+  }
+
+  public Ejecucion ejecutar(
+      String ocrMarcado, String productCode, String canton, String contextoExpediente) {
     if (!StringUtils.hasText(ocrMarcado)) {
       throw ApiException.badRequest("Sin texto OCR para procesar el expediente.");
     }
@@ -53,9 +58,10 @@ public class ExpedienteCompletoLlmService {
     if (!StringUtils.hasText(canton)) {
       LOG.warn("analisis-ia sin cantón producto={}: solo requisitos generales", code);
     }
+    String ctx = contextoExpediente != null ? contextoExpediente : "";
     String prompt =
         promptRegistryService.resolvePrompt(
-            promptKey, Map.of("canton", cantonResuelto, "vigenciaDias", "60"));
+            promptKey, Map.of("canton", cantonResuelto, "contextoExpediente", ctx));
     return new Ejecucion(promptKey, analisis.procesarExpedienteCompleto(ocrMarcado, prompt));
   }
 

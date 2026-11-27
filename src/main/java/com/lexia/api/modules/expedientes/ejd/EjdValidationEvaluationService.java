@@ -1,5 +1,6 @@
 package com.lexia.api.modules.expedientes.ejd;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -9,6 +10,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,7 +40,11 @@ import com.lexia.api.modules.expedientes.proceso.ValidationDefRepository;
 import com.lexia.api.modules.expedientes.requisitos.RequisitosService;
 import com.lexia.api.modules.expedientes.requisitos.RequisitosService.RequisitoAplicable;
 import com.lexia.api.modules.expedientes.requisitos.RequisitosService.Resolucion;
+import com.lexia.api.modules.expedientes.requisitos.VigenciaDocumentoService;
+import com.lexia.api.modules.expedientes.requisitos.VigenciaDocumentoService.EstadoVigencia;
+import com.lexia.api.modules.expedientes.requisitos.VigenciaDocumentoService.ResultadoVigencia;
 import com.lexia.api.modules.expedientes.escrituracion.core.WritingFile;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Service
 @ConditionalOnProperty(name = "lexia.auth.enabled", havingValue = "true")
@@ -66,6 +72,13 @@ public class EjdValidationEvaluationService {
   private final TitleStudyRepository titleStudies;
   private final TitleObservationRepository titleObservations;
   private final RequisitosService requisitosService;
+  /** Setter injection: condicional, puede ser null en tests sin auth. */
+  private VigenciaDocumentoService vigenciaService;
+
+  @Autowired
+  void setVigenciaDocumentoService(ObjectProvider<VigenciaDocumentoService> provider) {
+    this.vigenciaService = provider.getIfAvailable();
+  }
 
   public EjdValidationEvaluationService(
       ValidationDefRepository validationDefs,
@@ -494,25 +507,76 @@ public class EjdValidationEvaluationService {
           "PENDING",
           "Aún no hay documentos clasificados para revisar su vigencia.",
           "v" + rule.getVersion());
-    } else {
-      Map<String, DocumentRequirement> requisitos = requisitosProducto(legalCase);
-      List<String> revisar =
-          typedDocs.stream()
-              .map(
-                  doc -> {
-                    DocumentRequirement requisito =
-                        requisitos.get(doc.getDocType().trim().toUpperCase(Locale.ROOT));
-                    return requisito == null
-                        ? "'" + doc.getName() + "'"
-                        : "'" + doc.getName() + "' (máx. " + requisito.getMaxValidityDays() + " días)";
-                  })
-              .toList();
+      caseValidations.save(validation);
+      return;
+    }
+    if (vigenciaService == null) {
+      // Sin servicio de vigencia (entorno sin auth), usar texto de aviso genérico.
       validation.applyEvaluation(
           "OBSERVATION",
-          "LEXIA aún no lee la fecha de emisión: verifique manualmente la vigencia de "
-              + String.join(", ", revisar)
-              + ".",
+          "Verifique manualmente la vigencia de los " + typedDocs.size() + " documento(s) clasificado(s).",
           "v" + rule.getVersion());
+      caseValidations.save(validation);
+      return;
+    }
+    Resolucion resolucion =
+        requisitosService.resolverExpediente(
+            legalCase.getTenantId(),
+            legalCase.getId(),
+            legalCase.getProductCode(),
+            cantonDe(legalCase));
+    Set<String> tiposEsenciales =
+        resolucion.requisitos().stream()
+            .filter(r -> r.obligatorio() && r.esencial())
+            .map(r -> r.tipo().trim().toUpperCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+    List<ResultadoVigencia> resultados =
+        vigenciaService.calcular(
+            legalCase.getTenantId(),
+            legalCase.getId(),
+            typedDocs,
+            resolucion.requisitos());
+    List<String> vencidos = new ArrayList<>();
+    List<String> porVencer = new ArrayList<>();
+    List<String> sinFecha = new ArrayList<>();
+    boolean poderVencido = false;
+    for (ResultadoVigencia r : resultados) {
+      String tipo = r.docType().toUpperCase(Locale.ROOT);
+      if (r.estado() == EstadoVigencia.VENCIDO) {
+        vencidos.add(r.docNombre() + " (" + r.fechaEfectiva() + ")");
+        if ("PODER".equals(tipo)) {
+          poderVencido = true;
+        }
+      } else if (r.estado() == EstadoVigencia.POR_VENCER) {
+        porVencer.add(r.docNombre() + " (vence " + r.fechaEfectiva() + ")");
+      } else if (r.estado() == EstadoVigencia.SIN_FECHA) {
+        sinFecha.add(r.docNombre());
+      }
+    }
+    boolean hayEsencialVencido =
+        resultados.stream()
+            .anyMatch(
+                r ->
+                    r.estado() == EstadoVigencia.VENCIDO
+                        && tiposEsenciales.contains(r.docType().toUpperCase(Locale.ROOT)));
+    if (vencidos.isEmpty() && porVencer.isEmpty() && sinFecha.isEmpty()) {
+      validation.applyEvaluation("PASS", "Todos los documentos están vigentes.", "v" + rule.getVersion());
+    } else {
+      StringBuilder sb = new StringBuilder();
+      if (!vencidos.isEmpty()) {
+        sb.append("Vencidos: ").append(String.join(", ", vencidos)).append(". ");
+      }
+      if (poderVencido) {
+        sb.append("El poder está vencido: requiere RAZÓN DE VIGENCIA DE PODER. ");
+      }
+      if (!porVencer.isEmpty()) {
+        sb.append("Por vencer: ").append(String.join(", ", porVencer)).append(". ");
+      }
+      if (!sinFecha.isEmpty()) {
+        sb.append("Sin fecha de vigencia: ").append(String.join(", ", sinFecha)).append(". ");
+      }
+      String resultado = hayEsencialVencido ? "FAIL" : "OBSERVATION";
+      validation.applyEvaluation(resultado, sb.toString().trim(), "v" + rule.getVersion());
     }
     caseValidations.save(validation);
   }

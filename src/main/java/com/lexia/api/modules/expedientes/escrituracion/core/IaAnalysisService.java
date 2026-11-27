@@ -88,6 +88,15 @@ public class IaAnalysisService {
     this.comparecientes = comparecientes;
   }
 
+  /** Setter: requisitos del producto para armar el contexto del prompt. */
+  private com.lexia.api.modules.expedientes.requisitos.RequisitosService requisitosService;
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setRequisitosService(
+      com.lexia.api.modules.expedientes.requisitos.RequisitosService requisitosService) {
+    this.requisitosService = requisitosService;
+  }
+
   public IaAnalysisService(
       LegalCaseRepository legalCases,
       ExpedienteBorradorStore borradores,
@@ -197,7 +206,9 @@ public class IaAnalysisService {
     }
     List<TipoPermitidoDTO> tiposProducto = observacionesPorDocumento.tiposDelProducto(expedienteId.toString());
     ocrText = ocrText + contextoTipos(tiposProducto);
-    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton);
+    String contextoExpediente =
+        buildContextoExpediente(tenantId, expedienteId, legalCase != null, productCode, canton);
+    Ejecucion ejecucion = llm.ejecutar(ocrText, productCode, canton, contextoExpediente);
     ExtraccionExpedienteCompleto ext = ejecucion.extraccion();
     if (ext == null || ext.payload() == null || "ERROR".equals(ext.estado())) {
       throw new ApiException(
@@ -804,5 +815,49 @@ public class IaAnalysisService {
       return writingFile.getMunicipality().trim();
     }
     return null;
+  }
+
+  private String buildContextoExpediente(
+      UUID tenantId, UUID expedienteId, boolean persistido, String productCode, String canton) {
+    if (!persistido || requisitosService == null) {
+      return "";
+    }
+    try {
+      StringBuilder sb = new StringBuilder();
+      var resolucion =
+          requisitosService.resolverExpediente(tenantId, expedienteId, productCode, canton);
+      var reqs = resolucion.requisitos();
+      if (!reqs.isEmpty()) {
+        sb.append("REQUISITOS APLICABLES:\n");
+        for (var r : reqs) {
+          if (!r.obligatorio()) continue;
+          sb.append("- ").append(r.tipo());
+          if (r.esencial()) sb.append(" [ESENCIAL]");
+          if (StringUtils.hasText(r.descripcion())) sb.append(": ").append(r.descripcion());
+          sb.append("\n");
+        }
+      }
+      var compSvc = comparecientes != null ? comparecientes.getIfAvailable() : null;
+      if (compSvc != null) {
+        List<com.lexia.api.modules.expedientes.comparecientes.Compareciente> filas =
+            compSvc.filas(tenantId, expedienteId);
+        if (!filas.isEmpty()) {
+          sb.append("COMPARECIENTES:\n");
+          for (var c : filas) {
+            sb.append("- ").append(c.getNombres());
+            if (StringUtils.hasText(c.getIdentificacion())) {
+              sb.append(" (").append(c.getIdentificacion()).append(")");
+            }
+            if (c.getParte() != null) sb.append(" parte=").append(c.getParte());
+            if (c.getRol() != null) sb.append(" rol=").append(c.getRol());
+            sb.append("\n");
+          }
+        }
+      }
+      return sb.toString().trim();
+    } catch (Exception e) {
+      LOG.warn("buildContextoExpediente: {}", e.getMessage());
+      return "";
+    }
   }
 }

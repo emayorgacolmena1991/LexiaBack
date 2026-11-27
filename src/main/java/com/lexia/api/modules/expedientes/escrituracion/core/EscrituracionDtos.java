@@ -279,4 +279,16 @@ public final class EscrituracionDtos {
       String ingestionMode,
       EstudioTituloResponse estudio,
       List<MinutaItem> minutas) {}
+
+  /** Vigencia calculada por el sistema para un documento clasificado. */
+  public record VigenciaDocumentoDTO(
+      String documentId,
+      String docType,
+      String nombre,
+      String estado,
+      String mensaje,
+      String fechaEfectiva) {}
+
+  /** Panel de validaciones del expediente: vigencias por documento. */
+  public record ValidacionesExpedienteDTO(List<VigenciaDocumentoDTO> vigencias) {}
 }

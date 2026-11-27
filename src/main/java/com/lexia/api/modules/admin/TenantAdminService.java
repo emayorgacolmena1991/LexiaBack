@@ -127,6 +127,45 @@ public class TenantAdminService {
         tenantParameters.isMfaRequired(tenantId));
   }
 
+  @Transactional(readOnly = true)
+  public AdminDtos.FirmaEstudio getFirma() {
+    requireTenantRead();
+    return firma(AuthContext.require().tenantId());
+  }
+
+  @Transactional
+  public AdminDtos.FirmaEstudio updateFirma(AdminDtos.FirmaEstudio request) {
+    requireTenantWrite();
+    UUID tenantId = AuthContext.require().tenantId();
+    guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_ESTUDIO, request.estudio());
+    guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_ABOGADO, request.abogado());
+    guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_REGISTRO, request.registro());
+    guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_TELEFONO, request.telefono());
+    guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_CORREO, request.correo());
+    guardarSiViene(tenantId, TenantParameterService.KEY_FIRMA_CIUDAD, request.ciudad());
+    audit("admin.tenant.firma_updated", "tenant", tenantId, "OK");
+    return firma(tenantId);
+  }
+
+  private AdminDtos.FirmaEstudio firma(UUID tenantId) {
+    return new AdminDtos.FirmaEstudio(
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_FIRMA_ESTUDIO, ""),
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_FIRMA_ABOGADO, ""),
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_FIRMA_REGISTRO, ""),
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_FIRMA_TELEFONO, ""),
+        tenantParameters.getValue(tenantId, TenantParameterService.KEY_FIRMA_CORREO, ""),
+        tenantParameters.getValue(
+            tenantId,
+            TenantParameterService.KEY_FIRMA_CIUDAD,
+            TenantParameterService.CIUDAD_POR_DEFECTO));
+  }
+
+  private void guardarSiViene(UUID tenantId, String key, String value) {
+    if (value != null) {
+      tenantParameters.setValue(tenantId, key, value.trim());
+    }
+  }
+
   private AdminDtos.TenantDetail toDetail(Tenant tenant, long activeMembers) {
     return new AdminDtos.TenantDetail(
         tenant.getId(),

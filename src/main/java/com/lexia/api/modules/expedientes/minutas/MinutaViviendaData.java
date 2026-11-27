@@ -73,6 +73,18 @@ public class MinutaViviendaData {
     this.vendedoresTexto = vendedoresTexto == null ? "" : vendedoresTexto;
   }
 
+  /** Número de instancia de proceso del expediente ({@code legal_case.numero_instancia}). */
+  @JsonProperty("nip")
+  private String nip = "";
+
+  public String getNip() {
+    return nip;
+  }
+
+  public void setNip(String nip) {
+    this.nip = nip == null ? "" : nip;
+  }
+
   @JsonProperty("cedula_conyuge_1")
   private String cedulaConyuge1 = "";
 
@@ -457,6 +469,7 @@ public class MinutaViviendaData {
     ETIQUETAS.put("fecha_inscripcion_antecedente", "Fecha de inscripción del antecedente");
     ETIQUETAS.put("repertorio_antecedente", "Repertorio del antecedente");
     ETIQUETAS.put("notaria_antecedente", "Notaría del antecedente");
+    ETIQUETAS.put("nip", "NIP (número de instancia de proceso)");
   }
 
   public static String etiqueta(String campo) {
@@ -1059,6 +1072,7 @@ public class MinutaViviendaData {
     map.put("nombre_conyuge_1", blankToNodata(nombreConyuge1));
     map.put("compradores_texto", blankToNodata(compradoresTexto));
     map.put("vendedores_texto", blankToNodata(vendedoresTexto));
+    map.put("nip", blankToNodata(nip));
     map.put("cedula_conyuge_1", digitosConLetras(cedulaConyuge1));
     map.put("nombre_conyuge_2", blankToNodata(nombreConyuge2));
     map.put("cedula_conyuge_2", digitosConLetras(cedulaConyuge2));

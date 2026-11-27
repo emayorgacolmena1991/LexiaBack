@@ -251,6 +251,39 @@ public class MinutaGenerationService {
 
   public record PreviewMinuta(UUID minutaId, byte[] pdf, VariablesMinutaResponse variables) {}
 
+  /**
+   * Variables finales del expediente (mismas capas que {@link #variables}) tomando la minuta
+   * principal del producto: base de la carta de financiamiento y del informe legal. Sin minuta,
+   * el consolidado del expediente + BIESS + precio. El permiso lo comprueba quien llama.
+   */
+  @Transactional(readOnly = true)
+  public MinutaViviendaData datosConsolidados(UUID tenantId, UUID caseId) {
+    LegalCase legalCase = requireCase(caseId, tenantId);
+    WritingFile file =
+        writingFiles.findByCaseIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId).orElse(null);
+    String product = productoDe(file, legalCase);
+    String kind =
+        catalog.all().stream()
+            .filter(d -> d.productCode().equalsIgnoreCase(product))
+            .map(MinutaTemplateDescriptor::templateKind)
+            .filter(k -> k.startsWith("MINUTA_"))
+            .findFirst()
+            .orElse(null);
+    MinutaDraft draft = file == null || kind == null ? null : ultimoDraft(file, tenantId, kind);
+    Map<String, String> overrides =
+        draft == null ? Map.of() : variablesService.leerOverrides(draft.getOverrides());
+    MinutaViviendaData base = draft == null ? null : datosExtraidos(draft, loadData(draft));
+    if (base != null) {
+      aplicarComparecientes(tenantId, caseId, base);
+    } else {
+      base = new MinutaViviendaData();
+      completarDesdeConsolidado(tenantId, caseId, base);
+    }
+    DatosBiessMinuta biess = datosBiess.cargar(caseId, tenantId);
+    Map<String, String> precio = precioFormaPago.capa(tenantId, caseId);
+    return variablesService.fusionar(base, biess, precio, overrides);
+  }
+
   /** El payload del borrador es el dato renderizado; {@code base} y overrides conservan sus capas. */
   private void guardarRender(
       MinutaDraft draft,
@@ -938,6 +971,9 @@ public class MinutaGenerationService {
    * {@code vendedores_texto} y la lista completa para la notaría. Sin lista no toca nada.
    */
   private void aplicarComparecientes(UUID tenantId, UUID caseId, MinutaViviendaData data) {
+    legalCases
+        .findByIdAndTenantIdAndDeletedAtIsNull(caseId, tenantId)
+        .ifPresent(c -> data.setNip(c.getNumeroInstancia()));
     if (comparecientes == null) {
       return;
     }

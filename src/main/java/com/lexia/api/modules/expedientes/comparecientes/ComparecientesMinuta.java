@@ -74,7 +74,7 @@ public final class ComparecientesMinuta {
   }
 
   /** Titulares, cónyuges y herederos de la parte, en orden (sin representantes ni apoderados). */
-  static List<Compareciente> otorgantes(List<Compareciente> filas, Parte parte) {
+  public static List<Compareciente> otorgantes(List<Compareciente> filas, Parte parte) {
     return filas.stream()
         .filter(c -> c.parteEnum() == parte && c.rolEnum().otorgante())
         .sorted(java.util.Comparator.comparingInt(Compareciente::getOrden))
