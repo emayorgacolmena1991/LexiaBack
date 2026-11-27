@@ -27,6 +27,9 @@ public class NotificationController {
     if ("ADMIN".equalsIgnoreCase(category)) {
       return notifications.listAdminNotifications();
     }
+    if ("OPERATIONS".equalsIgnoreCase(category)) {
+      return notifications.listOperationsNotifications();
+    }
     return new NotificationDtos.NotificationListResponse(java.util.List.of(), 0);
   }
 

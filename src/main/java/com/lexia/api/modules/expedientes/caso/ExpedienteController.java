@@ -240,6 +240,7 @@ public class ExpedienteController {
       @RequestParam(required = false) String prioridad,
       @RequestParam(required = false) String desde,
       @RequestParam(required = false) String hasta,
+      @RequestParam(required = false) String etapa,
       @RequestParam(required = false) Boolean soloMios) {
     if (caseService == null) {
       return page == null && size == null
@@ -253,13 +254,14 @@ public class ExpedienteController {
         || prioridad != null
         || desde != null
         || hasta != null
+        || etapa != null
         || soloMios != null
         || page != null
         || size != null) {
       int safePage = page == null ? 0 : page;
       int safeSize = size == null ? 20 : size;
       return caseService.listCasesPage(
-          search, estado, vertical, responsable, prioridad, desde, hasta, soloMios, safePage, safeSize);
+          search, estado, vertical, responsable, prioridad, desde, hasta, etapa, soloMios, safePage, safeSize);
     }
     return caseService.listCases();
   }

@@ -5,7 +5,7 @@ import java.util.Optional;
 
 /**
  * Condiciones del caso que cambian los documentos sugeridos (códigos fijos, mismos que el CHECK de
- * V120). Solo las confirmadas por el abogado cambian los requisitos. {@code pista}: qué debe buscar
+ * V122). Solo las confirmadas por el abogado cambian los requisitos. {@code pista}: qué debe buscar
  * la IA en los documentos; null = la IA no la propone (la define el producto o el abogado).
  */
 public enum CondicionCaso {

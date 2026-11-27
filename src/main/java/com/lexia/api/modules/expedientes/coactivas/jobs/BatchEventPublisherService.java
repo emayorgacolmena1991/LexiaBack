@@ -72,8 +72,11 @@ public class BatchEventPublisherService {
   }
 
   public SseEmitter abrir(UUID batchId) {
-    // 15 min: Azure puede usar sus 5 y detrás van consolidar e IA. 5 min cortaba el stream a mitad.
-    SseEmitter emitter = new SseEmitter(15L * 60L * 1000L);
+    return abrir(batchId, 15L * 60L * 1000L);
+  }
+
+  public SseEmitter abrir(UUID batchId, long timeoutMs) {
+    SseEmitter emitter = new SseEmitter(timeoutMs);
     emisores.computeIfAbsent(batchId, id -> new CopyOnWriteArrayList<>()).add(emitter);
     Runnable quitar = () -> quitarEmisor(batchId, emitter);
     emitter.onCompletion(() -> {
@@ -95,6 +98,53 @@ public class BatchEventPublisherService {
     cuerpo.put("data", data);
     cuerpo.put("ts", Instant.now().toString());
     return cuerpo;
+  }
+
+  /**
+   * SSE con el cuerpo del evento igual a {@code data} (p. ej. ingesta masiva). Coactivas usa
+   * {@link #publicar(UUID, String, Object)} con sobre envolvente.
+   */
+  public void publicarPayloadPlano(UUID batchId, String evento, Object data) {
+    String cuerpoPlano;
+    try {
+      cuerpoPlano = data instanceof String texto ? texto : json.writeValueAsString(data);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+      LOG.warn("SSE ingesta no serializable lote={}: {}", batchId, ex.getMessage());
+      return;
+    }
+    emitirLocal(batchId, evento, cuerpoPlano);
+    try {
+      UUID eventoId = UUID.randomUUID();
+      jdbc.update(
+          "INSERT INTO app.sse_evento (id, expediente_id, tipo, cuerpo) VALUES (?, ?, ?, ?)",
+          eventoId,
+          batchId,
+          evento,
+          cuerpoPlano);
+      jdbc.query(
+          "SELECT pg_notify(?, ?)",
+          rs -> {},
+          CANAL,
+          NODE + "|" + batchId + "|" + evento + "|" + eventoId);
+    } catch (RuntimeException ex) {
+      LOG.warn("No se publicó el SSE al resto de nodos: {}", ex.getMessage());
+    }
+  }
+
+  /** Comentario SSE para mantener conexiones vivas (ingesta, coactivas). */
+  @Scheduled(fixedDelayString = "${lexia.sse.latido-ms:25000}")
+  public void latidoSse() {
+  emisores.forEach(
+        (id, lista) -> {
+          for (SseEmitter emitter : lista) {
+            try {
+              emitter.send(SseEmitter.event().comment("ping"));
+            } catch (IOException | IllegalStateException ex) {
+              emitter.complete();
+              quitarEmisor(id, emitter);
+            }
+          }
+        });
   }
 
   public void publicar(UUID batchId, String evento, Object data) {

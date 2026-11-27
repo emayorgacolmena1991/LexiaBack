@@ -125,6 +125,11 @@ public final class ExpedienteDtos {
       String createdAtLabel,
       String updatedAtLabel,
       String stageLabel,
+      String stageCode,
+      String completionOutcome,
+      String completionOutcomeLabel,
+      String completedAtLabel,
+      Long cycleDurationSeconds,
       boolean demo) {}
 
   public record CaseDetailItem(

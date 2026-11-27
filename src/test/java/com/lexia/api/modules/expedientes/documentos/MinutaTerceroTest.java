@@ -180,6 +180,7 @@ class MinutaTerceroTest {
             versions,
             mock(DocumentoTextoOcrRepository.class),
             archivos,
+            mock(ObjectProvider.class),
             mock(ObjectProvider.class));
     CaseFileContext ctx =
         new CaseFileContext(CASO, TENANT, COMPANIA, null, IngestionMode.DIGITAL_SEPARADO);

@@ -40,7 +40,7 @@ public class DocumentRequirement {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
-  /** Código de {@code CondicionCaso}; null = aplica siempre (V120). */
+  /** Código de {@code CondicionCaso}; null = aplica siempre (V122). */
   @Column(length = 40)
   private String condicion;
 

@@ -21,8 +21,11 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
 public class ApiExceptionHandler {
 
   static final String INDICE_REMISION_ABIERTA = "ux_notary_remision_abierta";
+  static final String INDICE_INVITACION_PENDIENTE = "ux_user_invitation_pending";
   private static final String MENSAJE_REMISION_ABIERTA =
       "El expediente ya tiene una remisión abierta.";
+  private static final String MENSAJE_INVITACION_PENDIENTE =
+      "Ya existe una invitación abierta para este correo. Reenvíela desde el listado o revóquela antes de invitar de nuevo.";
   private static final String MENSAJE_INTEGRIDAD =
       "No fue posible completar la operación porque ya existe un registro relacionado.";
   private static final Pattern NOMBRE_CONSTRAINT = Pattern.compile("[A-Za-z0-9_.]+");
@@ -94,7 +97,11 @@ public class ApiExceptionHandler {
     String constraint = constraintName(exception);
     LOG.warn("Integridad de datos: constraint={}", constraint == null ? "desconocido" : constraint);
     String message =
-        INDICE_REMISION_ABIERTA.equals(constraint) ? MENSAJE_REMISION_ABIERTA : MENSAJE_INTEGRIDAD;
+        switch (constraint) {
+          case INDICE_REMISION_ABIERTA -> MENSAJE_REMISION_ABIERTA;
+          case INDICE_INVITACION_PENDIENTE -> MENSAJE_INVITACION_PENDIENTE;
+          default -> MENSAJE_INTEGRIDAD;
+        };
     return ResponseEntity.status(409).body(Map.of("code", "CONFLICT", "message", message));
   }
 
@@ -110,8 +117,12 @@ public class ApiExceptionHandler {
         }
       }
       String message = actual.getMessage();
-      if (message != null && message.contains(INDICE_REMISION_ABIERTA)) {
-        porMensaje = INDICE_REMISION_ABIERTA;
+      if (message != null) {
+        if (message.contains(INDICE_REMISION_ABIERTA)) {
+          porMensaje = INDICE_REMISION_ABIERTA;
+        } else if (message.contains(INDICE_INVITACION_PENDIENTE)) {
+          porMensaje = INDICE_INVITACION_PENDIENTE;
+        }
       }
       actual = actual.getCause();
     }

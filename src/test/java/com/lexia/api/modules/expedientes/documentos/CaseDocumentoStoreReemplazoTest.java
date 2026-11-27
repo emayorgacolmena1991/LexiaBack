@@ -64,6 +64,7 @@ class CaseDocumentoStoreReemplazoTest {
             versions,
             mock(DocumentoTextoOcrRepository.class),
             archivos,
+            mock(ObjectProvider.class),
             mock(ObjectProvider.class));
   }
 

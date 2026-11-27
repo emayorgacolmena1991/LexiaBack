@@ -3,7 +3,7 @@ package com.lexia.api.modules.expedientes.comparecientes;
 import java.util.Locale;
 import java.util.Optional;
 
-/** Rol notarial del compareciente (mismos códigos que el CHECK de V121). */
+/** Rol notarial del compareciente (mismos códigos que el CHECK de V123). */
 public enum RolCompareciente {
   COMPRADOR(Parte.COMPRADORA, "Comprador"),
   CONYUGE_COMPRADOR(Parte.COMPRADORA, "Cónyuge del comprador"),

@@ -30,7 +30,8 @@ class OcrAnalyzeBatchLimiteTest {
             mock(DocumentoTextoOcrRepository.class),
             pool,
             mock(ClasificacionDocumentoService.class),
-            mock(PlatformTransactionManager.class));
+            mock(PlatformTransactionManager.class),
+            mock(OcrProveedorAlertasService.class));
     List<AnalyzeBatchDocument> docs =
         IntStream.rangeClosed(0, OcrAzureBatchService.MAX_DOCUMENTOS_BATCH)
             .mapToObj(i -> new AnalyzeBatchDocument("f" + i, "f" + i + ".pdf", null, null))

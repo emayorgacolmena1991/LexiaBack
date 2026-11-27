@@ -107,6 +107,7 @@ class ClasificacionBorradorTest {
             mock(DocumentVersionRepository.class),
             ocrRows,
             new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento)),
+            mock(ObjectProvider.class),
             mock(ObjectProvider.class));
 
     ExpedienteBorradorStore borradores = mock(ExpedienteBorradorStore.class);
@@ -137,7 +138,9 @@ class ClasificacionBorradorTest {
             mock(ObjectProvider.class));
     ObjectProvider<AnalisisDocumentoService> proveedor = mock(ObjectProvider.class);
     doReturn(llm).when(proveedor).getIfAvailable();
-    clasificador = new ClasificacionDocumentoService(caseDocs, carga, proveedor, 0.8, 5000);
+    clasificador =
+        new ClasificacionDocumentoService(
+            caseDocs, carga, proveedor, mock(ObjectProvider.class), 0.8, 5000);
     seguimiento =
         new ExpedienteSeguimientoService(
             legalCases,

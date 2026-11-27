@@ -10,7 +10,7 @@
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM app.document_requirement) THEN
-        RAISE WARNING 'V120: app.document_requirement no tiene filas visibles para este rol; el seed no insertará requisitos';
+        RAISE WARNING 'V122: app.document_requirement no tiene filas visibles para este rol; el seed no insertará requisitos';
     END IF;
 END $$;
 

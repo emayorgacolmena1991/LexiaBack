@@ -142,6 +142,7 @@ class ReemplazoValidadoTest {
             versions,
             ocrRows,
             new ExpedienteDocumentoStorage(new ArchivoStorageLocal(almacenamiento)),
+            mock(ObjectProvider.class),
             mock(ObjectProvider.class));
     ProductoBiessService productos = mock(ProductoBiessService.class);
     when(productos.detalle(PRODUCTO, null))
@@ -165,11 +166,19 @@ class ReemplazoValidadoTest {
     ObjectProvider<AnalisisDocumentoService> proveedor = mock(ObjectProvider.class);
     doReturn(llm).when(proveedor).getIfAvailable();
     ClasificacionDocumentoService clasificador =
-        new ClasificacionDocumentoService(caseDocs, carga, proveedor, 0.8, 5000);
+        new ClasificacionDocumentoService(
+            caseDocs, carga, proveedor, mock(ObjectProvider.class), 0.8, 5000);
     when(azure.isConfigured()).thenReturn(true);
     service =
         new OcrAzureBatchService(
-            azure, carga, cache, ocrRows, Runnable::run, clasificador, mock(PlatformTransactionManager.class));
+            azure,
+            carga,
+            cache,
+            ocrRows,
+            Runnable::run,
+            clasificador,
+            mock(PlatformTransactionManager.class),
+            mock(OcrProveedorAlertasService.class));
   }
 
   @AfterEach

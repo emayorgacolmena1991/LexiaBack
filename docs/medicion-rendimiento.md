@@ -19,7 +19,7 @@ después del despliegue, y compara.
 |---|---|---|
 | `hikaricp.connections.active` / `.pending` / `.timeout` | Uso del pool de BD (máx. `LEXIA_DB_POOL_MAX`) | `pending > 0` sostenido o `timeout` creciendo |
 | `executor.active` / `executor.queued` `{name}` | Pools `ingesta-worker`, `AzureOCR`, `lexia-async`, `coactiva-anexo` | `queued` creciendo sin bajar |
-| `lexia.worker.hilos.ocupados{worker}` | Hilos en uso de ingesta (5) y coactivas (4) | Siempre al máximo con cola alta: falta capacidad |
+| `lexia.worker.hilos.ocupados{worker}` | Hilos en uso de ingesta (`LEXIA_INGESTA_WORKER_HILOS`, default 5) y coactivas (4) | Siempre al máximo con cola alta: falta capacidad |
 | `lexia.jobs{tipo,estado}` | Jobs `PENDIENTE` / `EN_PROCESO` ahora; `ERROR` creados en 24 h | `ERROR` subiendo |
 | `lexia.jobs.espera.segundos{tipo}` | Antigüedad del pendiente más viejo (latencia de cola) | Minutos con hilos libres: el job es de otro nodo (`worker_id`) |
 | `lexia.jobs.duracion{worker,tipo,resultado}` | Duración de cada job; `resultado` = `ok`, `timeout`, `terminal`, `error` | `timeout` frecuente: revisar `LEXIA_INGESTA_TIMEOUT_*` |

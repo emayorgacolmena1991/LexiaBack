@@ -39,6 +39,7 @@ public class CaseDocumentoStore {
   private final DocumentoTextoOcrRepository ocrRows;
   private final ExpedienteDocumentoStorage storage;
   private final ObjectProvider<ExpedienteSeguimientoService> seguimiento;
+  private final ObjectProvider<DocumentClasificacionMemoriaService> memoriaClasificacion;
 
   public CaseDocumentoStore(
       LegalCaseRepository legalCases,
@@ -47,7 +48,8 @@ public class CaseDocumentoStore {
       DocumentVersionRepository versions,
       DocumentoTextoOcrRepository ocrRows,
       ExpedienteDocumentoStorage storage,
-      ObjectProvider<ExpedienteSeguimientoService> seguimiento) {
+      ObjectProvider<ExpedienteSeguimientoService> seguimiento,
+      ObjectProvider<DocumentClasificacionMemoriaService> memoriaClasificacion) {
     this.legalCases = legalCases;
     this.writingFiles = writingFiles;
     this.documents = documents;
@@ -55,6 +57,7 @@ public class CaseDocumentoStore {
     this.ocrRows = ocrRows;
     this.storage = storage;
     this.seguimiento = seguimiento;
+    this.memoriaClasificacion = memoriaClasificacion;
   }
 
   public CaseFileContext context(String rawId) {
@@ -240,7 +243,32 @@ public class CaseDocumentoStore {
     }
     documents.save(doc);
     tipoEnFilaOcr(ctx, doc);
+    registrarMemoriaManual(ctx, doc);
     return new TipoActualizadoDTO(doc.getId().toString(), doc.getDocType(), "CLASIFICADO");
+  }
+
+  @Transactional
+  public boolean prepararReclasificacion(CaseFileContext ctx, String idDocumento) {
+    LegalDocument doc = requireDoc(ctx, idDocumento);
+    if (LegalDocument.ORIGEN_MANUAL.equals(doc.getClasificacionOrigen())) {
+      return false;
+    }
+    doc.prepararParaReclasificacion();
+    documents.save(doc);
+    return true;
+  }
+
+  @Transactional
+  public TipoActualizadoDTO asignarTipoHeuristico(CaseFileContext ctx, String idDocumento, String codigo) {
+    LegalDocument doc = requireDoc(ctx, idDocumento);
+    if (ctx.ingestionMode().isFisicoEscaneado()) {
+      doc.classify(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO);
+    } else {
+      doc.asignarTipoHeuristico(codigo);
+    }
+    documents.save(doc);
+    tipoEnFilaOcr(ctx, doc);
+    return new TipoActualizadoDTO(doc.getId().toString(), doc.getDocType(), "PENDIENTE");
   }
 
   /** El {@code <documento tipo>} que recibe la IA sale de la fila OCR: va con el tipo vigente. */
@@ -280,7 +308,41 @@ public class CaseDocumentoStore {
     LegalDocument doc = requireDoc(ctx, fileId);
     doc.registrarClasificacionAuto(tipo, confianza, modelo, estado, asignar);
     documents.save(doc);
+    if (asignar && LegalDocument.ORIGEN_AUTO.equals(doc.getClasificacionOrigen())) {
+      registrarMemoriaAuto(ctx, doc, null);
+    }
     return doc.getDocType();
+  }
+
+  private void registrarMemoriaManual(CaseFileContext ctx, LegalDocument doc) {
+    DocumentClasificacionMemoriaService memoria = memoriaClasificacion.getIfAvailable();
+    if (memoria == null) {
+      return;
+    }
+    String excerpt =
+        ocrRows
+            .findByIdExpedienteAndIdDocumento(ctx.caseId().toString(), doc.getId().toString())
+            .map(row -> row.getTextoOcr())
+            .orElse(null);
+    memoria.registrar(
+        ctx.tenantId(), doc.getId(), doc.getDocType(), LegalDocument.ORIGEN_MANUAL, excerpt);
+  }
+
+  public void registrarMemoriaAuto(CaseFileContext ctx, LegalDocument doc, String textoOcr) {
+    DocumentClasificacionMemoriaService memoria = memoriaClasificacion.getIfAvailable();
+    if (memoria == null) {
+      return;
+    }
+    String excerpt = textoOcr;
+    if (!StringUtils.hasText(excerpt)) {
+      excerpt =
+          ocrRows
+              .findByIdExpedienteAndIdDocumento(ctx.caseId().toString(), doc.getId().toString())
+              .map(row -> row.getTextoOcr())
+              .orElse(null);
+    }
+    memoria.registrar(
+        ctx.tenantId(), doc.getId(), doc.getDocType(), LegalDocument.ORIGEN_AUTO, excerpt);
   }
 
   @Transactional

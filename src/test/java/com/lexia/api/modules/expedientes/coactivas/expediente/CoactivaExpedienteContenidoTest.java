@@ -45,7 +45,7 @@ class CoactivaExpedienteContenidoTest {
     service =
         new CoactivaExpedienteService(
             null, null, null, null, null, archivos, storage, null, null, null, authorization,
-            null, null, null, null, null, null);
+            null, null, null, null, null, null, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
   }
 
   @AfterEach

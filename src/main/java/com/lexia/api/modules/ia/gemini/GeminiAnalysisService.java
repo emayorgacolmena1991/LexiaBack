@@ -22,7 +22,6 @@ import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -31,7 +30,6 @@ import org.springframework.util.StringUtils;
  * consolidado + dictamen). Reintenta modelos free-tier con backoff ante 429/503.
  */
 @Service
-@ConditionalOnProperty(name = "llm.provider", havingValue = "gemini", matchIfMissing = true)
 public class GeminiAnalysisService implements AnalisisDocumentoService {
 
   private static final Logger LOG = LoggerFactory.getLogger(GeminiAnalysisService.class);

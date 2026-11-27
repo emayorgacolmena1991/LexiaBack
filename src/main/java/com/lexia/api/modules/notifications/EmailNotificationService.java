@@ -1,6 +1,7 @@
 package com.lexia.api.modules.notifications;
 
 import com.lexia.api.modules.admin.IntegrationEmailTracker;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -84,24 +85,58 @@ public class EmailNotificationService {
       String notariaNombre,
       String observaciones,
       String bandejaUrl) {
+    sendNotariaRemisionFromBufete(
+        tenantId,
+        email,
+        displayName,
+        expedienteCodigo,
+        asunto,
+        emitidoPor,
+        notariaNombre,
+        observaciones,
+        bandejaUrl,
+        List.of());
+  }
+
+  @Async
+  public void sendNotariaRemisionFromBufete(
+      UUID tenantId,
+      String email,
+      String displayName,
+      String expedienteCodigo,
+      String asunto,
+      String emitidoPor,
+      String notariaNombre,
+      String observaciones,
+      String bandejaUrl,
+      List<EmailAttachment> attachments) {
     deliver(
         tenantId,
         email,
         "notaria-remision-inbound",
-        "notaria-remision:" + expedienteCodigo + ":" + System.currentTimeMillis() / 60_000,
-        () ->
+        "notaria-remision:" + expedienteCodigo + ":" + email + ":" + System.currentTimeMillis() / 60_000,
+        () -> {
+          String html =
+              EmailTemplates.notariaRemisionFromBufete(
+                  displayName,
+                  expedienteCodigo,
+                  asunto,
+                  emitidoPor,
+                  notariaNombre,
+                  observaciones,
+                  bandejaUrl);
+          if (attachments == null || attachments.isEmpty()) {
             emailClient.send(
+                email, displayName, "Nuevo expediente desde bufete · " + expedienteCodigo, html);
+          } else {
+            emailClient.sendWithAttachments(
                 email,
                 displayName,
-                "Nuevo expediente desde bufete · " + expedienteCodigo,
-                EmailTemplates.notariaRemisionFromBufete(
-                    displayName,
-                    expedienteCodigo,
-                    asunto,
-                    emitidoPor,
-                    notariaNombre,
-                    observaciones,
-                    bandejaUrl)));
+                "Nuevo expediente asignado · " + expedienteCodigo,
+                html + "<p>Se adjuntan la minuta, el contrato (si aplica) y las copias documentales del envío.</p>",
+                attachments);
+          }
+        });
   }
 
   @Async

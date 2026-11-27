@@ -90,13 +90,15 @@ class ClasificacionLoteTest {
             mock(DocumentVersionRepository.class),
             mock(DocumentoTextoOcrRepository.class),
             null,
+            mock(ObjectProvider.class),
             mock(ObjectProvider.class));
     when(carga.tiposPermitidos(CASO.toString()))
         .thenReturn(List.of(new TipoPermitidoDTO("CEDULA", "Cédula"), new TipoPermitidoDTO("AVALUO", "Avalúo")));
     ObjectProvider<AnalisisDocumentoService> proveedor = mock(ObjectProvider.class);
     doReturn(llm).when(proveedor).getIfAvailable();
     ClasificacionDocumentoService clasificador =
-        new ClasificacionDocumentoService(caseDocs, carga, proveedor, 0.8, 5000);
+        new ClasificacionDocumentoService(
+            caseDocs, carga, proveedor, mock(ObjectProvider.class), 0.8, 5000);
 
     when(azure.isConfigured()).thenReturn(true);
     when(azure.evaluarYExtraer(any(), any()))
@@ -124,7 +126,8 @@ class ClasificacionLoteTest {
     service =
         new OcrAzureBatchService(
             azure, carga, new OcrSessionCacheService(2), mock(DocumentoTextoOcrRepository.class), ocrExecutor, clasificador,
-            mock(org.springframework.transaction.PlatformTransactionManager.class));
+            mock(org.springframework.transaction.PlatformTransactionManager.class),
+            mock(OcrProveedorAlertasService.class));
   }
 
   @AfterEach

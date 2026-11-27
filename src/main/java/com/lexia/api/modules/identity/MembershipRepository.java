@@ -47,4 +47,23 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
           """,
       nativeQuery = true)
   List<UUID> findAdminNotifierUserIds(@Param("tenantId") UUID tenantId);
+
+  @Query(
+      value =
+          """
+          SELECT DISTINCT u.email, u.display_name
+          FROM app.membership m
+          INNER JOIN app.app_user u ON u.id = m.user_id
+          INNER JOIN app.membership_role mr ON mr.membership_id = m.id AND mr.tenant_id = m.tenant_id
+          INNER JOIN app.role_permission rp ON rp.role_id = mr.role_id AND rp.tenant_id = m.tenant_id
+          INNER JOIN app.permission p ON p.id = rp.permission_id
+          WHERE m.tenant_id = :tenantId
+            AND m.deleted_at IS NULL
+            AND m.status = 'ACTIVE'
+            AND u.email IS NOT NULL
+            AND u.email <> ''
+            AND p.code IN ('notaria:remision:leer', 'notaria:remision:actuar')
+          """,
+      nativeQuery = true)
+  List<Object[]> findNotaryRemisionRecipientEmails(@Param("tenantId") UUID tenantId);
 }

@@ -22,6 +22,7 @@ import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpediente
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.BatchConfirmarRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ConfirmarEtapaRequest;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.TareaSugeridaItem;
+import com.lexia.api.modules.expedientes.metricas.CaseCycleMetricsService;
 import com.lexia.api.modules.identity.AppUserRepository;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.ArchivoItem;
 import com.lexia.api.modules.expedientes.coactivas.expediente.CoactivaExpedienteDtos.DocumentoDetectado;
@@ -60,6 +61,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -95,6 +97,7 @@ public class CoactivaExpedienteService {
   private final CoactivaTareaSugeridaRepository tareas;
   private final AppUserRepository usuarios;
   private final DocumentoCacheStore cache;
+  private final ObjectProvider<CaseCycleMetricsService> cycleMetrics;
 
   private static final long MAX_PDF_BYTES = 300L * 1024 * 1024;
   private static final String ANALISIS_INTERRUMPIDO = "El análisis IA se interrumpió. Vuelve a analizar el expediente.";
@@ -118,7 +121,8 @@ public class CoactivaExpedienteService {
       CoactivaDiagnosticoParser diagnosticoParser,
       CoactivaTareaSugeridaRepository tareas,
       AppUserRepository usuarios,
-      DocumentoCacheStore cache) {
+      DocumentoCacheStore cache,
+      ObjectProvider<CaseCycleMetricsService> cycleMetrics) {
     this.expedientes = expedientes;
     this.participantes = participantes;
     this.notificaciones = notificaciones;
@@ -136,6 +140,7 @@ public class CoactivaExpedienteService {
     this.tareas = tareas;
     this.usuarios = usuarios;
     this.cache = cache;
+    this.cycleMetrics = cycleMetrics;
   }
 
   // ---------------------------------------------------------------------------
@@ -337,6 +342,9 @@ public class CoactivaExpedienteService {
             CoactivaTexto.truncate(CoactivaTexto.blankToNull(request.motivo()), 600),
             principal.userId()));
     caseSync.sincronizarEtapa(tenantId, expediente.getCaseId(), nueva);
+    if (nueva == CoactivaEtapa.ARCHIVADO) {
+      cycleMetrics.ifAvailable(m -> m.closeCoactivaCycle(tenantId, expediente.getCaseId()));
+    }
     recalcular(expediente);
     return detalle(tenantId, expediente);
   }

@@ -186,6 +186,23 @@ public final class CargaDocumentoDtos {
 
   public record TipoActualizadoDTO(String idDocumento, String codigoTipoDocumento, String estado) {}
 
+  public record ReclasificacionDocumentoItem(
+      String idDocumento,
+      String nombreOriginal,
+      String tipoAnterior,
+      String tipoVigente,
+      String tipoDetectado,
+      java.math.BigDecimal confianza,
+      String clasificacionEstado,
+      String motivoOmision) {}
+
+  public record ReclasificacionExpedienteResponse(
+      String idExpediente,
+      int procesados,
+      int omitidos,
+      boolean validacionesRefrescadas,
+      List<ReclasificacionDocumentoItem> documentos) {}
+
   public record IniciarProcesamientoResponse(
       String idExpediente, String estado, int siguientePaso, String mensaje) {}
 

@@ -8,7 +8,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
-/** Compareciente de un borrador o expediente (V121). */
+/** Compareciente de un borrador o expediente (V123). */
 @Entity
 @Table(schema = "app", name = "expediente_compareciente")
 public class Compareciente {

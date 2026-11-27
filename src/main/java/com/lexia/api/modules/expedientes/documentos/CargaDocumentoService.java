@@ -733,6 +733,38 @@ public class CargaDocumentoService {
     return sinTildes.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
   }
 
+  /**
+   * Tipo provisional (ingesta masiva, heurística de nombre): no bloquea la clasificación IA tras OCR.
+   */
+  public TipoActualizadoDTO asignarTipoHeuristico(
+      String idExpediente, String idDocumento, String codigoTipo) {
+    if (!StringUtils.hasText(codigoTipo)) {
+      throw ApiException.badRequest("Tipo documental requerido.");
+    }
+    String codigo = codigoTipo.trim();
+    exigirTipoPermitido(idExpediente, codigo);
+    CaseDocumentoStore.CaseFileContext official = caseDocs.context(idExpediente);
+    if (official != null) {
+      return caseDocs.asignarTipoHeuristico(official, idDocumento, codigo);
+    }
+    DraftExpediente draft = requireDraft(idExpediente);
+    if (draft.locked()) {
+      throw ApiException.conflict("Los documentos ya están en procesamiento y no se pueden modificar.");
+    }
+    StoredDoc doc = draft.documentos().get(idDocumento);
+    if (doc == null) {
+      throw ApiException.notFound("Documento no encontrado: " + idDocumento);
+    }
+    if (draft.ingestionMode().isFisicoEscaneado()) {
+      draft.documentos().put(idDocumento, doc.withTipo(IngestionMode.EXPEDIENTE_FISICO_ESCANEADO));
+      return new TipoActualizadoDTO(
+          idDocumento, IngestionMode.EXPEDIENTE_FISICO_ESCANEADO, "CLASIFICADO");
+    }
+    draft.documentos().put(idDocumento, doc.withTipo(codigo));
+    draft.marcarHeuristica(idDocumento);
+    return new TipoActualizadoDTO(idDocumento, codigo, "PENDIENTE");
+  }
+
   public TipoActualizadoDTO actualizarTipo(
       String idExpediente, String idDocumento, ActualizarTipoRequest body) {
     String codigo = body.codigoTipoDocumento().trim();
@@ -1328,10 +1360,27 @@ public class CargaDocumentoService {
                   Instant.now()));
     }
 
+    /** Heurística (ingesta): no bloquea reclasificación por IA. */
+    void marcarHeuristica(String fileId) {
+      clasificaciones.compute(
+          fileId,
+          (id, previa) ->
+              new ClasificacionBorrador(
+                  previa == null ? null : previa.tipoSugerido(),
+                  previa == null ? null : previa.confianza(),
+                  LegalDocument.ORIGEN_HEURISTICA,
+                  LegalDocument.ESTADO_PENDIENTE,
+                  previa == null ? null : previa.modelo(),
+                  Instant.now()));
+    }
+
     /** Igual que en {@code LegalDocument}: MANUAL, o un tipo puesto sin pasar por el clasificador. */
     boolean tipoFijadoPorUsuario(StoredDoc doc) {
       ClasificacionBorrador c = clasificaciones.get(doc.idDocumento());
       if (c != null) {
+        if (LegalDocument.ORIGEN_HEURISTICA.equals(c.origen())) {
+          return false;
+        }
         return LegalDocument.ORIGEN_MANUAL.equals(c.origen())
             || (c.origen() == null && StringUtils.hasText(doc.codigoTipoDocumento()));
       }

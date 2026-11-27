@@ -18,7 +18,7 @@ class WorkspaceServiceFormatoTest {
   }
 
   private static GateItem gate(String resultCode) {
-    return new GateItem(UUID.randomUUID(), "G-001", "¿Título conforme?", "—", resultCode);
+    return new GateItem(UUID.randomUUID(), "G-001", "¿Título conforme?", "—", resultCode, null);
   }
 
   @Test

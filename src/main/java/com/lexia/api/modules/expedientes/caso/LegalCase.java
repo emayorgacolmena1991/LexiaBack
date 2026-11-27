@@ -62,7 +62,7 @@ public class LegalCase implements Persistable<UUID> {
   @Column(name = "numero_instancia", length = 80)
   private String numeroInstancia;
 
-  /** Escritura nueva (V122): no confundir con la escritura antecedente de la minuta. */
+  /** Escritura nueva (V124): no confundir con la escritura antecedente de la minuta. */
   @Column(name = "cierre_fecha_escritura")
   private java.time.LocalDate cierreFechaEscritura;
 
@@ -102,6 +102,12 @@ public class LegalCase implements Persistable<UUID> {
 
   @Column(name = "updated_by")
   private UUID updatedBy;
+
+  @Column(name = "completed_at")
+  private Instant completedAt;
+
+  @Column(name = "completion_outcome", length = 32)
+  private String completionOutcome;
 
   @Column(name = "deleted_at")
   private Instant deletedAt;
@@ -198,6 +204,24 @@ public class LegalCase implements Persistable<UUID> {
 
   public Instant getUpdatedAt() {
     return updatedAt;
+  }
+
+  public Instant getCompletedAt() {
+    return completedAt;
+  }
+
+  public String getCompletionOutcome() {
+    return completionOutcome;
+  }
+
+  /** Cierra el ciclo operativo del expediente y deja trazabilidad para reportes. */
+  public void markCompleted(Instant when, String outcome) {
+    this.completedAt = when;
+    this.completionOutcome = outcome;
+    if ("NOTARY_APPROVED".equals(outcome) || "COACTIVE_ARCHIVED".equals(outcome)) {
+      this.status = "CLOSED";
+    }
+    this.updatedAt = when;
   }
 
   public UUID getProcessDefinitionId() {

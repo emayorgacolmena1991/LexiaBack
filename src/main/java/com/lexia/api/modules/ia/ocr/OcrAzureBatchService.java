@@ -73,6 +73,7 @@ public class OcrAzureBatchService {
   private final Executor ocrExecutor;
   private final ClasificacionDocumentoService clasificador;
   private final TransactionTemplate transaccion;
+  private final OcrProveedorAlertasService ocrAlertas;
   /**
    * OCR y detección de un reemplazo que espera confirmación de tipo: al confirmar no se vuelve a
    * llamar a Azure ni al LLM. Clave: usuario + sesión + documento + hash + tipo; vence en
@@ -87,7 +88,8 @@ public class OcrAzureBatchService {
       DocumentoTextoOcrRepository ocrRepository,
       @Qualifier("ocrExecutor") Executor ocrExecutor,
       ClasificacionDocumentoService clasificador,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      OcrProveedorAlertasService ocrAlertas) {
     this.layoutService = layoutService;
     this.cargaDocumentoService = cargaDocumentoService;
     this.cache = cache;
@@ -95,6 +97,7 @@ public class OcrAzureBatchService {
     this.ocrExecutor = ocrExecutor;
     this.clasificador = clasificador;
     this.transaccion = new TransactionTemplate(transactionManager);
+    this.ocrAlertas = ocrAlertas;
   }
 
   public AnalyzeBatchResponse analyzeBatch(AnalyzeBatchRequest request) {
@@ -158,6 +161,16 @@ public class OcrAzureBatchService {
         anyError
             ? "COMPLETED_WITH_ERRORS"
             : (anyIllegible ? "COMPLETED_WITH_WARNINGS" : "COMPLETED");
+    if (anyError) {
+      AuthPrincipal principal = AuthContext.get();
+      if (principal != null && principal.tenantId() != null) {
+        ocrAlertas.registrarFalloLote(
+            principal.tenantId(),
+            principal.userId(),
+            "OCR lote sesión " + sessionId,
+            "Uno o más documentos fallaron con Azure OCR");
+      }
+    }
     return new AnalyzeBatchResponse(sessionId, status, results);
   }
 

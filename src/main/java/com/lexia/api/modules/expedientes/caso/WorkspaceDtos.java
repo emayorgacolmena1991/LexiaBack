@@ -165,5 +165,6 @@ public final class WorkspaceDtos {
   public record NoteItem(
       UUID id, String author, String initials, String datetime, String content, boolean demo) {}
 
-  public record GateItem(UUID id, String code, String question, String result, String resultCode) {}
+  public record GateItem(
+      UUID id, String code, String question, String result, String resultCode, String detail) {}
 }

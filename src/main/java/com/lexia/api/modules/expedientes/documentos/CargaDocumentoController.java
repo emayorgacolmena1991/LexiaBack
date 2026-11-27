@@ -60,6 +60,7 @@ public class CargaDocumentoController {
   private final CargaDocumentoService cargaDocumentoService;
   private final ValidacionIaService validacionIaService;
   private final OcrAzureBatchService ocr;
+  private final ClasificacionExpedienteService clasificacionExpediente;
   private final ObjectProvider<AuthorizationService> authorization;
   private final ValidacionesExpedienteService validacionesService;
 
@@ -67,11 +68,13 @@ public class CargaDocumentoController {
       CargaDocumentoService cargaDocumentoService,
       ValidacionIaService validacionIaService,
       OcrAzureBatchService ocr,
+      ClasificacionExpedienteService clasificacionExpediente,
       ObjectProvider<AuthorizationService> authorization,
       ValidacionesExpedienteService validacionesService) {
     this.cargaDocumentoService = cargaDocumentoService;
     this.validacionIaService = validacionIaService;
     this.ocr = ocr;
+    this.clasificacionExpediente = clasificacionExpediente;
     this.authorization = authorization;
     this.validacionesService = validacionesService;
   }
@@ -203,5 +206,23 @@ public class CargaDocumentoController {
   public ValidacionesExpedienteDTO validaciones(@PathVariable String idExpediente) {
     requirePermission(PERMISO_LECTURA);
     return validacionesService.validaciones(idExpediente);
+  }
+
+  /**
+   * Vuelve a clasificar todos los documentos con OCR (no pisa tipos {@code MANUAL}). Útil tras
+   * desplegar clasificación IA o corregir expedientes legacy.
+   */
+  @PostMapping("/{idExpediente}/documentos/reclasificar")
+  public CargaDocumentoDtos.ReclasificacionExpedienteResponse reclasificarExpediente(
+      @PathVariable String idExpediente) {
+    requirePermission(PERMISO_ESCRITURA);
+    return clasificacionExpediente.reclasificarExpediente(idExpediente);
+  }
+
+  @PostMapping("/{idExpediente}/documentos/{idDocumento}/reclasificar")
+  public CargaDocumentoDtos.ReclasificacionDocumentoItem reclasificarDocumento(
+      @PathVariable String idExpediente, @PathVariable String idDocumento) {
+    requirePermission(PERMISO_ESCRITURA);
+    return clasificacionExpediente.reclasificarDocumento(idExpediente, idDocumento);
   }
 }

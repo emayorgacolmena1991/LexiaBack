@@ -209,6 +209,7 @@ public class CaseService {
       String prioridad,
       String desde,
       String hasta,
+      String etapa,
       Boolean soloMios,
       int page,
       int size) {
@@ -287,6 +288,26 @@ public class CaseService {
           return cb.and(predicates.toArray(Predicate[]::new));
         };
 
+    String etapaFilter = etapa == null ? "" : etapa.trim();
+    if (!etapaFilter.isEmpty()) {
+      List<LegalCase> candidates =
+          legalCases.findAll(spec, Sort.by(Sort.Direction.DESC, "updatedAt"));
+      List<CaseSummaryItem> filtered =
+          candidates.stream()
+              .filter(row -> matchesOperativaEtapaFilter(row, tenantId, etapaFilter))
+              .map(this::toSummary)
+              .toList();
+      int total = filtered.size();
+      int from = safePage * safeSize;
+      if (from >= total) {
+        return CaseSummaryPage.empty(safePage, safeSize);
+      }
+      int to = Math.min(from + safeSize, total);
+      List<CaseSummaryItem> slice = filtered.subList(from, to);
+      int totalPages = safeSize <= 0 ? 0 : (int) Math.ceil((double) total / safeSize);
+      return new CaseSummaryPage(slice, total, totalPages, safePage, safeSize);
+    }
+
     Page<LegalCase> result =
         legalCases.findAll(
             spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt")));
@@ -297,6 +318,17 @@ public class CaseService {
         result.getTotalPages(),
         result.getNumber(),
         result.getSize());
+  }
+
+  private boolean matchesOperativaEtapaFilter(
+      LegalCase legalCase, UUID tenantId, String etapaFilter) {
+    String filter = etapaFilter.toLowerCase(Locale.ROOT);
+    if ("notaria".equals(filter)) {
+      filter = "notary";
+    }
+    var operativa = expedienteEstado.etapaOperativa(legalCase, tenantId);
+    String code = operativa.code() == null ? "" : operativa.code().toLowerCase(Locale.ROOT);
+    return code.equals(filter);
   }
 
   private static String normalizePriorityFilter(String prioridad) {
@@ -568,6 +600,11 @@ public class CaseService {
 
   private CaseSummaryItem toSummary(LegalCase legalCase) {
     Responsible responsible = resolveResponsible(legalCase.getResponsibleMembershipId());
+    var etapaOperativa = expedienteEstado.etapaOperativa(legalCase, legalCase.getTenantId());
+    Instant completedAt = legalCase.getCompletedAt();
+    String outcome = legalCase.getCompletionOutcome();
+    Instant end = completedAt != null ? completedAt : Instant.now();
+    long cycleSeconds = ChronoUnit.SECONDS.between(legalCase.getCreatedAt(), end);
     return new CaseSummaryItem(
         legalCase.getId(),
         legalCase.getCode(),
@@ -580,8 +617,24 @@ public class CaseService {
         formatSla(legalCase.getSlaDueAt()),
         GRID_DATE.format(legalCase.getCreatedAt()),
         GRID_DATE.format(legalCase.getUpdatedAt()),
-        expedienteEstado.etiquetaEtapaOperativa(legalCase, legalCase.getTenantId()),
+        etapaOperativa.label(),
+        etapaOperativa.code(),
+        outcome,
+        mapCompletionOutcomeLabel(outcome),
+        completedAt == null ? null : GRID_DATE.format(completedAt),
+        cycleSeconds,
         false);
+  }
+
+  private static String mapCompletionOutcomeLabel(String outcome) {
+    if (outcome == null || outcome.isBlank()) {
+      return null;
+    }
+    return switch (outcome) {
+      case "NOTARY_APPROVED" -> "Aprobado en notaría";
+      case "COACTIVE_ARCHIVED" -> "Archivado (coactiva)";
+      default -> outcome;
+    };
   }
 
   private CaseDetailItem toDetail(LegalCase legalCase) {

@@ -12,6 +12,7 @@ import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.OverrideRequest;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.LotesPageDto;
 import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ResumenLote;
+import com.lexia.api.modules.expedientes.escrituracion.masivo.IngestaMasivaDtos.ReclasificacionLoteResponse;
 import com.lexia.api.modules.identity.AuthorizationService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -19,6 +20,7 @@ import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -99,10 +101,32 @@ public class IngestaMasivaEscrituracionController {
     return ingesta.ejecutarOcr(batchId);
   }
 
+  @PostMapping("/{batchId}/reclasificar-tipos")
+  public ReclasificacionLoteResponse reclasificarTipos(@PathVariable UUID batchId) {
+    PermisoExpediente.escribir(authorization);
+    return ingesta.reclasificarTipos(batchId);
+  }
+
   @PostMapping("/{batchId}/items/{itemId}/reintentar")
   public LoteStatus reintentar(@PathVariable UUID batchId, @PathVariable String itemId) {
     PermisoExpediente.escribir(authorization);
     return ingesta.reintentarItem(batchId, itemId);
+  }
+
+  @DeleteMapping("/{batchId}/items/{itemId}/archivos/{fileId}")
+  public LoteStatus eliminarArchivo(
+      @PathVariable UUID batchId,
+      @PathVariable("itemId") String clientRowId,
+      @PathVariable String fileId) {
+    PermisoExpediente.escribir(authorization);
+    return ingesta.eliminarArchivo(batchId, clientRowId, fileId);
+  }
+
+  @PostMapping("/{batchId}/items/{itemId}/vaciar-archivos")
+  public LoteStatus vaciarArchivos(
+      @PathVariable UUID batchId, @PathVariable("itemId") String clientRowId) {
+    PermisoExpediente.escribir(authorization);
+    return ingesta.vaciarArchivos(batchId, clientRowId);
   }
 
   @GetMapping("/{batchId}/resumen")

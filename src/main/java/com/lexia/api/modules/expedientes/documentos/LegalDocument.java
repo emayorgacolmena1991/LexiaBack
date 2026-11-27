@@ -65,11 +65,11 @@ public class LegalDocument implements Persistable<UUID> {
   @Column(length = 500)
   private String observacion;
 
-  /** Descripción que escribe el usuario para un documento OTRO (V120). */
+  /** Descripción que escribe el usuario para un documento OTRO (V122). */
   @Column(name = "descripcion_tipo", length = MAX_DESCRIPCION_OTRO)
   private String descripcionTipo;
 
-  /** Persona a la que pertenece (cédula, papeleta, nombramiento, poder) (V121). */
+  /** Persona a la que pertenece (cédula, papeleta, nombramiento, poder) (V123). */
   @Column(name = "compareciente_id")
   private UUID comparecienteId;
 
@@ -121,6 +121,8 @@ public class LegalDocument implements Persistable<UUID> {
 
   public static final String ORIGEN_AUTO = "AUTO";
   public static final String ORIGEN_MANUAL = "MANUAL";
+  /** Tipo asignado por heurística (nombre, ingesta masiva); la IA puede corregirlo tras el OCR. */
+  public static final String ORIGEN_HEURISTICA = "HEURISTICA";
   public static final String ESTADO_PENDIENTE = "PENDIENTE";
   public static final String ESTADO_CLASIFICADO = "CLASIFICADO";
   public static final String ESTADO_POR_REVISAR = "POR_REVISAR";
@@ -204,7 +206,7 @@ public class LegalDocument implements Persistable<UUID> {
     }
   }
 
-  /** Tipo elegido por el usuario (PATCH, wizard, ingesta masiva): ninguna clasificación AUTO lo pisa. */
+  /** Tipo elegido por el usuario (PATCH, wizard): ninguna clasificación AUTO lo pisa. */
   public void classify(String docType) {
     Instant now = Instant.now();
     this.docType = docType;
@@ -215,11 +217,43 @@ public class LegalDocument implements Persistable<UUID> {
   }
 
   /**
+   * Tipo provisional al subir (p. ej. ingesta por nombre de archivo). No bloquea la clasificación
+   * automática sobre el texto OCR.
+   */
+  public void asignarTipoHeuristico(String docType) {
+    Instant now = Instant.now();
+    this.docType = docType;
+    this.clasificacionOrigen = ORIGEN_HEURISTICA;
+    this.clasificacionEstado = ESTADO_PENDIENTE;
+    this.clasificadoEn = now;
+    this.updatedAt = now;
+  }
+
+  /**
    * MANUAL, o un tipo previo a la clasificación automática (sin origen): lo puso una persona.
+   * HEURISTICA no cuenta como fijado.
    */
   public boolean tipoFijadoPorUsuario() {
+    if (ORIGEN_HEURISTICA.equals(clasificacionOrigen)) {
+      return false;
+    }
     return ORIGEN_MANUAL.equals(clasificacionOrigen)
         || (clasificacionOrigen == null && docType != null && !docType.isBlank());
+  }
+
+  /**
+   * Expedientes legacy (tipo sin {@code clasificacion_origen}) quedaban bloqueados para la IA;
+   * la reclasificación los marca como heurísticos.
+   */
+  public void prepararParaReclasificacion() {
+    if (ORIGEN_MANUAL.equals(clasificacionOrigen)) {
+      return;
+    }
+    if (clasificacionOrigen == null && docType != null && !docType.isBlank()) {
+      clasificacionOrigen = ORIGEN_HEURISTICA;
+      clasificacionEstado = ESTADO_PENDIENTE;
+      updatedAt = Instant.now();
+    }
   }
 
   /**
